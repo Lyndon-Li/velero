@@ -1,3 +1,19 @@
+/*
+Copyright 2020 the Velero contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package repoprovider
 
 import (
@@ -6,7 +22,9 @@ import (
 	"path"
 	"strings"
 
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/repository/repoconfig"
@@ -24,6 +42,14 @@ type unifiedRepoProvider struct {
 	configPath           string
 	log                  *logrus.Logger
 }
+
+// this func is assigned to a package-level variable so it can be
+// replaced when unit-testing
+var getAzureCredentials = repoconfig.GetAzureCredentials
+var getS3Credentials = repoconfig.GetS3Credentials
+var getGCPCredentials = repoconfig.GetGCPCredentials
+var getS3BucketRegion = repoconfig.GetAWSBucketRegion
+var getAzureStorageDomain = repoconfig.GetAzureStorageDomain
 
 func NewUnifiedRepoProvider(
 	ctx context.Context,
@@ -139,7 +165,7 @@ func (urp *unifiedRepoProvider) getRepoOption() (udmrepo.RepoOptions, error) {
 		repoOption.StorageOptions[k] = v
 	}
 
-	storeCred, err := getStorageCredentials(urp.backupLocation, urp.credentialsFileStore, urp.log)
+	storeCred, err := getStorageCredentials(urp.backupLocation, urp.credentialsFileStore)
 	if err != nil {
 		log.WithError(err).Error("Failed to get repo credential env")
 		return repoOption, err
@@ -169,10 +195,14 @@ func getStorageType(backupLocation *velerov1api.BackupStorageLocation) string {
 	}
 }
 
-func getStorageCredentials(backupLocation *velerov1api.BackupStorageLocation, credentialsFileStore credentials.FileStore, log *logrus.Logger) (map[string]string, error) {
+func getStorageCredentials(backupLocation *velerov1api.BackupStorageLocation, credentialsFileStore credentials.FileStore) (map[string]string, error) {
 	result := make(map[string]string)
 	var err error
+
 	backendType := repoconfig.GetBackendType(backupLocation.Spec.Provider)
+	if !repoconfig.IsBackendTypeValid(backendType) {
+		return map[string]string{}, errors.New("invalid storage provider")
+	}
 
 	config := backupLocation.Spec.Config
 	if config == nil {
@@ -182,17 +212,15 @@ func getStorageCredentials(backupLocation *velerov1api.BackupStorageLocation, cr
 	if backupLocation.Spec.Credential != nil {
 		config[repoconfig.CredentialsFileKey], err = credentialsFileStore.Path(backupLocation.Spec.Credential)
 		if err != nil {
-			log.WithError(err).Error("Failed to get credential file in BSL")
-			return map[string]string{}, err
+			return map[string]string{}, errors.Wrap(err, "error get credential file in bsl")
 		}
 	}
 
 	switch backendType {
 	case repoconfig.AWSBackend:
-		credValue, err := repoconfig.GetS3Credentials(config)
+		credValue, err := getS3Credentials(config)
 		if err != nil {
-			log.WithError(err).Error("Failed to get S3 credentials")
-			return map[string]string{}, err
+			return map[string]string{}, errors.Wrap(err, "error get s3 credentials")
 		}
 		result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_KEY_ID] = credValue.AccessKeyID
 		result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_PROVIDER] = credValue.ProviderName
@@ -200,16 +228,15 @@ func getStorageCredentials(backupLocation *velerov1api.BackupStorageLocation, cr
 		result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_TOKEN] = credValue.SessionToken
 
 	case repoconfig.AzureBackend:
-		storageAccount, accountKey, err := repoconfig.GetAzureCredentials(config)
+		storageAccount, accountKey, err := getAzureCredentials(config)
 		if err != nil {
-			log.WithError(err).Error("Failed to get Azure credentials")
-			return map[string]string{}, err
+			return map[string]string{}, errors.Wrap(err, "error get azure credentials")
 		}
 		result[udmrepo.UNIFIED_REPO_STORE_OPTION_AZ_STORAGE_ACCOUNT] = storageAccount
 		result[udmrepo.UNIFIED_REPO_STORE_OPTION_AZ_KEY] = accountKey
 
 	case repoconfig.GCPBackend:
-		result[udmrepo.UNIFIED_REPO_STORE_OPTION_CRED_FILE] = repoconfig.GetGCPCredentials(config)
+		result[udmrepo.UNIFIED_REPO_STORE_OPTION_CRED_FILE] = getGCPCredentials(config)
 	}
 
 	return result, nil
@@ -217,7 +244,11 @@ func getStorageCredentials(backupLocation *velerov1api.BackupStorageLocation, cr
 
 func getStorageVariables(backupLocation *velerov1api.BackupStorageLocation, repoName string) (map[string]string, error) {
 	result := make(map[string]string)
+
 	backendType := repoconfig.GetBackendType(backupLocation.Spec.Provider)
+	if !repoconfig.IsBackendTypeValid(backendType) {
+		return map[string]string{}, errors.New("invalid storage provider")
+	}
 
 	config := backupLocation.Spec.Config
 	if config == nil {
@@ -233,30 +264,30 @@ func getStorageVariables(backupLocation *velerov1api.BackupStorageLocation, repo
 
 	prefix = path.Join(prefix, udmrepo.UNIFIED_REPO_STORE_OPTION_PREFIX_NAME, repoName) + "/"
 
-	s3Url := config["s3Url"]
 	region := config["region"]
-	var err error
 
 	if backendType == repoconfig.AWSBackend {
-		if s3Url == "" && region == "" {
-			region, err = repoconfig.GetAWSBucketRegion(bucket)
+		s3Url := config["s3Url"]
+
+		var err error
+		if s3Url == "" {
+			region, err = getS3BucketRegion(bucket)
 			if err != nil {
-				return map[string]string{}, err
+				return map[string]string{}, errors.Wrap(err, "error get s3 bucket region")
 			}
 
 			s3Url = fmt.Sprintf("s3-%s.amazonaws.com", region)
 		}
+
+		result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_ENDPOINT] = strings.Trim(s3Url, "/")
+		result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_DISABLE_TLS_VERIFY] = config["insecureSkipTLSVerify"]
+	} else if backendType == repoconfig.AzureBackend {
+		result[udmrepo.UNIFIED_REPO_STORE_OPTION_AZ_DOMAIN] = getAzureStorageDomain(config)
 	}
 
 	result[udmrepo.UNIFIED_REPO_STORE_OPTION_OSS_BUCKET] = bucket
 	result[udmrepo.UNIFIED_REPO_STORE_OPTION_PREFIX] = prefix
 	result[udmrepo.UNIFIED_REPO_STORE_OPTION_OSS_REGION] = strings.Trim(region, "/")
-
-	result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_ENDPOINT] = strings.Trim(s3Url, "/")
-	result[udmrepo.UNIFIED_REPO_STORE_OPTION_S3_DISABLE_TLS_VERIFY] = config["insecureSkipTLSVerify"]
-
-	result[udmrepo.UNIFIED_REPO_STORE_OPTION_AZ_DOMAIN] = repoconfig.GetAzureStorageDomain(config)
-
 	result[udmrepo.UNIFIED_REPO_STORE_OPTION_FS_PATH] = config["fspath"]
 
 	return result, nil
