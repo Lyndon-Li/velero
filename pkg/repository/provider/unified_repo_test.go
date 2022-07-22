@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package repoprovider
+package provider
 
 import (
 	"errors"
@@ -23,10 +23,12 @@ import (
 	awscredentials "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	corev1api "k8s.io/api/core/v1"
 
-	filecredentials "github.com/vmware-tanzu/velero/internal/credentials"
+	velerocredentials "github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
 
@@ -34,7 +36,7 @@ func TestGetStorageCredentials(t *testing.T) {
 	testCases := []struct {
 		name                string
 		backupLocation      velerov1api.BackupStorageLocation
-		credFileStore       filecredentials.FileStore
+		credFileStore       velerocredentials.FileStore
 		getAzureCredentials func(map[string]string) (string, string, error)
 		getS3Credentials    func(map[string]string) (awscredentials.Value, error)
 		getGCPCredentials   func(map[string]string) string
@@ -42,14 +44,20 @@ func TestGetStorageCredentials(t *testing.T) {
 		expectedErr         string
 	}{
 		{
+			name:        "invalid credentials file store interface",
+			expected:    map[string]string{},
+			expectedErr: "invalid credentials interface",
+		},
+		{
 			name: "invalid provider",
 			backupLocation: velerov1api.BackupStorageLocation{
 				Spec: velerov1api.BackupStorageLocationSpec{
 					Provider: "invalid-provider",
 				},
 			},
-			expected:    map[string]string{},
-			expectedErr: "invalid storage provider",
+			credFileStore: velerotest.NewFakeCredentialsFileStore("", nil),
+			expected:      map[string]string{},
+			expectedErr:   "invalid storage provider",
 		},
 		{
 			name: "credential section exists in BSL, file store fail",
@@ -78,7 +86,7 @@ func TestGetStorageCredentials(t *testing.T) {
 					AccessKeyID: "from: " + config["credentialsFile"],
 				}, nil
 			},
-
+			credFileStore: velerotest.NewFakeCredentialsFileStore("", nil),
 			expected: map[string]string{
 				"accessKeyID":     "from: credentials-from-config-map",
 				"providerName":    "",
@@ -162,9 +170,9 @@ func TestGetStorageCredentials(t *testing.T) {
 			getAzureCredentials: func(config map[string]string) (string, string, error) {
 				return "", "", errors.New("fake error")
 			},
-
-			expected:    map[string]string{},
-			expectedErr: "error get azure credentials: fake error",
+			credFileStore: velerotest.NewFakeCredentialsFileStore("", nil),
+			expected:      map[string]string{},
+			expectedErr:   "error get azure credentials: fake error",
 		},
 		{
 			name: "gcp, Credential section not exists in BSL",
@@ -179,7 +187,7 @@ func TestGetStorageCredentials(t *testing.T) {
 			getGCPCredentials: func(config map[string]string) string {
 				return "credentials-from-config-map"
 			},
-
+			credFileStore: velerotest.NewFakeCredentialsFileStore("", nil),
 			expected: map[string]string{
 				"credFile": "credentials-from-config-map",
 			},
@@ -403,6 +411,117 @@ func TestGetStorageVariables(t *testing.T) {
 			actual, err := getStorageVariables(&tc.backupLocation, tc.repoName)
 
 			require.Equal(t, tc.expected, actual)
+
+			if tc.expectedErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tc.expectedErr)
+			}
+		})
+	}
+}
+
+func TestGetRepoPassword(t *testing.T) {
+	testCases := []struct {
+		name        string
+		getter      velerocredentials.SecretStore
+		cached      string
+		expected    string
+		expectedErr string
+	}{
+		{
+			name:        "invalid secret interface",
+			expectedErr: "invalid credentials interface",
+		},
+		{
+			name:        "error from secret interface",
+			getter:      velerotest.NewNamespacedSecretStore("", errors.New("fake error")),
+			expectedErr: "error to get password buffer: fake error",
+		},
+		{
+			name:     "secret with whitespace",
+			getter:   velerotest.NewNamespacedSecretStore(" fake-passwor d  ", nil),
+			expected: "fake-passwor d",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			urp := unifiedRepoProvider{
+				credentialGetter: velerocredentials.CredentialGetter{
+					FromSecret: tc.getter,
+				},
+			}
+
+			password, err := getRepoPassword(urp.credentialGetter.FromSecret, RepoParam{})
+
+			require.Equal(t, tc.expected, password)
+
+			if tc.expectedErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tc.expectedErr)
+			}
+		})
+	}
+}
+
+func TestGetRepoOption(t *testing.T) {
+	testCases := []struct {
+		name                  string
+		funcTable             localFuncTable
+		getRepoPassword       func(velerocredentials.SecretStore, RepoParam) (string, error)
+		getStorageCredentials func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error)
+		getStorageVariables   func(*velerov1api.BackupStorageLocation, string) (map[string]string, error)
+		expected              udmrepo.RepoOptions
+		expectedErr           string
+	}{
+		{
+			name: "get repo password fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "", errors.New("fake-error-1")
+				},
+			},
+			expectedErr: "error to get repo password: fake-error-1",
+		},
+		{
+			name: "get storage variable fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "fake-password", nil
+				},
+				getStorageVariables: func(*velerov1api.BackupStorageLocation, string) (map[string]string, error) {
+					return map[string]string{}, errors.New("fake-error-2")
+				},
+			},
+			expectedErr: "error to get storage variables: fake-error-2",
+		},
+		{
+			name: "get storage credentials fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "fake-password", nil
+				},
+				getStorageVariables: func(*velerov1api.BackupStorageLocation, string) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+				getStorageCredentials: func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error) {
+					return map[string]string{}, errors.New("fake-error-3")
+				},
+			},
+			expectedErr: "error to get repo credentials: fake-error-3",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			funcTable = tc.funcTable
+			urp := unifiedRepoProvider{}
+
+			password, err := urp.getRepoOption(RepoParam{})
+
+			require.Equal(t, tc.expected, password)
 
 			if tc.expectedErr == "" {
 				assert.NoError(t, err)

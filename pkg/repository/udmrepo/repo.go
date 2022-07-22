@@ -70,6 +70,16 @@ type ObjectWriteOptions struct {
 	BackupMode  int    ///OBJECT_DATA_BACKUP_*
 }
 
+// OwnershipOptions is used to add some access control to the unified repository.
+// For example, some privileged operations of the unified repository can be done by the
+// repository owner only; the data of a backup may be manipulated by the backup owner
+// who created it only. It is optional for a backup repository to support this ownership control.
+type OwnershipOptions struct {
+	Username      string
+	DomainName    string
+	FullQualified string
+}
+
 type RepoOptions struct {
 	///A repository specific string to identify a backup storage, i.e., "s3", "filesystem"
 	StorageType string
@@ -77,6 +87,8 @@ type RepoOptions struct {
 	RepoPassword string
 	///A custom path to save the repository's configuration, if any
 	ConfigFilePath string
+	///The ownership for the current repository operation
+	Ownership OwnershipOptions
 	///Other repository specific options
 	GeneralOptions map[string]string
 	///Storage specific options
