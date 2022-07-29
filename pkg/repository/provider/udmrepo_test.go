@@ -17,11 +17,13 @@ limitations under the License.
 package provider
 
 import (
+	"context"
 	"errors"
 	"testing"
 
 	awscredentials "github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	corev1api "k8s.io/api/core/v1"
@@ -29,6 +31,7 @@ import (
 	velerocredentials "github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
+	reposervicenmocks "github.com/vmware-tanzu/velero/pkg/repository/udmrepo/mocks"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
 
@@ -468,13 +471,10 @@ func TestGetRepoPassword(t *testing.T) {
 
 func TestGetRepoOption(t *testing.T) {
 	testCases := []struct {
-		name                  string
-		funcTable             localFuncTable
-		getRepoPassword       func(velerocredentials.SecretStore, RepoParam) (string, error)
-		getStorageCredentials func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error)
-		getStorageVariables   func(*velerov1api.BackupStorageLocation, string) (map[string]string, error)
-		expected              udmrepo.RepoOptions
-		expectedErr           string
+		name        string
+		funcTable   localFuncTable
+		expected    udmrepo.RepoOptions
+		expectedErr string
 	}{
 		{
 			name: "get repo password fail",
@@ -522,6 +522,203 @@ func TestGetRepoOption(t *testing.T) {
 			password, err := urp.getRepoOption(RepoParam{})
 
 			require.Equal(t, tc.expected, password)
+
+			if tc.expectedErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tc.expectedErr)
+			}
+		})
+	}
+}
+
+func TestPrepareRepo(t *testing.T) {
+	testCases := []struct {
+		name        string
+		funcTable   localFuncTable
+		repoService *reposervicenmocks.BackupRepoService
+		retFuncInit func(context.Context, udmrepo.RepoOptions, bool) error
+		expectedErr string
+	}{
+		{
+			name: "get repo option fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "", errors.New("fake-error-1")
+				},
+			},
+			repoService: new(reposervicenmocks.BackupRepoService),
+			expectedErr: "error to get repo options: error to get repo password: fake-error-1",
+		},
+		{
+			name: "already initialized",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "fake-password", nil
+				},
+				getStorageVariables: func(*velerov1api.BackupStorageLocation, string) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+				getStorageCredentials: func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+			},
+			repoService: new(reposervicenmocks.BackupRepoService),
+			retFuncInit: func(ctx context.Context, repoOption udmrepo.RepoOptions, createNew bool) error {
+				if !createNew {
+					return nil
+				} else {
+					return errors.New("fake-error")
+				}
+			},
+		},
+		{
+			name: "initialize fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "fake-password", nil
+				},
+				getStorageVariables: func(*velerov1api.BackupStorageLocation, string) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+				getStorageCredentials: func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+			},
+			repoService: new(reposervicenmocks.BackupRepoService),
+			retFuncInit: func(ctx context.Context, repoOption udmrepo.RepoOptions, createNew bool) error {
+				if !createNew {
+					return errors.New("fake-error-1")
+				} else {
+					return errors.New("fake-error-2")
+				}
+			},
+			expectedErr: "error to init backup repo: fake-error-2",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			funcTable = tc.funcTable
+			urp := unifiedRepoProvider{
+				repoService: tc.repoService,
+				log:         velerotest.NewLogger(),
+			}
+
+			tc.repoService.On("Init", mock.Anything, mock.Anything, mock.Anything).Return(tc.retFuncInit)
+
+			err := urp.PrepareRepo(context.Background(), RepoParam{
+				BackupLocation: &velerov1api.BackupStorageLocation{},
+			})
+
+			if tc.expectedErr == "" {
+				assert.NoError(t, err)
+			} else {
+				assert.EqualError(t, err, tc.expectedErr)
+			}
+		})
+	}
+}
+
+func TestForget(t *testing.T) {
+	var backupRepo *reposervicenmocks.BackupRepo
+
+	testCases := []struct {
+		name          string
+		funcTable     localFuncTable
+		repoService   *reposervicenmocks.BackupRepoService
+		backupRepo    *reposervicenmocks.BackupRepo
+		retFuncOpen   []interface{}
+		retFuncDelete interface{}
+		expectedErr   string
+	}{
+		{
+			name: "get repo option fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "", errors.New("fake-error-1")
+				},
+			},
+			expectedErr: "error to get repo options: error to get repo password: fake-error-1",
+		},
+		{
+			name: "repo open fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "fake-password", nil
+				},
+				getStorageVariables: func(*velerov1api.BackupStorageLocation, string) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+				getStorageCredentials: func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+			},
+			repoService: new(reposervicenmocks.BackupRepoService),
+			retFuncOpen: []interface{}{
+				func(context.Context, udmrepo.RepoOptions) udmrepo.BackupRepo {
+					return backupRepo
+				},
+
+				func(context.Context, udmrepo.RepoOptions) error {
+					return errors.New("fake-error-2")
+				},
+			},
+			expectedErr: "error to open backup repo: fake-error-2",
+		},
+		{
+			name: "delete fail",
+			funcTable: localFuncTable{
+				getRepoPassword: func(velerocredentials.SecretStore, RepoParam) (string, error) {
+					return "fake-password", nil
+				},
+				getStorageVariables: func(*velerov1api.BackupStorageLocation, string) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+				getStorageCredentials: func(*velerov1api.BackupStorageLocation, velerocredentials.FileStore) (map[string]string, error) {
+					return map[string]string{}, nil
+				},
+			},
+			repoService: new(reposervicenmocks.BackupRepoService),
+			backupRepo:  new(reposervicenmocks.BackupRepo),
+			retFuncOpen: []interface{}{
+				func(context.Context, udmrepo.RepoOptions) udmrepo.BackupRepo {
+					return backupRepo
+				},
+
+				func(context.Context, udmrepo.RepoOptions) error {
+					return nil
+				},
+			},
+			retFuncDelete: func(context.Context, udmrepo.ID) error {
+				return errors.New("fake-error-3")
+			},
+			expectedErr: "error to delete manifest: fake-error-3",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			funcTable = tc.funcTable
+			urp := unifiedRepoProvider{
+				repoService: tc.repoService,
+				log:         velerotest.NewLogger(),
+			}
+
+			backupRepo = tc.backupRepo
+
+			if tc.repoService != nil {
+				tc.repoService.On("Open", mock.Anything, mock.Anything).Return(tc.retFuncOpen[0], tc.retFuncOpen[1])
+			}
+
+			if tc.backupRepo != nil {
+				backupRepo.On("DeleteManifest", mock.Anything, mock.Anything).Return(tc.retFuncDelete)
+				backupRepo.On("Close", mock.Anything).Return(nil)
+			}
+
+			err := urp.Forget(context.Background(), "", RepoParam{
+				BackupLocation: &velerov1api.BackupStorageLocation{},
+			})
 
 			if tc.expectedErr == "" {
 				assert.NoError(t, err)

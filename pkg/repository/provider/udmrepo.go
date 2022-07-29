@@ -30,6 +30,7 @@ import (
 	repoconfig "github.com/vmware-tanzu/velero/pkg/repository/config"
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
+	reposervice "github.com/vmware-tanzu/velero/pkg/repository/udmrepo/service"
 	"github.com/vmware-tanzu/velero/pkg/util/ownership"
 )
 
@@ -105,22 +106,104 @@ func (urp *unifiedRepoProvider) InitRepo(ctx context.Context, param RepoParam) e
 }
 
 func (urp *unifiedRepoProvider) ConnectToRepo(ctx context.Context, param RepoParam) error {
-	///TODO
+	log := urp.log.WithFields(logrus.Fields{
+		"BSL name": param.BackupLocation.Name,
+		"BSL UID":  param.BackupLocation.UID,
+	})
+
+	log.Debug("Start to connect repo")
+
+	repoOption, err := urp.getRepoOption(param)
+	if err != nil {
+		return errors.Wrap(err, "error to get repo options")
+	}
+
+	err = urp.repoService.Init(ctx, repoOption, false)
+	if err != nil {
+		return errors.Wrap(err, "error to connect backup repo")
+	}
+
+	log.Debug("Connect repo complete")
+
 	return nil
 }
 
 func (urp *unifiedRepoProvider) PrepareRepo(ctx context.Context, param RepoParam) error {
-	///TODO
+	log := urp.log.WithFields(logrus.Fields{
+		"BSL name": param.BackupLocation.Name,
+		"BSL UID":  param.BackupLocation.UID,
+	})
+
+	log.Debug("Start to connect repo")
+
+	repoOption, err := urp.getRepoOption(param)
+	if err != nil {
+		return errors.Wrap(err, "error to get repo options")
+	}
+
+	err = urp.repoService.Init(ctx, repoOption, false)
+	if err == nil {
+		log.Debug("Repo has already been initialized remotely")
+		return nil
+	}
+
+	err = urp.repoService.Init(ctx, repoOption, true)
+	if err != nil {
+		return errors.Wrap(err, "error to init backup repo")
+	}
+
+	log.Debug("Connect repo complete")
+
 	return nil
 }
 
 func (urp *unifiedRepoProvider) PruneRepo(ctx context.Context, param RepoParam) error {
-	///TODO
+	log := urp.log.WithFields(logrus.Fields{
+		"BSL name": param.BackupLocation.Name,
+		"BSL UID":  param.BackupLocation.UID,
+	})
+
+	log.Debug("Start to prune repo")
+
+	repoOption, err := urp.getRepoOptionForOpen(param, "full maintainence")
+	if err != nil {
+		return errors.Wrap(err, "error to get repo options")
+	}
+
+	repoOption.GeneralOptions[udmrepo.GenOptionMaintainMode] = udmrepo.GenOptionMaintainFull
+
+	err = urp.repoService.Maintain(ctx, repoOption)
+	if err != nil {
+		return errors.Wrap(err, "error to prune backup repo")
+	}
+
+	log.Debug("Prune repo complete")
+
 	return nil
 }
 
 func (urp *unifiedRepoProvider) PruneRepoQuick(ctx context.Context, param RepoParam) error {
-	///TODO
+	log := urp.log.WithFields(logrus.Fields{
+		"BSL name": param.BackupLocation.Name,
+		"BSL UID":  param.BackupLocation.UID,
+	})
+
+	log.Debug("Start to prune repo quick")
+
+	repoOption, err := urp.getRepoOptionForOpen(param, "quick maintainence")
+	if err != nil {
+		return errors.Wrap(err, "error to get repo options")
+	}
+
+	repoOption.GeneralOptions[udmrepo.GenOptionMaintainMode] = udmrepo.GenOptionMaintainQuick
+
+	err = urp.repoService.Maintain(ctx, repoOption)
+	if err != nil {
+		return errors.Wrap(err, "error to prune backup repo quick")
+	}
+
+	log.Debug("Prune repo quick complete")
+
 	return nil
 }
 
@@ -129,7 +212,33 @@ func (urp *unifiedRepoProvider) EnsureUnlockRepo(ctx context.Context, param Repo
 }
 
 func (urp *unifiedRepoProvider) Forget(ctx context.Context, snapshotID string, param RepoParam) error {
-	///TODO
+	log := urp.log.WithFields(logrus.Fields{
+		"BSL name":   param.BackupLocation.Name,
+		"BSL UID":    param.BackupLocation.UID,
+		"snapshotID": snapshotID,
+	})
+
+	log.Debug("Start to forget snapshot")
+
+	repoOption, err := urp.getRepoOptionForOpen(param, "forget")
+	if err != nil {
+		return errors.Wrap(err, "error to get repo options")
+	}
+
+	bkRepo, err := urp.repoService.Open(ctx, repoOption)
+	if err != nil {
+		return errors.Wrap(err, "error to open backup repo")
+	}
+
+	defer bkRepo.Close(ctx)
+
+	err = bkRepo.DeleteManifest(ctx, udmrepo.ID(snapshotID))
+	if err != nil {
+		return errors.Wrap(err, "error to delete manifest")
+	}
+
+	log.Debug("Forget snapshot complete")
+
 	return nil
 }
 
@@ -180,6 +289,26 @@ func (urp *unifiedRepoProvider) getRepoOption(param RepoParam) (udmrepo.RepoOpti
 
 	for k, v := range storeCred {
 		repoOption.StorageOptions[k] = v
+	}
+
+	return repoOption, nil
+}
+
+func (urp *unifiedRepoProvider) getRepoOptionForOpen(param RepoParam, purpose string) (udmrepo.RepoOptions, error) {
+	repoPassword, err := funcTable.getRepoPassword(urp.credentialGetter.FromSecret, param)
+	if err != nil {
+		return udmrepo.RepoOptions{}, errors.Wrap(err, "error to get repo password")
+	}
+
+	repoOption := udmrepo.RepoOptions{
+		RepoPassword:   repoPassword,
+		ConfigFilePath: getRepoConfigFile(urp.workPath, string(param.BackupLocation.UID)),
+		Ownership: udmrepo.OwnershipOptions{
+			Username:   ownership.GetRepositoryOwner().Username,
+			DomainName: ownership.GetRepositoryOwner().DomainName,
+		},
+		GeneralOptions: make(map[string]string),
+		Description:    purpose,
 	}
 
 	return repoOption, nil
@@ -305,11 +434,9 @@ func getStorageVariables(backupLocation *velerov1api.BackupStorageLocation, repo
 }
 
 func getRepoConfigFile(workPath string, repoID string) string {
-	///TODO: call udmrepo to get config file
-	return ""
+	return reposervice.GetRepoConfigFile(workPath, repoID)
 }
 
 func createRepoService(log logrus.FieldLogger) udmrepo.BackupRepoService {
-	///TODO: call udmrepo create repo service
-	return nil
+	return reposervice.CreateService(log)
 }
