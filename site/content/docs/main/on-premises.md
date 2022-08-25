@@ -62,9 +62,9 @@ If you are using restic, you will also need to upload the restic helper image.
 PRIVATE_REG=<your private registry>
 VELERO_VERSION=<version of Velero you're targeting, for example v1.4.0>
 
-docker pull velero/velero-restic-restore-helper:$VELERO_VERSION
-docker tag velero/velero-restic-restore-helper:$VELERO_VERSION $PRIVATE_REG/velero-restic-restore-helper:$VELERO_VERSION
-docker push $PRIVATE_REG/velero-restic-restore-helper:$VELERO_VERSION
+docker pull velero/velero-restore-helper:$VELERO_VERSION
+docker tag velero/velero-restore-helper:$VELERO_VERSION $PRIVATE_REG/velero-restore-helper:$VELERO_VERSION
+docker push $PRIVATE_REG/velero-restore-helper:$VELERO_VERSION
 ```
 
 #### Pulling specific architecture images (optional)
