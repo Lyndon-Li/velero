@@ -19,6 +19,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -51,6 +52,9 @@ type Manager interface {
 	// Forget removes a snapshot from the list of
 	// available snapshots in a repo.
 	Forget(context.Context, restic.SnapshotIdentifier) error
+
+	// DefaultMaintenanceFrequency returns the default maintenance frequency from the specific repo
+	DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error)
 }
 
 type manager struct {
@@ -70,6 +74,7 @@ func NewManager(
 	repoLocker *RepoLocker,
 	repoEnsurer *RepositoryEnsurer,
 	credentialFileStore credentials.FileStore,
+	credentialSecretStore credentials.SecretStore,
 	log logrus.FieldLogger,
 ) Manager {
 	mgr := &manager{
@@ -83,6 +88,10 @@ func NewManager(
 	}
 
 	mgr.providers[velerov1api.BackupRepositoryTypeRestic] = provider.NewResticRepositoryProvider(credentialFileStore, mgr.fileSystem, mgr.log)
+	// mgr.providers[velerov1api.BackupRepositoryTypeUnified] = provider.NewUnifiedRepoProvider(credentials.CredentialGetter{
+	// 	FromFile:   credentialFileStore,
+	// 	FromSecret: credentialSecretStore,
+	// }, mgr.log)
 
 	return mgr
 }
@@ -148,7 +157,8 @@ func (m *manager) UnlockRepo(repo *velerov1api.BackupRepository) error {
 }
 
 func (m *manager) Forget(ctx context.Context, snapshot restic.SnapshotIdentifier) error {
-	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation)
+	// TODO: set a correct repository type for the snapshot
+	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation, "")
 	if err != nil {
 		return err
 	}
@@ -167,10 +177,27 @@ func (m *manager) Forget(ctx context.Context, snapshot restic.SnapshotIdentifier
 	return prd.Forget(context.Background(), snapshot.SnapshotID, param)
 }
 
+func (m *manager) DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error) {
+	return 0, nil
+	// prd, err := m.getRepositoryProvider(repo)
+	// if err != nil {
+	// 	return 0, errors.WithStack(err)
+	// }
+
+	// param, err := m.assembleRepoParam(repo)
+	// if err != nil {
+	// 	return 0, errors.WithStack(err)
+	// }
+
+	// return prd.DefaultMaintenanceFrequency(context.Background(), param), nil
+}
+
 func (m *manager) getRepositoryProvider(repo *velerov1api.BackupRepository) (provider.Provider, error) {
 	switch repo.Spec.RepositoryType {
 	case "", velerov1api.BackupRepositoryTypeRestic:
 		return m.providers[velerov1api.BackupRepositoryTypeRestic], nil
+	case velerov1api.BackupRepositoryTypeUnified:
+		return m.providers[velerov1api.BackupRepositoryTypeUnified], nil
 	default:
 		return nil, fmt.Errorf("failed to get provider for repository %s", repo.Spec.RepositoryType)
 	}
