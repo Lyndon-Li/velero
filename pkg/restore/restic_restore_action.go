@@ -44,32 +44,32 @@ import (
 const (
 	defaultCPURequestLimit = "100m"
 	defaultMemRequestLimit = "128Mi"
-	defaultCommand         = "/velero-restic-restore-helper"
+	defaultCommand         = "/velero-restore-helper"
 )
 
-type ResticRestoreAction struct {
+type PodVolumeRestoreAction struct {
 	logger                logrus.FieldLogger
 	client                corev1client.ConfigMapInterface
 	podVolumeBackupClient velerov1client.PodVolumeBackupInterface
 }
 
-func NewResticRestoreAction(logger logrus.FieldLogger, client corev1client.ConfigMapInterface, podVolumeBackupClient velerov1client.PodVolumeBackupInterface) *ResticRestoreAction {
-	return &ResticRestoreAction{
+func NewPodVolumeRestoreAction(logger logrus.FieldLogger, client corev1client.ConfigMapInterface, podVolumeBackupClient velerov1client.PodVolumeBackupInterface) *PodVolumeRestoreAction {
+	return &PodVolumeRestoreAction{
 		logger:                logger,
 		client:                client,
 		podVolumeBackupClient: podVolumeBackupClient,
 	}
 }
 
-func (a *ResticRestoreAction) AppliesTo() (velero.ResourceSelector, error) {
+func (a *PodVolumeRestoreAction) AppliesTo() (velero.ResourceSelector, error) {
 	return velero.ResourceSelector{
 		IncludedResources: []string{"pods"},
 	}, nil
 }
 
-func (a *ResticRestoreAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
-	a.logger.Info("Executing ResticRestoreAction")
-	defer a.logger.Info("Done executing ResticRestoreAction")
+func (a *PodVolumeRestoreAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
+	a.logger.Info("Executing PodVolumeRestoreAction")
+	defer a.logger.Info("Done executing PodVolumeRestoreAction")
 
 	var pod corev1.Pod
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.Item.UnstructuredContent(), &pod); err != nil {
@@ -99,16 +99,16 @@ func (a *ResticRestoreAction) Execute(input *velero.RestoreItemActionExecuteInpu
 	}
 	volumeSnapshots := podvolume.GetVolumeBackupsForPod(podVolumeBackups, &pod, podFromBackup.Namespace)
 	if len(volumeSnapshots) == 0 {
-		log.Debug("No restic backups found for pod")
+		log.Debug("No pod volume backups found for pod")
 		return velero.NewRestoreItemActionExecuteOutput(input.Item), nil
 	}
 
-	log.Info("Restic backups for pod found")
+	log.Info("Pod volume backups for pod found")
 
 	// TODO we might want/need to get plugin config at the top of this method at some point; for now, wait
 	// until we know we're doing a restore before getting config.
 	log.Debugf("Getting plugin config")
-	config, err := getPluginConfig(framework.PluginKindRestoreItemAction, "velero.io/restic", a.client)
+	config, err := getPluginConfig(framework.PluginKindRestoreItemAction, "velero.io/pod-volume-restore", a.client)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +147,7 @@ func (a *ResticRestoreAction) Execute(input *velero.RestoreItemActionExecuteInpu
 		log.Errorf("Using default securityContext values, couldn't parse securityContext requirements: %s.", err)
 	}
 
-	initContainerBuilder := newResticInitContainerBuilder(image, string(input.Restore.UID))
+	initContainerBuilder := newRestoreInitContainerBuilder(image, string(input.Restore.UID))
 	initContainerBuilder.Resources(&resourceReqs)
 	initContainerBuilder.SecurityContext(&securityContext)
 
@@ -193,13 +193,13 @@ func getCommand(log logrus.FieldLogger, config *corev1.ConfigMap) []string {
 func getImage(log logrus.FieldLogger, config *corev1.ConfigMap) string {
 	if config == nil {
 		log.Debug("No config found for plugin")
-		return veleroimage.DefaultResticRestoreHelperImage()
+		return veleroimage.DefaultRestoreHelperImage()
 	}
 
 	image := config.Data["image"]
 	if image == "" {
 		log.Debugf("No custom image configured")
-		return veleroimage.DefaultResticRestoreHelperImage()
+		return veleroimage.DefaultRestoreHelperImage()
 	}
 
 	log = log.WithField("image", image)
@@ -207,7 +207,7 @@ func getImage(log logrus.FieldLogger, config *corev1.ConfigMap) string {
 	parts := strings.Split(image, "/")
 
 	if len(parts) == 1 {
-		defaultImage := veleroimage.DefaultResticRestoreHelperImage()
+		defaultImage := veleroimage.DefaultRestoreHelperImage()
 		// Image supplied without registry part
 		log.Infof("Plugin config contains image name without registry name. Using default init container image: %q", defaultImage)
 		return defaultImage
@@ -265,7 +265,7 @@ func getSecurityContext(log logrus.FieldLogger, config *corev1.ConfigMap) (strin
 func getPluginConfig(kind framework.PluginKind, name string, client corev1client.ConfigMapInterface) (*corev1.ConfigMap, error) {
 	opts := metav1.ListOptions{
 		// velero.io/plugin-config: true
-		// velero.io/restic: RestoreItemAction
+		// velero.io/pod-volume-restore: RestoreItemAction
 		LabelSelector: fmt.Sprintf("velero.io/plugin-config,%s=%s", name, kind),
 	}
 
@@ -289,7 +289,7 @@ func getPluginConfig(kind framework.PluginKind, name string, client corev1client
 	return &list.Items[0], nil
 }
 
-func newResticInitContainerBuilder(image, restoreUID string) *builder.ContainerBuilder {
+func newRestoreInitContainerBuilder(image, restoreUID string) *builder.ContainerBuilder {
 	return builder.ForContainer(restic.InitContainer, image).
 		Args(restoreUID).
 		Env([]*corev1.EnvVar{

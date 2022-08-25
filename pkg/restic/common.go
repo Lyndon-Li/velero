@@ -42,7 +42,7 @@ const (
 
 	// InitContainer is the name of the init container added
 	// to workload pods to help with restores.
-	InitContainer = "restic-wait"
+	InitContainer = "pod-volume-wait"
 
 	// DefaultMaintenanceFrequency is the default time interval
 	// at which restic prune is run.

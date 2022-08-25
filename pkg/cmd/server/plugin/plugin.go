@@ -44,7 +44,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 				RegisterBackupItemAction("velero.io/service-account", newServiceAccountBackupItemAction(f)).
 				RegisterRestoreItemAction("velero.io/job", newJobRestoreItemAction).
 				RegisterRestoreItemAction("velero.io/pod", newPodRestoreItemAction).
-				RegisterRestoreItemAction("velero.io/restic", newResticRestoreItemAction(f)).
+				RegisterRestoreItemAction("velero.io/pod-volume-restore", newPodVolumeRestoreItemAction(f)).
 				RegisterRestoreItemAction("velero.io/init-restore-hook", newInitRestoreHookPodAction).
 				RegisterRestoreItemAction("velero.io/service", newServiceRestoreItemAction).
 				RegisterRestoreItemAction("velero.io/service-account", newServiceAccountRestoreItemAction).
@@ -138,7 +138,7 @@ func newInitRestoreHookPodAction(logger logrus.FieldLogger) (interface{}, error)
 	return restore.NewInitRestoreHookPodAction(logger), nil
 }
 
-func newResticRestoreItemAction(f client.Factory) veleroplugin.HandlerInitializer {
+func newPodVolumeRestoreItemAction(f client.Factory) veleroplugin.HandlerInitializer {
 	return func(logger logrus.FieldLogger) (interface{}, error) {
 		client, err := f.KubeClient()
 		if err != nil {
@@ -150,7 +150,7 @@ func newResticRestoreItemAction(f client.Factory) veleroplugin.HandlerInitialize
 			return nil, err
 		}
 
-		return restore.NewResticRestoreAction(logger, client.CoreV1().ConfigMaps(f.Namespace()), veleroClient.VeleroV1().PodVolumeBackups(f.Namespace())), nil
+		return restore.NewPodVolumeRestoreAction(logger, client.CoreV1().ConfigMaps(f.Namespace()), veleroClient.VeleroV1().PodVolumeBackups(f.Namespace())), nil
 	}
 }
 
