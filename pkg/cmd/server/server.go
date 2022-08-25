@@ -128,9 +128,9 @@ type serverConfig struct {
 	clientPageSize                                                          int
 	profilerAddress                                                         string
 	formatFlag                                                              *logging.FormatFlag
-	defaultResticMaintenanceFrequency                                       time.Duration
+	repoMaintenanceFrequency                                                time.Duration
 	garbageCollectionFrequency                                              time.Duration
-	defaultVolumesToRestic                                                  bool
+	defaultToPodVolumes                                                     bool
 	uploaderType                                                            string
 }
 
@@ -144,25 +144,24 @@ func NewCommand(f client.Factory) *cobra.Command {
 		volumeSnapshotLocations = flag.NewMap().WithKeyValueDelimiter(':')
 		logLevelFlag            = logging.LogLevelFlag(logrus.InfoLevel)
 		config                  = serverConfig{
-			pluginDir:                         "/plugins",
-			metricsAddress:                    defaultMetricsAddress,
-			defaultBackupLocation:             "default",
-			defaultVolumeSnapshotLocations:    make(map[string]string),
-			backupSyncPeriod:                  defaultBackupSyncPeriod,
-			defaultBackupTTL:                  defaultBackupTTL,
-			defaultCSISnapshotTimeout:         defaultCSISnapshotTimeout,
-			storeValidationFrequency:          defaultStoreValidationFrequency,
-			podVolumeOperationTimeout:         defaultPodVolumeOperationTimeout,
-			restoreResourcePriorities:         defaultRestorePriorities,
-			clientQPS:                         defaultClientQPS,
-			clientBurst:                       defaultClientBurst,
-			clientPageSize:                    defaultClientPageSize,
-			profilerAddress:                   defaultProfilerAddress,
-			resourceTerminatingTimeout:        defaultResourceTerminatingTimeout,
-			formatFlag:                        logging.NewFormatFlag(),
-			defaultResticMaintenanceFrequency: restic.DefaultMaintenanceFrequency,
-			defaultVolumesToRestic:            restic.DefaultVolumesToRestic,
-			uploaderType:                      uploader.ResticType,
+			pluginDir:                      "/plugins",
+			metricsAddress:                 defaultMetricsAddress,
+			defaultBackupLocation:          "default",
+			defaultVolumeSnapshotLocations: make(map[string]string),
+			backupSyncPeriod:               defaultBackupSyncPeriod,
+			defaultBackupTTL:               defaultBackupTTL,
+			defaultCSISnapshotTimeout:      defaultCSISnapshotTimeout,
+			storeValidationFrequency:       defaultStoreValidationFrequency,
+			podVolumeOperationTimeout:      defaultPodVolumeOperationTimeout,
+			restoreResourcePriorities:      defaultRestorePriorities,
+			clientQPS:                      defaultClientQPS,
+			clientBurst:                    defaultClientBurst,
+			clientPageSize:                 defaultClientPageSize,
+			profilerAddress:                defaultProfilerAddress,
+			resourceTerminatingTimeout:     defaultResourceTerminatingTimeout,
+			formatFlag:                     logging.NewFormatFlag(),
+			defaultToPodVolumes:            restic.DefaultToPodVolumes,
+			uploaderType:                   uploader.ResticType,
 		}
 	)
 
@@ -212,7 +211,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 	command.Flags().StringVar(&config.pluginDir, "plugin-dir", config.pluginDir, "Directory containing Velero plugins")
 	command.Flags().StringVar(&config.metricsAddress, "metrics-address", config.metricsAddress, "The address to expose prometheus metrics")
 	command.Flags().DurationVar(&config.backupSyncPeriod, "backup-sync-period", config.backupSyncPeriod, "How often to ensure all Velero backups in object storage exist as Backup API objects in the cluster. This is the default sync period if none is explicitly specified for a backup storage location.")
-	command.Flags().DurationVar(&config.podVolumeOperationTimeout, "restic-timeout", config.podVolumeOperationTimeout, "How long backups/restores of pod volumes should be allowed to run before timing out.")
+	command.Flags().DurationVar(&config.podVolumeOperationTimeout, "pod-volume-timeout", config.podVolumeOperationTimeout, "How long backups/restores of pod volumes should be allowed to run before timing out.")
 	command.Flags().BoolVar(&config.restoreOnly, "restore-only", config.restoreOnly, "Run in a mode where only restores are allowed; backups, schedules, and garbage-collection are all disabled. DEPRECATED: this flag will be removed in v2.0. Use read-only backup storage locations instead.")
 	command.Flags().StringSliceVar(&config.disabledControllers, "disable-controllers", config.disabledControllers, fmt.Sprintf("List of controllers to disable on startup. Valid values are %s", strings.Join(controller.DisableableControllers, ",")))
 	command.Flags().StringSliceVar(&config.restoreResourcePriorities, "restore-resource-priorities", config.restoreResourcePriorities, "Desired order of resource restores; any resource not in the list will be restored alphabetically after the prioritized resources.")
@@ -225,9 +224,9 @@ func NewCommand(f client.Factory) *cobra.Command {
 	command.Flags().StringVar(&config.profilerAddress, "profiler-address", config.profilerAddress, "The address to expose the pprof profiler.")
 	command.Flags().DurationVar(&config.resourceTerminatingTimeout, "terminating-resource-timeout", config.resourceTerminatingTimeout, "How long to wait on persistent volumes and namespaces to terminate during a restore before timing out.")
 	command.Flags().DurationVar(&config.defaultBackupTTL, "default-backup-ttl", config.defaultBackupTTL, "How long to wait by default before backups can be garbage collected.")
-	command.Flags().DurationVar(&config.defaultResticMaintenanceFrequency, "default-restic-prune-frequency", config.defaultResticMaintenanceFrequency, "How often 'restic prune' is run for restic repositories by default.")
+	command.Flags().DurationVar(&config.repoMaintenanceFrequency, "default-repo-prune-frequency", config.repoMaintenanceFrequency, "How often 'restic prune' is run for restic repositories by default.")
 	command.Flags().DurationVar(&config.garbageCollectionFrequency, "garbage-collection-frequency", config.garbageCollectionFrequency, "How often garbage collection is run for expired backups.")
-	command.Flags().BoolVar(&config.defaultVolumesToRestic, "default-volumes-to-restic", config.defaultVolumesToRestic, "Backup all volumes with restic by default.")
+	command.Flags().BoolVar(&config.defaultToPodVolumes, "default-to-pod-volumes", config.defaultToPodVolumes, "Backup all volumes with restic by default.")
 	command.Flags().StringVar(&config.uploaderType, "uploader-type", config.uploaderType, "Type of uploader to handle the transfer of data of pod volumes")
 
 	return command
@@ -638,7 +637,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			podvolume.NewBackupperFactory(s.repoLocker, s.repoEnsurer, s.veleroClient, s.kubeClient.CoreV1(),
 				s.kubeClient.CoreV1(), s.sharedInformerFactory.Velero().V1().BackupRepositories().Informer().HasSynced, s.logger),
 			s.config.podVolumeOperationTimeout,
-			s.config.defaultVolumesToRestic,
+			s.config.defaultToPodVolumes,
 			s.config.clientPageSize,
 		)
 		cmd.CheckError(err)
@@ -654,7 +653,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			backupTracker,
 			s.mgr.GetClient(),
 			s.config.defaultBackupLocation,
-			s.config.defaultVolumesToRestic,
+			s.config.defaultToPodVolumes,
 			s.config.defaultBackupTTL,
 			s.config.defaultCSISnapshotTimeout,
 			s.sharedInformerFactory.Velero().V1().VolumeSnapshotLocations().Lister(),
@@ -790,7 +789,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 		s.logger.Fatal(err, "unable to create controller", "controller", controller.Schedule)
 	}
 
-	if err := controller.NewResticRepoReconciler(s.namespace, s.logger, s.mgr.GetClient(), s.config.defaultResticMaintenanceFrequency, s.repoManager).SetupWithManager(s.mgr); err != nil {
+	if err := controller.NewResticRepoReconciler(s.namespace, s.logger, s.mgr.GetClient(), s.config.repoMaintenanceFrequency, s.repoManager).SetupWithManager(s.mgr); err != nil {
 		s.logger.Fatal(err, "unable to create controller", "controller", controller.ResticRepo)
 	}
 

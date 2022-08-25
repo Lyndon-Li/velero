@@ -174,9 +174,9 @@ func (b *BackupBuilder) SnapshotVolumes(val bool) *BackupBuilder {
 	return b
 }
 
-// DefaultVolumesToRestic sets the Backup's "DefaultVolumesToRestic" flag.
-func (b *BackupBuilder) DefaultVolumesToRestic(val bool) *BackupBuilder {
-	b.object.Spec.DefaultVolumesToRestic = &val
+// DefaultToPodVolumes sets the Backup's "DefaultToPodVolumes" flag.
+func (b *BackupBuilder) DefaultToPodVolumes(val bool) *BackupBuilder {
+	b.object.Spec.DefaultToPodVolumes = &val
 	return b
 }
 

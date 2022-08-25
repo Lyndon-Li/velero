@@ -201,7 +201,7 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 	backupRequest.ResourceIncludesExcludes = collections.GetResourceIncludesExcludes(kb.discoveryHelper, backupRequest.Spec.IncludedResources, backupRequest.Spec.ExcludedResources)
 	log.Infof("Including resources: %s", backupRequest.ResourceIncludesExcludes.IncludesString())
 	log.Infof("Excluding resources: %s", backupRequest.ResourceIncludesExcludes.ExcludesString())
-	log.Infof("Backing up all pod volumes using Restic: %t", boolptr.IsSetToTrue(backupRequest.Backup.Spec.DefaultVolumesToRestic))
+	log.Infof("Backing up all pod volumes using Restic: %t", boolptr.IsSetToTrue(backupRequest.Backup.Spec.DefaultToPodVolumes))
 
 	var err error
 	backupRequest.ResourceHooks, err = getResourceHooks(backupRequest.Spec.Hooks.Resources, kb.discoveryHelper)

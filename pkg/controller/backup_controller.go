@@ -370,8 +370,8 @@ func (c *backupController) prepareBackupRequest(backup *velerov1api.Backup) *pkg
 	// calculate expiration
 	request.Status.Expiration = &metav1.Time{Time: c.clock.Now().Add(request.Spec.TTL.Duration)}
 
-	if request.Spec.DefaultVolumesToRestic == nil {
-		request.Spec.DefaultVolumesToRestic = &c.defaultVolumesToRestic
+	if request.Spec.DefaultToPodVolumes == nil {
+		request.Spec.DefaultToPodVolumes = &c.defaultVolumesToRestic
 	}
 
 	// find which storage location to use

@@ -63,7 +63,7 @@ The following is an overview of Velero's restore process that starts after you r
 1. Once the resource is created on the target cluster, Velero may take some additional steps or wait for additional processes to complete before moving onto the next resource to restore.
 
     * If the resource is a Pod, the `RestoreController` will execute any [Restore Hooks](restore-hooks.md) and wait for the hook to finish.
-    * If the resource is a PV restored by Restic, the `RestoreController` waits for Restic’s restore to complete. The `RestoreController` sets a timeout for any resources restored with Restic during a restore. The default timeout is 4 hours, but you can configure this be setting using `--restic-timeout` restore option.
+    * If the resource is a PV restored by PodVolume Restore, the `RestoreController` waits for PodVolume restore to complete. The `RestoreController` sets a timeout for any resources restored with PodVolume Restore during a restore. The default timeout is 4 hours, but you can configure this be setting using `--pod-volume-timeout` restore option.
     * If the resource is a Custom Resource Definition, the `RestoreController` waits for its availability in the cluster. The timeout is 1 minute.
 
     If any failures happen finishing these steps, the `RestoreController` will log an error in the restore result and will continue restoring.

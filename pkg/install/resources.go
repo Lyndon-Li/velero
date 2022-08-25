@@ -209,30 +209,30 @@ func appendUnstructured(list *unstructured.UnstructuredList, obj runtime.Object)
 }
 
 type VeleroOptions struct {
-	Namespace                         string
-	Image                             string
-	ProviderName                      string
-	Bucket                            string
-	Prefix                            string
-	PodAnnotations                    map[string]string
-	PodLabels                         map[string]string
-	ServiceAccountAnnotations         map[string]string
-	VeleroPodResources                corev1.ResourceRequirements
-	NodeAgentPodResources             corev1.ResourceRequirements
-	SecretData                        []byte
-	RestoreOnly                       bool
-	UseNodeAgent                      bool
-	UseVolumeSnapshots                bool
-	BSLConfig                         map[string]string
-	VSLConfig                         map[string]string
-	DefaultResticMaintenanceFrequency time.Duration
-	GarbageCollectionFrequency        time.Duration
-	Plugins                           []string
-	NoDefaultBackupLocation           bool
-	CACertData                        []byte
-	Features                          []string
-	DefaultVolumesToRestic            bool
-	UploaderType                      string
+	Namespace                    string
+	Image                        string
+	ProviderName                 string
+	Bucket                       string
+	Prefix                       string
+	PodAnnotations               map[string]string
+	PodLabels                    map[string]string
+	ServiceAccountAnnotations    map[string]string
+	VeleroPodResources           corev1.ResourceRequirements
+	NodeAgentPodResources        corev1.ResourceRequirements
+	SecretData                   []byte
+	RestoreOnly                  bool
+	UseNodeAgent                 bool
+	UseVolumeSnapshots           bool
+	BSLConfig                    map[string]string
+	VSLConfig                    map[string]string
+	DefaultRepoMaintainFrequency time.Duration
+	GarbageCollectionFrequency   time.Duration
+	Plugins                      []string
+	NoDefaultBackupLocation      bool
+	CACertData                   []byte
+	Features                     []string
+	DefaultToPodVolumes          bool
+	UploaderType                 string
 }
 
 func AllCRDs() *unstructured.UnstructuredList {
@@ -272,7 +272,7 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		appendUnstructured(resources, bsl)
 	}
 
-	// A snapshot location may not be desirable for users relying on restic
+	// A snapshot location may not be desirable for users relying on pod volume backup/restore
 	if o.UseVolumeSnapshots {
 		vsl := VolumeSnapshotLocation(o.Namespace, o.ProviderName, o.VSLConfig)
 		appendUnstructured(resources, vsl)
@@ -286,7 +286,7 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		WithImage(o.Image),
 		WithResources(o.VeleroPodResources),
 		WithSecret(secretPresent),
-		WithDefaultResticMaintenanceFrequency(o.DefaultResticMaintenanceFrequency),
+		WithDefaultRepoMaintainFrequency(o.DefaultRepoMaintainFrequency),
 		WithGarbageCollectionFrequency(o.GarbageCollectionFrequency),
 		WithUploaderType(o.UploaderType),
 	}
@@ -303,8 +303,8 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		deployOpts = append(deployOpts, WithPlugins(o.Plugins))
 	}
 
-	if o.DefaultVolumesToRestic {
-		deployOpts = append(deployOpts, WithDefaultVolumesToRestic())
+	if o.DefaultToPodVolumes {
+		deployOpts = append(deployOpts, WithDefaultToPodVolumes())
 	}
 
 	deploy := Deployment(o.Namespace, deployOpts...)

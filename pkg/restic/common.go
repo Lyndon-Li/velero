@@ -48,9 +48,9 @@ const (
 	// at which restic prune is run.
 	DefaultMaintenanceFrequency = 7 * 24 * time.Hour
 
-	// DefaultVolumesToRestic specifies whether restic should be used, by default, to
-	// take backup of all pod volumes.
-	DefaultVolumesToRestic = false
+	// DefaultToPodVolumes specifies whether pod volume backup should be used, by default,
+	// for all volumes.
+	DefaultToPodVolumes = false
 
 	// insecureSkipTLSVerifyKey is the flag in BackupStorageLocation's config
 	// to indicate whether to skip TLS verify to setup insecure HTTPS connection.

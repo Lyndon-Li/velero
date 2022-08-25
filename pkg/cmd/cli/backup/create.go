@@ -85,7 +85,7 @@ type CreateOptions struct {
 	Name                    string
 	TTL                     time.Duration
 	SnapshotVolumes         flag.OptionalBool
-	DefaultVolumesToRestic  flag.OptionalBool
+	DefaultToPodVolumes     flag.OptionalBool
 	IncludeNamespaces       flag.StringArray
 	ExcludeNamespaces       flag.StringArray
 	IncludeResources        flag.StringArray
@@ -132,7 +132,7 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	f = flags.VarPF(&o.IncludeClusterResources, "include-cluster-resources", "", "Include cluster-scoped resources in the backup")
 	f.NoOptDefVal = "true"
 
-	f = flags.VarPF(&o.DefaultVolumesToRestic, "default-volumes-to-restic", "", "Use restic by default to backup all pod volumes")
+	f = flags.VarPF(&o.DefaultToPodVolumes, "default-to-pod-volumes", "", "Use pod volume backup by default for volumes")
 	f.NoOptDefVal = "true"
 }
 
@@ -350,8 +350,8 @@ func (o *CreateOptions) BuildBackup(namespace string) (*velerov1api.Backup, erro
 		if o.IncludeClusterResources.Value != nil {
 			backupBuilder.IncludeClusterResources(*o.IncludeClusterResources.Value)
 		}
-		if o.DefaultVolumesToRestic.Value != nil {
-			backupBuilder.DefaultVolumesToRestic(*o.DefaultVolumesToRestic.Value)
+		if o.DefaultToPodVolumes.Value != nil {
+			backupBuilder.DefaultToPodVolumes(*o.DefaultToPodVolumes.Value)
 		}
 	}
 

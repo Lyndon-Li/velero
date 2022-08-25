@@ -98,11 +98,11 @@ type BackupSpec struct {
 	// +optional
 	VolumeSnapshotLocations []string `json:"volumeSnapshotLocations,omitempty"`
 
-	// DefaultVolumesToRestic specifies whether restic should be used to take a
-	// backup of all pod volumes by default.
+	// DefaultToPodVolumes specifies whether pod volume backup should be used
+	// for all volumes by default.
 	// +optional
 	// + nullable
-	DefaultVolumesToRestic *bool `json:"defaultVolumesToRestic,omitempty"`
+	DefaultToPodVolumes *bool `json:"defaultToPodVolumes,omitempty"`
 
 	// OrderedResources specifies the backup order of resources of specific Kind.
 	// The map key is the Kind name and value is a list of resource names separated by commas.

@@ -391,8 +391,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -427,8 +427,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        "alt-loc",
-					DefaultVolumesToRestic: boolptr.False(),
+					StorageLocation:     "alt-loc",
+					DefaultToPodVolumes: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -466,8 +466,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        "read-write",
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     "read-write",
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -502,9 +502,9 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					TTL:                    metav1.Duration{Duration: 10 * time.Minute},
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.False(),
+					TTL:                 metav1.Duration{Duration: 10 * time.Minute},
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -540,8 +540,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -556,7 +556,7 @@ func TestProcessBackupCompletions(t *testing.T) {
 		{
 			name:           "backup specifying a false value for 'DefaultVolumesToRestic' keeps it",
 			backupExists:   false,
-			backup:         defaultBackup().DefaultVolumesToRestic(false).Result(),
+			backup:         defaultBackup().DefaultToPodVolumes(false).Result(),
 			backupLocation: defaultBackupLocation,
 			// value set in the controller is different from that specified in the backup
 			defaultVolumesToRestic: true,
@@ -578,8 +578,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.False(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -594,7 +594,7 @@ func TestProcessBackupCompletions(t *testing.T) {
 		{
 			name:           "backup specifying a true value for 'DefaultVolumesToRestic' keeps it",
 			backupExists:   false,
-			backup:         defaultBackup().DefaultVolumesToRestic(true).Result(),
+			backup:         defaultBackup().DefaultToPodVolumes(true).Result(),
 			backupLocation: defaultBackupLocation,
 			// value set in the controller is different from that specified in the backup
 			defaultVolumesToRestic: false,
@@ -616,8 +616,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -654,8 +654,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -692,8 +692,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.False(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -731,8 +731,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseFailed,
@@ -769,8 +769,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:     defaultBackupLocation.Name,
+					DefaultToPodVolumes: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseFailed,

@@ -142,7 +142,7 @@ kubectl patch daemonset velero-node-agent -n velero --patch \
 '{"spec":{"template":{"spec":{"containers":[{"name": "velero-node-agent", "resources": {"limits":{"cpu": "1", "memory": "1024Mi"}, "requests": {"cpu": "1", "memory": "512Mi"}}}]}}}}'
 ```
 
-Additionally, you may want to update the the default Velero restic pod operation timeout (default 240 minutes) to allow larger backups more time to complete. You can adjust this timeout by adding the `- --restic-timeout` argument to the Velero Deployment spec.
+Additionally, you may want to update the the default Velero pod volume operation timeout (default 240 minutes) to allow larger backups more time to complete. You can adjust this timeout by adding the `- --pod-volume-timeout` argument to the Velero Deployment spec.
 
 **NOTE:** Changes made to this timeout value will revert back to the default value if you re-run the Velero install command.
 
@@ -152,7 +152,7 @@ Additionally, you may want to update the the default Velero restic pod operation
     kubectl edit deploy velero -n velero
     ```
 
-1. Add `- --restic-timeout` to `spec.template.spec.containers`.
+1. Add `- --pod-volume-timeout` to `spec.template.spec.containers`.
 
     ```yaml
     spec:
@@ -160,7 +160,7 @@ Additionally, you may want to update the the default Velero restic pod operation
         spec:
           containers:
           - args:
-            - --restic-timeout=240m
+            - --pod-volume-timeout=240m
     ```
 
 ## Configure more than one storage location for backups or volume snapshots
