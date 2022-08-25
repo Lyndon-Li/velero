@@ -5,22 +5,22 @@ metadata:
   creationTimestamp: null
   labels:
     component: velero
-  name: restic
+  name: velero-node-agent
   namespace: velero
 spec:
   selector:
     matchLabels:
-      name: restic
+      name: velero-node-agent
   template:
     metadata:
       creationTimestamp: null
       labels:
         component: velero
-        name: restic
+        name: velero-node-agent
     spec:
       containers:
         - args:
-            - restic
+            - velero-node-agent
             - server
           command:
             - /velero
@@ -43,7 +43,7 @@ spec:
               value: /credentials/cloud
           image: velero/velero:latest
           imagePullPolicy: Always
-          name: restic
+          name: velero-node-agent
           resources: {}
           volumeMounts:
             - mountPath: /host_pods

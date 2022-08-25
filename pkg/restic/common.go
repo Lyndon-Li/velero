@@ -38,7 +38,7 @@ import (
 
 const (
 	// DaemonSet is the name of the Velero restic daemonset.
-	DaemonSet = "restic"
+	DaemonSet = "velero-node-agent"
 
 	// InitContainer is the name of the init container added
 	// to workload pods to help with restores.

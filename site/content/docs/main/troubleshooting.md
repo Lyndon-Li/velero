@@ -148,9 +148,9 @@ Follow the below troubleshooting steps to confirm that Velero is using the corre
       ]
     ```
 
-    If [restic-integration][3] is enabled, then, confirm that the restic daemonset is also mounting the `cloud-credentials` secret.
+    If [restic-integration][3] is enabled, then, confirm that the velero-node-agent daemonset is also mounting the `cloud-credentials` secret.
     ```bash
-    $ kubectl -n velero get ds restic -ojson |jq .spec.template.spec.containers[0].volumeMounts
+    $ kubectl -n velero get ds velero-node-agent -ojson |jq .spec.template.spec.containers[0].volumeMounts
     [
       {
         "mountPath": "/host_pods",

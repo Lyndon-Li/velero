@@ -43,15 +43,15 @@ velero install --features=EnableCSI
 
 Another example is enabling the support of multiple API group versions, as documented at [- -features=EnableAPIGroupVersions](enable-api-group-versions-feature.md).
 
-Feature flags, passed to `velero install` will be passed to the Velero deployment and also to the `restic` daemon set, if `--use-restic` flag is used.
+Feature flags, passed to `velero install` will be passed to the Velero deployment and also to the `velero-node-agent` daemonset, if `--use-restic` flag is used.
 
 Similarly, features may be disabled by removing the corresponding feature flags from the `--features` flag.
 
-Enabling and disabling feature flags will require modifying the Velero deployment and also the restic daemonset. This may be done from the CLI by uninstalling and re-installing Velero, or by editing the `deploy/velero` and `daemonset/restic` resources in-cluster.
+Enabling and disabling feature flags will require modifying the Velero deployment and also the `velero-node-agent` daemonset. This may be done from the CLI by uninstalling and re-installing Velero, or by editing the `deploy/velero` and `daemonset/velero-node-agent` resources in-cluster.
 
 ```bash
 $ kubectl -n velero edit deploy/velero
-$ kubectl -n velero edit daemonset/restic
+$ kubectl -n velero edit daemonset/velero-node-agent
 ```
 
 ### Enable client side features
@@ -135,11 +135,11 @@ kubectl patch deployment velero -n velero --patch \
 
 **restic pod**
 
-Update the `spec.template.spec.containers.resources.limits` and `spec.template.spec.containers.resources.requests` values in the restic DeamonSet spec.
+Update the `spec.template.spec.containers.resources.limits` and `spec.template.spec.containers.resources.requests` values in the velero-node-agent DaemonSet spec.
 
 ```bash
-kubectl patch daemonset restic -n velero --patch \
-'{"spec":{"template":{"spec":{"containers":[{"name": "restic", "resources": {"limits":{"cpu": "1", "memory": "1024Mi"}, "requests": {"cpu": "1", "memory": "512Mi"}}}]}}}}'
+kubectl patch daemonset velero-node-agent -n velero --patch \
+'{"spec":{"template":{"spec":{"containers":[{"name": "velero-node-agent", "resources": {"limits":{"cpu": "1", "memory": "1024Mi"}, "requests": {"cpu": "1", "memory": "512Mi"}}}]}}}}'
 ```
 
 Additionally, you may want to update the the default Velero restic pod operation timeout (default 240 minutes) to allow larger backups more time to complete. You can adjust this timeout by adding the `- --restic-timeout` argument to the Velero Deployment spec.
