@@ -43,19 +43,19 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 
 	}
 
-	resticArgs := []string{
-		"restic",
+	daemonSetArgs := []string{
+		"velero-node-agent",
 		"server",
 	}
 	if len(c.features) > 0 {
-		resticArgs = append(resticArgs, fmt.Sprintf("--features=%s", strings.Join(c.features, ",")))
+		daemonSetArgs = append(daemonSetArgs, fmt.Sprintf("--features=%s", strings.Join(c.features, ",")))
 	}
 
 	userID := int64(0)
 	mountPropagationMode := corev1.MountPropagationHostToContainer
 
 	daemonSet := &appsv1.DaemonSet{
-		ObjectMeta: objectMeta(namespace, "restic"),
+		ObjectMeta: objectMeta(namespace, "velero"),
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "DaemonSet",
 			APIVersion: appsv1.SchemeGroupVersion.String(),
@@ -63,13 +63,13 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 		Spec: appsv1.DaemonSetSpec{
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{
-					"name": "restic",
+					"name": "velero-node-agent",
 				},
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: podLabels(c.labels, map[string]string{
-						"name": "restic",
+						"name": "velero-node-agent",
 					}),
 					Annotations: c.annotations,
 				},
@@ -96,13 +96,13 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 					},
 					Containers: []corev1.Container{
 						{
-							Name:            "restic",
+							Name:            "velero-node-agent",
 							Image:           c.image,
 							ImagePullPolicy: pullPolicy,
 							Command: []string{
 								"/velero",
 							},
-							Args: resticArgs,
+							Args: daemonSetArgs,
 
 							VolumeMounts: []corev1.VolumeMount{
 								{
