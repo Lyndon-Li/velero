@@ -22,6 +22,8 @@ import (
 	mock "github.com/stretchr/testify/mock"
 	restic "github.com/vmware-tanzu/velero/pkg/restic"
 
+	time "time"
+
 	v1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/podvolume"
 )
@@ -57,6 +59,27 @@ func (_m *RepositoryManager) Forget(_a0 context.Context, _a1 restic.SnapshotIden
 	}
 
 	return r0
+}
+
+// DefaultMaintenanceFrequency provides a mock function with given fields: repo
+func (_m *RepositoryManager) DefaultMaintenanceFrequency(repo *v1.BackupRepository) (time.Duration, error) {
+	ret := _m.Called(repo)
+
+	var r0 time.Duration
+	if rf, ok := ret.Get(0).(func(*v1.BackupRepository) time.Duration); ok {
+		r0 = rf(repo)
+	} else {
+		r0 = ret.Get(0).(time.Duration)
+	}
+
+	var r1 error
+	if rf, ok := ret.Get(1).(func(*v1.BackupRepository) error); ok {
+		r1 = rf(repo)
+	} else {
+		r1 = ret.Error(1)
+	}
+
+	return r0, r1
 }
 
 // InitRepo provides a mock function with given fields: repo

@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/uploader"
 )
 
 const (
@@ -44,10 +45,30 @@ const (
 	VolumesToExcludeAnnotation = "backup.velero.io/backup-volumes-excludes"
 )
 
+type VolumeBackupInfo struct {
+	SnapshotID     string
+	UploaderType   string
+	RepositoryType string
+}
+
 // GetVolumeBackupsForPod returns a map, of volume name -> snapshot id,
 // of the PodVolumeBackups that exist for the provided pod.
 func GetVolumeBackupsForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, pod *corev1api.Pod, sourcePodNs string) map[string]string {
+	volumeBkInfo := GetVolumeBackupInfoForPod(podVolumeBackups, pod, sourcePodNs)
+	if volumeBkInfo == nil {
+		return nil
+	}
+
 	volumes := make(map[string]string)
+	for k, v := range volumeBkInfo {
+		volumes[k] = v.SnapshotID
+	}
+
+	return volumes
+}
+
+func GetVolumeBackupInfoForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, pod *corev1api.Pod, sourcePodNs string) map[string]VolumeBackupInfo {
+	volumes := make(map[string]VolumeBackupInfo)
 
 	for _, pvb := range podVolumeBackups {
 		if !isPVBMatchPod(pvb, pod.GetName(), sourcePodNs) {
@@ -67,14 +88,38 @@ func GetVolumeBackupsForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, pod
 			continue
 		}
 
-		volumes[pvb.Spec.Volume] = pvb.Status.SnapshotID
+		volumes[pvb.Spec.Volume] = VolumeBackupInfo{
+			SnapshotID:     pvb.Status.SnapshotID,
+			UploaderType:   pvb.Spec.UploaderType,
+			RepositoryType: getRepositoryTypeFromUploaderType(pvb.Spec.UploaderType),
+		}
 	}
 
 	if len(volumes) > 0 {
 		return volumes
 	}
 
-	return getPodSnapshotAnnotations(pod)
+	fromAnnntation := getPodSnapshotAnnotations(pod)
+	if fromAnnntation == nil {
+		return nil
+	}
+
+	for k, v := range fromAnnntation {
+		volumes[k] = VolumeBackupInfo{v, uploader.ResticType, velerov1api.BackupRepositoryTypeRestic}
+	}
+
+	return volumes
+}
+
+func getRepositoryTypeFromUploaderType(uploaderType string) string {
+	switch uploaderType {
+	case uploader.ResticType:
+		return velerov1api.BackupRepositoryTypeRestic
+	case uploader.KopiaType:
+		return velerov1api.BackupRepositoryTypeUnified
+	default:
+		return ""
+	}
 }
 
 func isPVBMatchPod(pvb *velerov1api.PodVolumeBackup, podName string, namespace string) bool {
