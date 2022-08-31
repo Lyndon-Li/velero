@@ -77,6 +77,7 @@ type InstallOptions struct {
 	Features                          string
 	DefaultVolumesToRestic            bool
 	UploaderType                      string
+	RepositoryType                    string
 }
 
 // BindFlags adds command line values to the options struct.
@@ -114,6 +115,7 @@ func (o *InstallOptions) BindFlags(flags *pflag.FlagSet) {
 	flags.StringVar(&o.Features, "features", o.Features, "Comma separated list of Velero feature flags to be set on the Velero deployment and the restic daemonset, if restic is enabled")
 	flags.BoolVar(&o.DefaultVolumesToRestic, "default-volumes-to-restic", o.DefaultVolumesToRestic, "Bool flag to configure Velero server to use restic by default to backup all pod volumes on all backups. Optional.")
 	flags.StringVar(&o.UploaderType, "uploader-type", o.UploaderType, fmt.Sprintf("The type of uploader to transfer the data of pod volumes, the supported values are '%s', '%s'", uploader.ResticType, uploader.KopiaType))
+	flags.StringVar(&o.RepositoryType, "repository-type", o.RepositoryType, fmt.Sprintf("The type of repository to store the backup data, the supported values are '%s', '%s'", velerov1api.BackupRepositoryTypeRestic, velerov1api.BackupRepositoryTypeKopia))
 }
 
 // NewInstallOptions instantiates a new, default InstallOptions struct.
@@ -140,6 +142,7 @@ func NewInstallOptions() *InstallOptions {
 		CRDsOnly:                false,
 		DefaultVolumesToRestic:  false,
 		UploaderType:            uploader.ResticType,
+		RepositoryType:          velerov1api.BackupRepositoryTypeRestic,
 	}
 }
 
@@ -201,6 +204,7 @@ func (o *InstallOptions) AsVeleroOptions() (*install.VeleroOptions, error) {
 		Features:                          strings.Split(o.Features, ","),
 		DefaultVolumesToRestic:            o.DefaultVolumesToRestic,
 		UploaderType:                      o.UploaderType,
+		RepositoryType:                    o.RepositoryType,
 	}, nil
 }
 

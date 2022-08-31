@@ -108,12 +108,7 @@ func (r *restorer) RestorePodVolumes(data RestoreData) []error {
 		return nil
 	}
 
-	repositoryType, err := getVolumesRepositoryType(volumesToRestore)
-	if err != nil {
-		return []error{err}
-	}
-
-	repo, err := r.repoEnsurer.EnsureRepo(r.ctx, data.Restore.Namespace, data.SourceNamespace, data.BackupLocation, repositoryType)
+	repo, err := r.repoEnsurer.EnsureRepo(r.ctx, data.Restore.Namespace, data.SourceNamespace, data.BackupLocation)
 	if err != nil {
 		return []error{err}
 	}
@@ -219,28 +214,4 @@ func newPodVolumeRestore(restore *velerov1api.Restore, pod *corev1api.Pod, backu
 		pvr.Labels[velerov1api.PVCUIDLabel] = string(pvc.UID)
 	}
 	return pvr
-}
-
-func getVolumesRepositoryType(volumes map[string]VolumeBackupInfo) (string, error) {
-	if len(volumes) == 0 {
-		return "", errors.New("empty volume list")
-	}
-
-	// the podVolumeBackups list come from one backup. In one backup, it is impossible that volumes are
-	// backed up by different uploaders or to different repositories. Asserting this ensures one repo only,
-	// which will simplify the following logics
-	repositoryType := ""
-	for _, backupInfo := range volumes {
-		if backupInfo.RepositoryType == "" {
-			return "", errors.New("invalid repository type among volumes")
-		}
-
-		if repositoryType == "" {
-			repositoryType = backupInfo.RepositoryType
-		} else if repositoryType != backupInfo.RepositoryType {
-			return "", errors.New("multiple repository type in one backup")
-		}
-	}
-
-	return repositoryType, nil
 }

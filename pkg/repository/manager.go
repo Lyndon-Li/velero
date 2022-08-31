@@ -44,10 +44,6 @@ type SnapshotIdentifier struct {
 
 	// SnapshotID is the short ID of the restic snapshot.
 	SnapshotID string
-
-	// RepositoryType is the type of the repository where the
-	// snapshot is stored
-	RepositoryType string
 }
 
 // Manager manages backup repositories.
@@ -84,6 +80,11 @@ type manager struct {
 	log         logrus.FieldLogger
 }
 
+const (
+	repoProviderRestic  = "restic-repo"
+	repoProviderUnified = "unified-repo"
+)
+
 // NewManager create a new repository manager.
 func NewManager(
 	namespace string,
@@ -104,8 +105,8 @@ func NewManager(
 		log:         log,
 	}
 
-	mgr.providers[velerov1api.BackupRepositoryTypeRestic] = provider.NewResticRepositoryProvider(credentialFileStore, mgr.fileSystem, mgr.log)
-	mgr.providers[velerov1api.BackupRepositoryTypeUnified] = provider.NewUnifiedRepoProvider(credentials.CredentialGetter{
+	mgr.providers[repoProviderRestic] = provider.NewResticRepositoryProvider(credentialFileStore, mgr.fileSystem, mgr.log)
+	mgr.providers[repoProviderUnified] = provider.NewUnifiedRepoProvider(credentials.CredentialGetter{
 		FromFile:   credentialFileStore,
 		FromSecret: credentialSecretStore,
 	}, mgr.log)
@@ -174,7 +175,7 @@ func (m *manager) UnlockRepo(repo *velerov1api.BackupRepository) error {
 }
 
 func (m *manager) Forget(ctx context.Context, snapshot SnapshotIdentifier) error {
-	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
+	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation)
 	if err != nil {
 		return err
 	}
@@ -210,9 +211,9 @@ func (m *manager) DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository
 func (m *manager) getRepositoryProvider(repo *velerov1api.BackupRepository) (provider.Provider, error) {
 	switch repo.Spec.RepositoryType {
 	case "", velerov1api.BackupRepositoryTypeRestic:
-		return m.providers[velerov1api.BackupRepositoryTypeRestic], nil
-	case velerov1api.BackupRepositoryTypeUnified:
-		return m.providers[velerov1api.BackupRepositoryTypeUnified], nil
+		return m.providers[repoProviderRestic], nil
+	case velerov1api.BackupRepositoryTypeKopia:
+		return m.providers[repoProviderUnified], nil
 	default:
 		return nil, fmt.Errorf("failed to get provider for repository %s", repo.Spec.RepositoryType)
 	}

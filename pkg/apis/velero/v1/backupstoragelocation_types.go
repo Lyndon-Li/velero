@@ -54,6 +54,11 @@ type BackupStorageLocationSpec struct {
 	// +optional
 	// +nullable
 	ValidationFrequency *metav1.Duration `json:"validationFrequency,omitempty"`
+
+	// RepositoryType indicates the type of the backend repository
+	// +kubebuilder:validation:Enum=kopia;restic;""
+	// +optional
+	RepositoryType string `json:"repositoryType"`
 }
 
 // BackupStorageLocationStatus defines the observed state of BackupStorageLocation

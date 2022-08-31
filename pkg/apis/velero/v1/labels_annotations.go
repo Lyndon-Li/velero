@@ -51,9 +51,6 @@ const (
 	// namespace a repository stores backups for.
 	VolumeNamespaceLabel = "velero.io/volume-namespace"
 
-	// RepositoryTypeLabel is the label key used to identify the type of a repository
-	RepositoryTypeLabel = "velero.io/repository-type"
-
 	// SourceClusterK8sVersionAnnotation is the label key used to identify the k8s
 	// git version of the backup , i.e. v1.16.4
 	SourceClusterK8sGitVersionAnnotation = "velero.io/source-cluster-k8s-gitversion"

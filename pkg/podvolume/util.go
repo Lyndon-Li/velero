@@ -51,9 +51,8 @@ const (
 
 // VolumeBackupInfo describes the backup info of a volume backed up by PodVolumeBackups
 type VolumeBackupInfo struct {
-	SnapshotID     string
-	UploaderType   string
-	RepositoryType string
+	SnapshotID   string
+	UploaderType string
 }
 
 // GetVolumeBackupsForPod returns a map, of volume name -> snapshot id,
@@ -96,9 +95,8 @@ func GetVolumeBackupInfoForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, 
 		}
 
 		volumes[pvb.Spec.Volume] = VolumeBackupInfo{
-			SnapshotID:     pvb.Status.SnapshotID,
-			UploaderType:   pvb.Spec.UploaderType,
-			RepositoryType: GetRepositoryTypeFromUploaderType(pvb.Spec.UploaderType),
+			SnapshotID:   pvb.Status.SnapshotID,
+			UploaderType: pvb.Spec.UploaderType,
 		}
 	}
 
@@ -112,22 +110,10 @@ func GetVolumeBackupInfoForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, 
 	}
 
 	for k, v := range fromAnnntation {
-		volumes[k] = VolumeBackupInfo{v, uploader.ResticType, velerov1api.BackupRepositoryTypeRestic}
+		volumes[k] = VolumeBackupInfo{v, uploader.ResticType}
 	}
 
 	return volumes
-}
-
-// GetRepositoryTypeFromUploaderType returns the repository type associated with the uploader for PodVolumeBackups
-func GetRepositoryTypeFromUploaderType(uploaderType string) string {
-	switch uploaderType {
-	case uploader.ResticType:
-		return velerov1api.BackupRepositoryTypeRestic
-	case uploader.KopiaType:
-		return velerov1api.BackupRepositoryTypeUnified
-	default:
-		return ""
-	}
 }
 
 func isPVBMatchPod(pvb *velerov1api.PodVolumeBackup, podName string, namespace string) bool {

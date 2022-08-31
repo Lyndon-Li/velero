@@ -145,7 +145,7 @@ func Namespace(namespace string) *corev1.Namespace {
 	}
 }
 
-func BackupStorageLocation(namespace, provider, bucket, prefix string, config map[string]string, caCert []byte) *velerov1api.BackupStorageLocation {
+func BackupStorageLocation(namespace, provider, bucket, prefix string, config map[string]string, caCert []byte, repositoryType string) *velerov1api.BackupStorageLocation {
 	return &velerov1api.BackupStorageLocation{
 		ObjectMeta: objectMeta(namespace, "default"),
 		TypeMeta: metav1.TypeMeta{
@@ -161,8 +161,9 @@ func BackupStorageLocation(namespace, provider, bucket, prefix string, config ma
 					CACert: caCert,
 				},
 			},
-			Config:  config,
-			Default: true,
+			Config:         config,
+			Default:        true,
+			RepositoryType: repositoryType,
 		},
 	}
 }
@@ -233,6 +234,7 @@ type VeleroOptions struct {
 	Features                          []string
 	DefaultVolumesToRestic            bool
 	UploaderType                      string
+	RepositoryType                    string
 }
 
 func AllCRDs() *unstructured.UnstructuredList {
@@ -268,7 +270,7 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 	}
 
 	if !o.NoDefaultBackupLocation {
-		bsl := BackupStorageLocation(o.Namespace, o.ProviderName, o.Bucket, o.Prefix, o.BSLConfig, o.CACertData)
+		bsl := BackupStorageLocation(o.Namespace, o.ProviderName, o.Bucket, o.Prefix, o.BSLConfig, o.CACertData, o.RepositoryType)
 		appendUnstructured(resources, bsl)
 	}
 

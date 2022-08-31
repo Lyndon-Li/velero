@@ -72,6 +72,7 @@ type CreateOptions struct {
 	Labels                                flag.Map
 	CACertFile                            string
 	AccessMode                            *flag.Enum
+	RepositoryType                        string
 }
 
 func NewCreateOptions() *CreateOptions {
@@ -84,6 +85,7 @@ func NewCreateOptions() *CreateOptions {
 			string(velerov1api.BackupStorageLocationAccessModeReadWrite),
 			string(velerov1api.BackupStorageLocationAccessModeReadOnly),
 		),
+		RepositoryType: velerov1api.BackupRepositoryTypeRestic,
 	}
 }
 
@@ -103,6 +105,7 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 		"access-mode",
 		fmt.Sprintf("Access mode for the backup storage location. Valid values are %s", strings.Join(o.AccessMode.AllowedValues(), ",")),
 	)
+	flags.StringVar(&o.RepositoryType, "repository-type", o.RepositoryType, "The backup repository type for this backup storage location.")
 }
 
 func (o *CreateOptions) Validate(c *cobra.Command, args []string, f client.Factory) error {
@@ -162,9 +165,10 @@ func (o *CreateOptions) BuildBackupStorageLocation(namespace string, setBackupSy
 					CACert: caCertData,
 				},
 			},
-			Config:     o.Config.Data(),
-			Default:    o.DefaultBackupStorageLocation,
-			AccessMode: velerov1api.BackupStorageLocationAccessMode(o.AccessMode.String()),
+			Config:         o.Config.Data(),
+			Default:        o.DefaultBackupStorageLocation,
+			AccessMode:     velerov1api.BackupStorageLocationAccessMode(o.AccessMode.String()),
+			RepositoryType: o.RepositoryType,
 		},
 	}
 

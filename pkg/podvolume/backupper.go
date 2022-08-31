@@ -110,13 +110,7 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 		return nil, nil
 	}
 
-	repositoryType := GetRepositoryTypeFromUploaderType(b.uploaderType)
-	if repositoryType == "" {
-		err := errors.New("invalid repository type")
-		return nil, []error{err}
-	}
-
-	repo, err := b.repoEnsurer.EnsureRepo(b.ctx, backup.Namespace, pod.Namespace, backup.Spec.StorageLocation, repositoryType)
+	repo, err := b.repoEnsurer.EnsureRepo(b.ctx, backup.Namespace, pod.Namespace, backup.Spec.StorageLocation)
 	if err != nil {
 		return nil, []error{err}
 	}
