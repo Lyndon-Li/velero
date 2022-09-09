@@ -43,7 +43,7 @@ type podTemplateConfig struct {
 	garbageCollectionFrequency        time.Duration
 	plugins                           []string
 	features                          []string
-	defaultVolumesToRestic            bool
+	defaultVolumesToFsBackup          bool
 	uploaderType                      string
 }
 
@@ -129,9 +129,9 @@ func WithUploaderType(t string) podTemplateOption {
 	}
 }
 
-func WithDefaultVolumesToRestic() podTemplateOption {
+func WithDefaultVolumesToFsBackup() podTemplateOption {
 	return func(c *podTemplateConfig) {
-		c.defaultVolumesToRestic = true
+		c.defaultVolumesToFsBackup = true
 	}
 }
 
@@ -157,8 +157,8 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 		args = append(args, fmt.Sprintf("--features=%s", strings.Join(c.features, ",")))
 	}
 
-	if c.defaultVolumesToRestic {
-		args = append(args, "--default-volumes-to-restic=true")
+	if c.defaultVolumesToFsBackup {
+		args = append(args, "--default-volumes-to-fs-backup=true")
 	}
 
 	if len(c.uploaderType) > 0 {

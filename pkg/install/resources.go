@@ -231,7 +231,7 @@ type VeleroOptions struct {
 	NoDefaultBackupLocation           bool
 	CACertData                        []byte
 	Features                          []string
-	DefaultVolumesToRestic            bool
+	DefaultVolumesToFsBackup          bool
 	UploaderType                      string
 }
 
@@ -272,7 +272,7 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		appendUnstructured(resources, bsl)
 	}
 
-	// A snapshot location may not be desirable for users relying on restic
+	// A snapshot location may not be desirable for users relying on pod volume backup/restore
 	if o.UseVolumeSnapshots {
 		vsl := VolumeSnapshotLocation(o.Namespace, o.ProviderName, o.VSLConfig)
 		appendUnstructured(resources, vsl)
@@ -303,8 +303,8 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		deployOpts = append(deployOpts, WithPlugins(o.Plugins))
 	}
 
-	if o.DefaultVolumesToRestic {
-		deployOpts = append(deployOpts, WithDefaultVolumesToRestic())
+	if o.DefaultVolumesToFsBackup {
+		deployOpts = append(deployOpts, WithDefaultVolumesToFsBackup())
 	}
 
 	deploy := Deployment(o.Namespace, deployOpts...)

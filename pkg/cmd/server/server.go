@@ -70,7 +70,6 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/persistence"
 	"github.com/vmware-tanzu/velero/pkg/plugin/clientmgmt"
 	"github.com/vmware-tanzu/velero/pkg/podexec"
-	"github.com/vmware-tanzu/velero/pkg/restic"
 	"github.com/vmware-tanzu/velero/pkg/restore"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
@@ -133,7 +132,7 @@ type serverConfig struct {
 	formatFlag                                                              *logging.FormatFlag
 	repoMaintenanceFrequency                                                time.Duration
 	garbageCollectionFrequency                                              time.Duration
-	defaultVolumesToRestic                                                  bool
+	defaultVolumesToFsBackup                                                bool
 	uploaderType                                                            string
 }
 
@@ -163,7 +162,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 			profilerAddress:                defaultProfilerAddress,
 			resourceTerminatingTimeout:     defaultResourceTerminatingTimeout,
 			formatFlag:                     logging.NewFormatFlag(),
-			defaultVolumesToRestic:         restic.DefaultVolumesToRestic,
+			defaultVolumesToFsBackup:       podvolume.DefaultVolumesToFsBackup,
 			uploaderType:                   uploader.ResticType,
 		}
 	)
@@ -229,7 +228,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 	command.Flags().DurationVar(&config.defaultBackupTTL, "default-backup-ttl", config.defaultBackupTTL, "How long to wait by default before backups can be garbage collected.")
 	command.Flags().DurationVar(&config.repoMaintenanceFrequency, "default-restic-prune-frequency", config.repoMaintenanceFrequency, "How often 'prune' is run for backup repositories by default.")
 	command.Flags().DurationVar(&config.garbageCollectionFrequency, "garbage-collection-frequency", config.garbageCollectionFrequency, "How often garbage collection is run for expired backups.")
-	command.Flags().BoolVar(&config.defaultVolumesToRestic, "default-volumes-to-restic", config.defaultVolumesToRestic, "Backup all volumes with restic by default.")
+	command.Flags().BoolVar(&config.defaultVolumesToFsBackup, "default-volumes-to-fs-backup", config.defaultVolumesToFsBackup, "Backup all volumes with pod volume file system backup by default.")
 	command.Flags().StringVar(&config.uploaderType, "uploader-type", config.uploaderType, "Type of uploader to handle the transfer of data of pod volumes")
 
 	return command
@@ -621,7 +620,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			podvolume.NewBackupperFactory(s.repoLocker, s.repoEnsurer, s.veleroClient, s.kubeClient.CoreV1(),
 				s.kubeClient.CoreV1(), s.sharedInformerFactory.Velero().V1().BackupRepositories().Informer().HasSynced, s.logger),
 			s.config.podVolumeOperationTimeout,
-			s.config.defaultVolumesToRestic,
+			s.config.defaultVolumesToFsBackup,
 			s.config.clientPageSize,
 			s.config.uploaderType,
 		)
@@ -638,7 +637,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			backupTracker,
 			s.mgr.GetClient(),
 			s.config.defaultBackupLocation,
-			s.config.defaultVolumesToRestic,
+			s.config.defaultVolumesToFsBackup,
 			s.config.defaultBackupTTL,
 			s.config.defaultCSISnapshotTimeout,
 			s.sharedInformerFactory.Velero().V1().VolumeSnapshotLocations().Lister(),
