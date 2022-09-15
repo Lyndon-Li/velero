@@ -81,6 +81,28 @@ func TestReconcileOfSchedule(t *testing.T) {
 			expectedValidationErrors: []string{"Schedule must be a non-empty valid Cron expression"},
 		},
 		{
+			name: "schedule with phase New and DefaultVolumesToRestic gets validated",
+			schedule: newScheduleBuilder(velerov1api.SchedulePhaseNew).
+				CronSchedule("@every 5m").
+				Template(builder.ForBackup("", "").
+					DefaultVolumesToRestic(true).
+					Result().
+					Spec).Result(),
+			expectedPhase:            string(velerov1api.SchedulePhaseFailedValidation),
+			expectedValidationErrors: []string{"DefaultVolumesToRestic is deprecated"},
+		},
+		{
+			name: "schedule with phase <blank> and DefaultVolumesToRestic gets validated",
+			schedule: newScheduleBuilder(velerov1api.SchedulePhase("")).
+				CronSchedule("@every 5m").
+				Template(builder.ForBackup("", "").
+					DefaultVolumesToRestic(true).
+					Result().
+					Spec).Result(),
+			expectedPhase:            string(velerov1api.SchedulePhaseFailedValidation),
+			expectedValidationErrors: []string{"DefaultVolumesToRestic is deprecated"},
+		},
+		{
 			name:                 "schedule with phase New gets validated and triggers a backup",
 			schedule:             newScheduleBuilder(velerov1api.SchedulePhaseNew).CronSchedule("@every 5m").Result(),
 			fakeClockTime:        "2017-01-01 12:00:00",
@@ -91,6 +113,19 @@ func TestReconcileOfSchedule(t *testing.T) {
 		{
 			name:                 "schedule with phase Enabled gets re-validated and triggers a backup if valid",
 			schedule:             newScheduleBuilder(velerov1api.SchedulePhaseEnabled).CronSchedule("@every 5m").Result(),
+			fakeClockTime:        "2017-01-01 12:00:00",
+			expectedPhase:        string(velerov1api.SchedulePhaseEnabled),
+			expectedBackupCreate: builder.ForBackup("ns", "name-20170101120000").ObjectMeta(builder.WithLabels(velerov1api.ScheduleNameLabel, "name")).Result(),
+			expectedLastBackup:   "2017-01-01 12:00:00",
+		},
+		{
+			name: "schedule with phase Enabled and DefaultVolumesToRestic gets re-validated and triggers a backup",
+			schedule: newScheduleBuilder(velerov1api.SchedulePhaseEnabled).
+				CronSchedule("@every 5m").
+				Template(builder.ForBackup("", "").
+					DefaultVolumesToRestic(true).
+					Result().
+					Spec).Result(),
 			fakeClockTime:        "2017-01-01 12:00:00",
 			expectedPhase:        string(velerov1api.SchedulePhaseEnabled),
 			expectedBackupCreate: builder.ForBackup("ns", "name-20170101120000").ObjectMeta(builder.WithLabels(velerov1api.ScheduleNameLabel, "name")).Result(),

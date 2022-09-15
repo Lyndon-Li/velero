@@ -87,7 +87,7 @@ type backupController struct {
 	newPluginManager            func(logrus.FieldLogger) clientmgmt.Manager
 	backupTracker               BackupTracker
 	defaultBackupLocation       string
-	defaultVolumesToRestic      bool
+	defaultVolumesToFsBackup    bool
 	defaultBackupTTL            time.Duration
 	defaultCSISnapshotTimeout   time.Duration
 	snapshotLocationLister      velerov1listers.VolumeSnapshotLocationLister
@@ -113,7 +113,7 @@ func NewBackupController(
 	backupTracker BackupTracker,
 	kbClient kbclient.Client,
 	defaultBackupLocation string,
-	defaultVolumesToRestic bool,
+	defaultVolumesToFsBackup bool,
 	defaultBackupTTL time.Duration,
 	defaultCSISnapshotTimeout time.Duration,
 	volumeSnapshotLocationLister velerov1listers.VolumeSnapshotLocationLister,
@@ -139,7 +139,7 @@ func NewBackupController(
 		backupTracker:               backupTracker,
 		kbClient:                    kbClient,
 		defaultBackupLocation:       defaultBackupLocation,
-		defaultVolumesToRestic:      defaultVolumesToRestic,
+		defaultVolumesToFsBackup:    defaultVolumesToFsBackup,
 		defaultBackupTTL:            defaultBackupTTL,
 		defaultCSISnapshotTimeout:   defaultCSISnapshotTimeout,
 		snapshotLocationLister:      volumeSnapshotLocationLister,
@@ -374,8 +374,14 @@ func (c *backupController) prepareBackupRequest(backup *velerov1api.Backup) *pkg
 	// calculate expiration
 	request.Status.Expiration = &metav1.Time{Time: c.clock.Now().Add(request.Spec.TTL.Duration)}
 
-	if request.Spec.DefaultVolumesToRestic == nil {
-		request.Spec.DefaultVolumesToRestic = &c.defaultVolumesToRestic
+	if request.Spec.DefaultVolumesToFsBackup == nil {
+		request.Spec.DefaultVolumesToFsBackup = &c.defaultVolumesToFsBackup
+	}
+
+	// TODO: post v1.10. Remove this code block after DefaultVolumesToRestic is removed from CRD
+	// For now, for CRs created by old versions, we need to respect the DefaultVolumesToRestic value
+	if request.Spec.DefaultVolumesToRestic != nil {
+		request.Spec.DefaultVolumesToFsBackup = request.Spec.DefaultVolumesToRestic
 	}
 
 	// find which storage location to use

@@ -142,6 +142,15 @@ func parseCronSchedule(itm *velerov1.Schedule, logger logrus.FieldLogger) (cron.
 		return nil, validationErrors
 	}
 
+	// For new created schedules, DefaultVolumesToRestic is not allowed
+	// TODO: post v1.10. Remove this code block after DefaultVolumesToRestic is removed from CRD
+	if itm.Status.Phase != velerov1.SchedulePhaseEnabled {
+		if itm.Spec.Template.DefaultVolumesToRestic != nil {
+			validationErrors = append(validationErrors, "DefaultVolumesToRestic is deprecated")
+			return nil, validationErrors
+		}
+	}
+
 	log := logger.WithField("schedule", kubeutil.NamespaceAndName(itm))
 
 	// adding a recover() around cron.Parse because it panics on empty string and is possible

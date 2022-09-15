@@ -359,20 +359,20 @@ func TestProcessBackupCompletions(t *testing.T) {
 	timestamp := metav1.NewTime(now)
 
 	tests := []struct {
-		name                   string
-		backup                 *velerov1api.Backup
-		backupLocation         *velerov1api.BackupStorageLocation
-		defaultVolumesToRestic bool
-		expectedResult         *velerov1api.Backup
-		backupExists           bool
-		existenceCheckError    error
+		name                     string
+		backup                   *velerov1api.Backup
+		backupLocation           *velerov1api.BackupStorageLocation
+		defaultVolumesToFsBackup bool
+		expectedResult           *velerov1api.Backup
+		backupExists             bool
+		existenceCheckError      error
 	}{
 		// Completed
 		{
-			name:                   "backup with no backup location gets the default",
-			backup:                 defaultBackup().Result(),
-			backupLocation:         defaultBackupLocation,
-			defaultVolumesToRestic: true,
+			name:                     "backup with no backup location gets the default",
+			backup:                   defaultBackup().Result(),
+			backupLocation:           defaultBackupLocation,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -391,8 +391,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -405,10 +405,10 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:                   "backup with a specific backup location keeps it",
-			backup:                 defaultBackup().StorageLocation("alt-loc").Result(),
-			backupLocation:         builder.ForBackupStorageLocation("velero", "alt-loc").Bucket("store-1").Result(),
-			defaultVolumesToRestic: false,
+			name:                     "backup with a specific backup location keeps it",
+			backup:                   defaultBackup().StorageLocation("alt-loc").Result(),
+			backupLocation:           builder.ForBackupStorageLocation("velero", "alt-loc").Bucket("store-1").Result(),
+			defaultVolumesToFsBackup: false,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -427,8 +427,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        "alt-loc",
-					DefaultVolumesToRestic: boolptr.False(),
+					StorageLocation:          "alt-loc",
+					DefaultVolumesToFsBackup: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -447,7 +447,7 @@ func TestProcessBackupCompletions(t *testing.T) {
 				Bucket("store-1").
 				AccessMode(velerov1api.BackupStorageLocationAccessModeReadWrite).
 				Result(),
-			defaultVolumesToRestic: true,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -466,8 +466,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        "read-write",
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:          "read-write",
+					DefaultVolumesToFsBackup: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -480,10 +480,10 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:                   "backup with a TTL has expiration set",
-			backup:                 defaultBackup().TTL(10 * time.Minute).Result(),
-			backupLocation:         defaultBackupLocation,
-			defaultVolumesToRestic: false,
+			name:                     "backup with a TTL has expiration set",
+			backup:                   defaultBackup().TTL(10 * time.Minute).Result(),
+			backupLocation:           defaultBackupLocation,
+			defaultVolumesToFsBackup: false,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -502,9 +502,9 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					TTL:                    metav1.Duration{Duration: 10 * time.Minute},
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.False(),
+					TTL:                      metav1.Duration{Duration: 10 * time.Minute},
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -517,11 +517,11 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:                   "backup without an existing backup will succeed",
-			backupExists:           false,
-			backup:                 defaultBackup().Result(),
-			backupLocation:         defaultBackupLocation,
-			defaultVolumesToRestic: true,
+			name:                     "backup without an existing backup will succeed",
+			backupExists:             false,
+			backup:                   defaultBackup().Result(),
+			backupLocation:           defaultBackupLocation,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -540,8 +540,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -554,12 +554,12 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:           "backup specifying a false value for 'DefaultVolumesToRestic' keeps it",
+			name:           "backup specifying a false value for 'DefaultVolumesToFsBackup' keeps it",
 			backupExists:   false,
-			backup:         defaultBackup().DefaultVolumesToRestic(false).Result(),
+			backup:         defaultBackup().DefaultVolumesToFsBackup(false).Result(),
 			backupLocation: defaultBackupLocation,
 			// value set in the controller is different from that specified in the backup
-			defaultVolumesToRestic: true,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -578,8 +578,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.False(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -592,12 +592,12 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:           "backup specifying a true value for 'DefaultVolumesToRestic' keeps it",
+			name:           "backup specifying a true value for 'DefaultVolumesToFsBackup' keeps it",
 			backupExists:   false,
-			backup:         defaultBackup().DefaultVolumesToRestic(true).Result(),
+			backup:         defaultBackup().DefaultVolumesToFsBackup(true).Result(),
 			backupLocation: defaultBackupLocation,
 			// value set in the controller is different from that specified in the backup
-			defaultVolumesToRestic: false,
+			defaultVolumesToFsBackup: false,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -616,8 +616,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -630,50 +630,12 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:           "backup specifying no value for 'DefaultVolumesToRestic' gets the default true value",
-			backupExists:   false,
-			backup:         defaultBackup().Result(),
-			backupLocation: defaultBackupLocation,
-			// value set in the controller is different from that specified in the backup
-			defaultVolumesToRestic: true,
-			expectedResult: &velerov1api.Backup{
-				TypeMeta: metav1.TypeMeta{
-					Kind:       "Backup",
-					APIVersion: "velero.io/v1",
-				},
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: velerov1api.DefaultNamespace,
-					Name:      "backup-1",
-					Annotations: map[string]string{
-						"velero.io/source-cluster-k8s-major-version": "1",
-						"velero.io/source-cluster-k8s-minor-version": "16",
-						"velero.io/source-cluster-k8s-gitversion":    "v1.16.4",
-					},
-					Labels: map[string]string{
-						"velero.io/storage-location": "loc-1",
-					},
-				},
-				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
-				},
-				Status: velerov1api.BackupStatus{
-					Phase:               velerov1api.BackupPhaseCompleted,
-					Version:             1,
-					FormatVersion:       "1.1.0",
-					StartTimestamp:      &timestamp,
-					CompletionTimestamp: &timestamp,
-					Expiration:          &timestamp,
-				},
-			},
-		},
-		{
-			name:           "backup specifying no value for 'DefaultVolumesToRestic' gets the default false value",
+			name:           "backup specifying no value for 'DefaultVolumesToFsBackup' gets the default true value",
 			backupExists:   false,
 			backup:         defaultBackup().Result(),
 			backupLocation: defaultBackupLocation,
 			// value set in the controller is different from that specified in the backup
-			defaultVolumesToRestic: false,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -692,8 +654,46 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.False(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.True(),
+				},
+				Status: velerov1api.BackupStatus{
+					Phase:               velerov1api.BackupPhaseCompleted,
+					Version:             1,
+					FormatVersion:       "1.1.0",
+					StartTimestamp:      &timestamp,
+					CompletionTimestamp: &timestamp,
+					Expiration:          &timestamp,
+				},
+			},
+		},
+		{
+			name:           "backup specifying no value for 'DefaultVolumesToFsBackup' gets the default false value",
+			backupExists:   false,
+			backup:         defaultBackup().Result(),
+			backupLocation: defaultBackupLocation,
+			// value set in the controller is different from that specified in the backup
+			defaultVolumesToFsBackup: false,
+			expectedResult: &velerov1api.Backup{
+				TypeMeta: metav1.TypeMeta{
+					Kind:       "Backup",
+					APIVersion: "velero.io/v1",
+				},
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: velerov1api.DefaultNamespace,
+					Name:      "backup-1",
+					Annotations: map[string]string{
+						"velero.io/source-cluster-k8s-major-version": "1",
+						"velero.io/source-cluster-k8s-minor-version": "16",
+						"velero.io/source-cluster-k8s-gitversion":    "v1.16.4",
+					},
+					Labels: map[string]string{
+						"velero.io/storage-location": "loc-1",
+					},
+				},
+				Spec: velerov1api.BackupSpec{
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.False(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseCompleted,
@@ -708,11 +708,11 @@ func TestProcessBackupCompletions(t *testing.T) {
 
 		// Failed
 		{
-			name:                   "backup with existing backup will fail",
-			backupExists:           true,
-			backup:                 defaultBackup().Result(),
-			backupLocation:         defaultBackupLocation,
-			defaultVolumesToRestic: true,
+			name:                     "backup with existing backup will fail",
+			backupExists:             true,
+			backup:                   defaultBackup().Result(),
+			backupLocation:           defaultBackupLocation,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -731,8 +731,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseFailed,
@@ -746,11 +746,11 @@ func TestProcessBackupCompletions(t *testing.T) {
 			},
 		},
 		{
-			name:                   "error when checking if backup exists will cause backup to fail",
-			backup:                 defaultBackup().Result(),
-			existenceCheckError:    errors.New("Backup already exists in object storage"),
-			backupLocation:         defaultBackupLocation,
-			defaultVolumesToRestic: true,
+			name:                     "error when checking if backup exists will cause backup to fail",
+			backup:                   defaultBackup().Result(),
+			existenceCheckError:      errors.New("Backup already exists in object storage"),
+			backupLocation:           defaultBackupLocation,
+			defaultVolumesToFsBackup: true,
 			expectedResult: &velerov1api.Backup{
 				TypeMeta: metav1.TypeMeta{
 					Kind:       "Backup",
@@ -769,8 +769,8 @@ func TestProcessBackupCompletions(t *testing.T) {
 					},
 				},
 				Spec: velerov1api.BackupSpec{
-					StorageLocation:        defaultBackupLocation.Name,
-					DefaultVolumesToRestic: boolptr.True(),
+					StorageLocation:          defaultBackupLocation.Name,
+					DefaultVolumesToFsBackup: boolptr.True(),
 				},
 				Status: velerov1api.BackupStatus{
 					Phase:               velerov1api.BackupPhaseFailed,
@@ -823,21 +823,21 @@ func TestProcessBackupCompletions(t *testing.T) {
 			require.NoError(t, err)
 
 			c := &backupController{
-				genericController:      newGenericController("backup-test", logger),
-				discoveryHelper:        discoveryHelper,
-				client:                 clientset.VeleroV1(),
-				lister:                 sharedInformers.Velero().V1().Backups().Lister(),
-				kbClient:               fakeClient,
-				snapshotLocationLister: sharedInformers.Velero().V1().VolumeSnapshotLocations().Lister(),
-				defaultBackupLocation:  defaultBackupLocation.Name,
-				defaultVolumesToRestic: test.defaultVolumesToRestic,
-				backupTracker:          NewBackupTracker(),
-				metrics:                metrics.NewServerMetrics(),
-				clock:                  clock.NewFakeClock(now),
-				newPluginManager:       func(logrus.FieldLogger) clientmgmt.Manager { return pluginManager },
-				backupStoreGetter:      NewFakeSingleObjectBackupStoreGetter(backupStore),
-				backupper:              backupper,
-				formatFlag:             formatFlag,
+				genericController:        newGenericController("backup-test", logger),
+				discoveryHelper:          discoveryHelper,
+				client:                   clientset.VeleroV1(),
+				lister:                   sharedInformers.Velero().V1().Backups().Lister(),
+				kbClient:                 fakeClient,
+				snapshotLocationLister:   sharedInformers.Velero().V1().VolumeSnapshotLocations().Lister(),
+				defaultBackupLocation:    defaultBackupLocation.Name,
+				defaultVolumesToFsBackup: test.defaultVolumesToFsBackup,
+				backupTracker:            NewBackupTracker(),
+				metrics:                  metrics.NewServerMetrics(),
+				clock:                    clock.NewFakeClock(now),
+				newPluginManager:         func(logrus.FieldLogger) clientmgmt.Manager { return pluginManager },
+				backupStoreGetter:        NewFakeSingleObjectBackupStoreGetter(backupStore),
+				backupper:                backupper,
+				formatFlag:               formatFlag,
 			}
 
 			pluginManager.On("GetBackupItemActions").Return(nil, nil)
