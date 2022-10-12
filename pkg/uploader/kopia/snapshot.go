@@ -94,7 +94,7 @@ func Backup(ctx context.Context, fsUploader *snapshotfs.Uploader, repoWriter rep
 		return nil, false, errors.Wrapf(err, "Invalid source path '%s'", sourcePath)
 	}
 
-	// to be consistent with restic when backup empty dir returns one error for upper logic handle
+	// to be consistent with pod volume backup when backup empty dir returns one error for upper logic handle
 	dirs, err := ioutil.ReadDir(dir)
 	if err != nil {
 		return nil, false, errors.Wrapf(err, "Unable to read dir in path %s", dir)

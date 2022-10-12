@@ -72,20 +72,16 @@ var nonRestorableResources = []string{
 	// https://github.com/vmware-tanzu/velero/issues/622
 	"restores.velero.io",
 
-	// TODO: Remove this in v1.11 or v1.12
-	// Restic repositories are automatically managed by Velero and will be automatically
+	// Backup repositories are automatically managed by Velero and will be automatically
 	// created as needed if they don't exist.
 	// https://github.com/vmware-tanzu/velero/issues/1113
-	"resticrepositories.velero.io",
+	"backuprepositories.velero.io",
 
 	// CSINode delegates cluster node for CSI operation.
 	// VolumeAttachement records PV mounts to which node.
 	// https://github.com/vmware-tanzu/velero/issues/4823
 	"csinodes.storage.k8s.io",
 	"volumeattachments.storage.k8s.io",
-
-	// Backup repositories were renamed from Restic repositories
-	"backuprepositories.velero.io",
 }
 
 type restoreController struct {

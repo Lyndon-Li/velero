@@ -110,7 +110,7 @@ func TestGetImage(t *testing.T) {
 	}
 }
 
-// TestPodVolumeRestoreActionExecute tests the restic restore item action plugin's Execute method.
+// TestPodVolumeRestoreActionExecute tests the pod volume restore item action plugin's Execute method.
 func TestPodVolumeRestoreActionExecute(t *testing.T) {
 	resourceReqs, _ := kube.ParseResourceRequirements(
 		defaultCPURequestLimit, defaultMemRequestLimit, // requests
