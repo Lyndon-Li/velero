@@ -11,7 +11,7 @@ require (
 	github.com/Azure/go-autorest/autorest/azure/auth v0.5.8
 	github.com/Azure/go-autorest/autorest/to v0.3.0
 	github.com/aws/aws-sdk-go v1.43.31
-	github.com/bombsimon/logrusr/v3 v3.0.0
+	github.com/bombsimon/logrusr/v3 v3.1.0
 	github.com/evanphx/json-patch v5.6.0+incompatible
 	github.com/fatih/color v1.13.0
 	github.com/gobwas/glob v0.2.3
