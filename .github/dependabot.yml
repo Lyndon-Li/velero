@@ -9,4 +9,4 @@ updates:
       - "kind/changelog-not-required"
     ignore:
       - dependency-name: "*"
-        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+        update-types: ["version-update:semver-major"]
