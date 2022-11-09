@@ -84,7 +84,7 @@ jobs:
         uploader ${VELERO_RESTORE_HELPER_IMAGE_BACKUP_FILE} ${GCS_BUCKET}
 
     # Use the JSON key in secret to login gcr.io
-    - uses: 'docker/login-action@v1'
+    - uses: 'docker/login-action@v2'
       with:
         registry: 'gcr.io' # or REGION.docker.pkg.dev
         username: '_json_key'
