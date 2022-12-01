@@ -26,6 +26,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/apex/log"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
@@ -66,6 +67,13 @@ type itemBackupper struct {
 
 	itemHookHandler                    hook.ItemHookHandler
 	snapshotLocationVolumeSnapshotters map[string]vsv1.VolumeSnapshotter
+
+	delayCompletion *delayCompletionContext
+}
+
+type delayCompletionContext struct {
+	logger        logrus.FieldLogger
+	groupResource schema.GroupResource
 }
 
 // backupItem backs up an individual item to tarWriter. The item may be excluded based on the
@@ -164,11 +172,6 @@ func (ib *itemBackupper) backupItem(logger logrus.FieldLogger, obj runtime.Unstr
 
 				pvbVolumes = append(pvbVolumes, volume)
 			}
-
-			// track the volumes that are PVCs using the PVC snapshot tracker, so that when we backup PVCs/PVs
-			// via an item action in the next step, we don't snapshot PVs that will have their data backed up
-			// with pod volume backup.
-			ib.podVolumeSnapshotTracker.Track(pod, pvbVolumes)
 		}
 	}
 
@@ -211,10 +214,102 @@ func (ib *itemBackupper) backupItem(logger logrus.FieldLogger, obj runtime.Unstr
 
 		ib.backupRequest.PodVolumeBackups = append(ib.backupRequest.PodVolumeBackups, podVolumeBackups...)
 		backupErrs = append(backupErrs, errs...)
+
+		// track the volumes that are PVCs using the PVC snapshot tracker, so that when we backup PVCs/PVs
+		// via an item action in the next step, we don't snapshot PVs that will have their data backed up
+		// with pod volume backup.
+		for _, pvb := range podVolumeBackups {
+			ib.podVolumeSnapshotTracker.Track(pod, []string{pvb.Spec.Volume})
+		}
 	}
 
 	log.Debug("Executing post hooks")
 	if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost); err != nil {
+		backupErrs = append(backupErrs, err)
+	}
+
+	if len(backupErrs) != 0 {
+		return false, kubeerrs.NewAggregate(backupErrs)
+	}
+
+	// Getting the preferred group version of this resource
+	preferredVersion := preferredGVR.Version
+
+	var filePath string
+
+	// API Group version is now part of path of backup as a subdirectory
+	// it will add a prefix to subdirectory name for the preferred version
+	versionPath := version
+
+	if version == preferredVersion {
+		versionPath = version + velerov1api.PreferredVersionDir
+	}
+
+	if namespace != "" {
+		filePath = filepath.Join(velerov1api.ResourcesDir, groupResource.String(), versionPath, velerov1api.NamespaceScopedDir, namespace, name+".json")
+	} else {
+		filePath = filepath.Join(velerov1api.ResourcesDir, groupResource.String(), versionPath, velerov1api.ClusterScopedDir, name+".json")
+	}
+
+	itemBytes, err := json.Marshal(obj.UnstructuredContent())
+	if err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	hdr := &tar.Header{
+		Name:     filePath,
+		Size:     int64(len(itemBytes)),
+		Typeflag: tar.TypeReg,
+		Mode:     0755,
+		ModTime:  time.Now(),
+	}
+
+	if err := ib.tarWriter.WriteHeader(hdr); err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	if _, err := ib.tarWriter.Write(itemBytes); err != nil {
+		return false, errors.WithStack(err)
+	}
+
+	// backing up the preferred version backup without API Group version on path -  this is for backward compatibility
+
+	log.Debugf("Resource %s/%s, version= %s, preferredVersion=%s", groupResource.String(), name, version, preferredVersion)
+	if version == preferredVersion {
+		if namespace != "" {
+			filePath = filepath.Join(velerov1api.ResourcesDir, groupResource.String(), velerov1api.NamespaceScopedDir, namespace, name+".json")
+		} else {
+			filePath = filepath.Join(velerov1api.ResourcesDir, groupResource.String(), velerov1api.ClusterScopedDir, name+".json")
+		}
+
+		hdr = &tar.Header{
+			Name:     filePath,
+			Size:     int64(len(itemBytes)),
+			Typeflag: tar.TypeReg,
+			Mode:     0755,
+			ModTime:  time.Now(),
+		}
+
+		if err := ib.tarWriter.WriteHeader(hdr); err != nil {
+			return false, errors.WithStack(err)
+		}
+
+		if _, err := ib.tarWriter.Write(itemBytes); err != nil {
+			return false, errors.WithStack(err)
+		}
+	}
+
+	return true, nil
+}
+
+func (ib *itemBackupper) PostBackupItem(logger logrus.FieldLogger) (bool, []error) {
+	delayCompletion := ib.delayCompletion
+	if delayCompletion == nil {
+		return true, nil
+	}
+
+	delayCompletion.logger.Debug("Executing post hooks")
+	if err := ib.itemHookHandler.HandleHooks(ib.delayCompletion.logger, delayCompletion.groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost); err != nil {
 		backupErrs = append(backupErrs, err)
 	}
 

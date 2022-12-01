@@ -388,6 +388,55 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 		}).Infof("Backed up %d items out of an estimated total of %d (estimate will change throughout the backup)", len(backupRequest.BackedUpItems), totalItems)
 	}
 
+	for i, item := range items {
+		log.WithFields(map[string]interface{}{
+			"progress":  "",
+			"resource":  item.groupResource.String(),
+			"namespace": item.namespace,
+			"name":      item.name,
+		}).Infof("Processing item")
+
+		// use an anonymous func so we can defer-close/remove the file
+		// as soon as we're done with it
+		func() {
+			var unstructured unstructured.Unstructured
+
+			f, err := os.Open(item.path)
+			if err != nil {
+				log.WithError(errors.WithStack(err)).Error("Error opening file containing item")
+				return
+			}
+			defer f.Close()
+			defer os.Remove(f.Name())
+
+			if err := json.NewDecoder(f).Decode(&unstructured); err != nil {
+				log.WithError(errors.WithStack(err)).Error("Error decoding JSON from file")
+				return
+			}
+
+			if backedUp := kb.backupItem(log, item.groupResource, itemBackupper, &unstructured, item.preferredGVR); backedUp {
+				backedUpGroupResources[item.groupResource] = true
+			}
+		}()
+
+		// updated total is computed as "how many items we've backed up so far, plus
+		// how many items we know of that are remaining"
+		totalItems = len(backupRequest.BackedUpItems) + (len(items) - (i + 1))
+
+		// send a progress update
+		update <- progressUpdate{
+			totalItems:    totalItems,
+			itemsBackedUp: len(backupRequest.BackedUpItems),
+		}
+
+		log.WithFields(map[string]interface{}{
+			"progress":  "",
+			"resource":  item.groupResource.String(),
+			"namespace": item.namespace,
+			"name":      item.name,
+		}).Infof("Backed up %d items out of an estimated total of %d (estimate will change throughout the backup)", len(backupRequest.BackedUpItems), totalItems)
+	}
+
 	// no more progress updates will be sent on the 'update' channel
 	quit <- struct{}{}
 

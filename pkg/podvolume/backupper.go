@@ -42,6 +42,12 @@ import (
 type Backupper interface {
 	// BackupPodVolumes backs up all specified volumes in a pod.
 	BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.Pod, volumesToBackup []string, log logrus.FieldLogger) ([]*velerov1api.PodVolumeBackup, []error)
+	WaitComplete() ([]*velerov1api.PodVolumeBackup, []error)
+}
+
+type backupResults struct {
+	resChan         *chan *velerov1api.PodVolumeBackup
+	volumesInBackup []*velerov1api.PodVolumeBackup
 }
 
 type backupper struct {
@@ -54,7 +60,7 @@ type backupper struct {
 	podClient    corev1client.PodsGetter
 	uploaderType string
 
-	results     map[string]chan *velerov1api.PodVolumeBackup
+	results     backupResults
 	resultsLock sync.Mutex
 }
 
@@ -70,6 +76,7 @@ func newBackupper(
 	uploaderType string,
 	log logrus.FieldLogger,
 ) *backupper {
+	resChan := make(chan *velerov1api.PodVolumeBackup)
 	b := &backupper{
 		ctx:          ctx,
 		repoLocker:   repoLocker,
@@ -80,7 +87,9 @@ func newBackupper(
 		podClient:    podClient,
 		uploaderType: uploaderType,
 
-		results: make(map[string]chan *velerov1api.PodVolumeBackup),
+		results: backupResults{
+			resChan: &resChan,
+		},
 	}
 
 	podVolumeBackupInformer.AddEventHandler(
@@ -92,12 +101,9 @@ func newBackupper(
 					b.resultsLock.Lock()
 					defer b.resultsLock.Unlock()
 
-					resChan, ok := b.results[resultsKey(pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name)]
-					if !ok {
-						log.Errorf("No results channel found for pod %s/%s to send pod volume backup %s/%s on", pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name, pvb.Namespace, pvb.Name)
-						return
+					if b.results.resChan != nil {
+						*(b.results.resChan) <- pvb
 					}
-					resChan <- pvb
 				}
 			},
 		},
@@ -141,15 +147,8 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 	b.repoLocker.Lock(repo.Name)
 	defer b.repoLocker.Unlock(repo.Name)
 
-	resultsChan := make(chan *velerov1api.PodVolumeBackup)
-
-	b.resultsLock.Lock()
-	b.results[resultsKey(pod.Namespace, pod.Name)] = resultsChan
-	b.resultsLock.Unlock()
-
 	var (
 		errs              []error
-		podVolumeBackups  []*velerov1api.PodVolumeBackup
 		podVolumes        = make(map[string]corev1api.Volume)
 		mountedPodVolumes = sets.String{}
 	)
@@ -165,7 +164,6 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 		}
 	}
 
-	var numVolumeSnapshots int
 	for _, volumeName := range volumesToBackup {
 		volume, ok := podVolumes[volumeName]
 		if !ok {
@@ -206,16 +204,22 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 			errs = append(errs, err)
 			continue
 		}
-		numVolumeSnapshots++
+
+		b.results.volumesInBackup = append(b.results.volumesInBackup, volumeBackup)
 	}
 
-ForEachVolume:
-	for i, count := 0, numVolumeSnapshots; i < count; i++ {
+	return b.results.volumesInBackup, errs
+}
+
+func (b *backupper) WaitComplete() ([]*velerov1api.PodVolumeBackup, []error) {
+	var podVolumeBackups []*velerov1api.PodVolumeBackup
+	var errs []error
+
+	for i, count := 0, len(b.results.volumesInBackup); i < count; i++ {
 		select {
 		case <-b.ctx.Done():
 			errs = append(errs, errors.New("timed out waiting for all PodVolumeBackups to complete"))
-			break ForEachVolume
-		case res := <-resultsChan:
+		case res := <-*(b.results.resChan):
 			switch res.Status.Phase {
 			case velerov1api.PodVolumeBackupPhaseCompleted:
 				podVolumeBackups = append(podVolumeBackups, res)
@@ -227,7 +231,7 @@ ForEachVolume:
 	}
 
 	b.resultsLock.Lock()
-	delete(b.results, resultsKey(pod.Namespace, pod.Name))
+	b.results.resChan = nil
 	b.resultsLock.Unlock()
 
 	return podVolumeBackups, errs
