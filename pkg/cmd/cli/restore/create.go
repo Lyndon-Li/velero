@@ -92,6 +92,7 @@ type CreateOptions struct {
 	IncludeClusterResources flag.OptionalBool
 	Wait                    bool
 	AllowPartiallyFailed    flag.OptionalBool
+	IgnorePermissionErrors  flag.OptionalBool
 
 	client veleroclient.Interface
 }
@@ -137,6 +138,9 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	f.NoOptDefVal = "true"
 
 	flags.BoolVarP(&o.Wait, "wait", "w", o.Wait, "Wait for the operation to complete.")
+
+	f = flags.VarPF(&o.IgnorePermissionErrors, "ignore-permission-errors", "", "Ignore permission errors for file system backup.")
+	f.NoOptDefVal = "true"
 }
 
 func (o *CreateOptions) Complete(args []string, f client.Factory) error {
@@ -280,6 +284,7 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 			RestorePVs:              o.RestoreVolumes.Value,
 			PreserveNodePorts:       o.PreserveNodePorts.Value,
 			IncludeClusterResources: o.IncludeClusterResources.Value,
+			IgnorePermissionErrors:  o.IgnorePermissionErrors.Value,
 		},
 	}
 

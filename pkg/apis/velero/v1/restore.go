@@ -112,6 +112,11 @@ type RestoreSpec struct {
 	// +optional
 	// +nullable
 	ExistingResourcePolicy PolicyType `json:"existingResourcePolicy,omitempty"`
+
+	// IgnorePermissionErrors specifies whether to ignore permission errors during pod volume restore.
+	// +optional
+	// +nullable
+	IgnorePermissionErrors *bool `json:"ignorePermissionErrors,omitempty"`
 }
 
 // RestoreHooks contains custom behaviors that should be executed during or post restore.

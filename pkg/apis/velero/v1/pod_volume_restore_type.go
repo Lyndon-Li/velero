@@ -46,6 +46,9 @@ type PodVolumeRestoreSpec struct {
 
 	// SourceNamespace is the original namespace for namaspace mapping.
 	SourceNamespace string `json:"sourceNamespace"`
+
+	// IgnorePermissionErrors specifies whether to ignore permission errors.
+	IgnorePermissionErrors bool `json:"ignorePermissionErrors"`
 }
 
 // PodVolumeRestorePhase represents the lifecycle phase of a PodVolumeRestore.
