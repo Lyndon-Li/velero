@@ -105,6 +105,7 @@ type nodeAgentServer struct {
 	fileSystem     filesystem.Interface
 	mgr            manager.Manager
 	metrics        *metrics.ServerMetrics
+	kubeClient     kubernetes.Interface
 	metricsAddress string
 	namespace      string
 	nodeName       string
@@ -155,11 +156,11 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, metri
 
 	// the cache isn't initialized yet when "validatePodVolumesHostPath" is called, the client returned by the manager cannot
 	// be used, so we need the kube client here
-	client, err := factory.KubeClient()
+	s.kubeClient, err = factory.KubeClient()
 	if err != nil {
 		return nil, err
 	}
-	if err := s.validatePodVolumesHostPath(client); err != nil {
+	if err := s.validatePodVolumesHostPath(s.kubeClient); err != nil {
 		return nil, err
 	}
 
@@ -217,6 +218,14 @@ func (s *nodeAgentServer) run() {
 
 	if err = controller.NewPodVolumeRestoreReconciler(s.logger, s.mgr.GetClient(), credentialGetter).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
+	}
+
+	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, clock.RealClock{}, s.metrics, credentialGetter,
+		s.nodeName, filesystem.NewFileSystem(), s.logger).SetupWithManager(s.mgr); err != nil {
+		s.logger.WithError(err).Fatal("Unable to create the snapshot backup controller")
+	}
+	if err = controller.NewSnapshotRestoreReconciler(s.logger, s.mgr.GetClient(), s.kubeClient, credentialGetter, s.nodeName).SetupWithManager(s.mgr); err != nil {
+		s.logger.WithError(err).Fatal("Unable to create the snapshot restore controller")
 	}
 
 	s.logger.Info("Controllers starting...")
