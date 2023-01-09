@@ -116,6 +116,7 @@ spec:
                 description: Phase is the current state of the SnapshotBackup.
                 enum:
                 - New
+                - Prepared
                 - InProgress
                 - Completed
                 - Failed

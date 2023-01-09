@@ -110,6 +110,7 @@ spec:
                 description: Phase is the current state of theSnapshotRestore.
                 enum:
                 - New
+                - Prepared
                 - InProgress
                 - Completed
                 - Failed

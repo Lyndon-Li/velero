@@ -214,6 +214,26 @@ rules:
 - apiGroups:
   - velero.io
   resources:
+  - snapshotrestore
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - velero.io
+  resources:
+  - snapshotrestore/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - velero.io
+  resources:
   - volumesnapshotlocations
   verbs:
   - create
