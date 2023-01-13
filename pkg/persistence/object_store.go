@@ -43,6 +43,7 @@ type BackupInfo struct {
 	Contents,
 	Log,
 	PodVolumeBackups,
+	SnapshotBackups,
 	VolumeSnapshots,
 	ItemSnapshots,
 	BackupResourceList,
@@ -63,6 +64,7 @@ type BackupStore interface {
 	GetItemSnapshots(name string) ([]*volume.ItemSnapshot, error)
 	GetBackupVolumeSnapshots(name string) ([]*volume.Snapshot, error)
 	GetPodVolumeBackups(name string) ([]*velerov1api.PodVolumeBackup, error)
+	GetSnapshotBackups(name string) ([]*velerov1api.SnapshotBackup, error)
 	GetBackupContents(name string) (io.ReadCloser, error)
 	GetCSIVolumeSnapshots(name string) ([]*snapshotv1api.VolumeSnapshot, error)
 	GetCSIVolumeSnapshotContents(name string) ([]*snapshotv1api.VolumeSnapshotContent, error)
@@ -255,6 +257,7 @@ func (s *objectBackupStore) PutBackup(info BackupInfo) error {
 	// use a map literal to iterate through them and write them to the bucket.
 	var backupObjs = map[string]io.Reader{
 		s.layout.getPodVolumeBackupsKey(info.Name):          info.PodVolumeBackups,
+		s.layout.getSnapshotBackupKey(info.Name):            info.SnapshotBackups,
 		s.layout.getBackupVolumeSnapshotsKey(info.Name):     info.VolumeSnapshots,
 		s.layout.getItemSnapshotsKey(info.Name):             info.ItemSnapshots,
 		s.layout.getBackupResourceListKey(info.Name):        info.BackupResourceList,
@@ -454,6 +457,27 @@ func (s *objectBackupStore) GetPodVolumeBackups(name string) ([]*velerov1api.Pod
 	}
 
 	return podVolumeBackups, nil
+}
+
+func (s *objectBackupStore) GetSnapshotBackups(name string) ([]*velerov1api.SnapshotBackup, error) {
+	// if the snapshotbackups file doesn't exist, we don't want to return an error, since
+	// a legacy backup or a backup with no snapshot backups would not have this file, so
+	// check for its existence before attempting to get its contents.
+	res, err := tryGet(s.objectStore, s.bucket, s.layout.getSnapshotBackupKey(name))
+	if err != nil {
+		return nil, err
+	}
+	if res == nil {
+		return nil, nil
+	}
+	defer res.Close()
+
+	var snapshotBackups []*velerov1api.SnapshotBackup
+	if err := decode(res, &snapshotBackups); err != nil {
+		return nil, err
+	}
+
+	return snapshotBackups, nil
 }
 
 func (s *objectBackupStore) GetBackupContents(name string) (io.ReadCloser, error) {

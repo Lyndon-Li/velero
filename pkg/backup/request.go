@@ -49,6 +49,7 @@ type Request struct {
 	ResolvedItemSnapshotters  []framework.ItemSnapshotterResolvedAction
 	VolumeSnapshots           []*volume.Snapshot
 	PodVolumeBackups          []*velerov1api.PodVolumeBackup
+	SnapshotBackups           []*velerov1api.SnapshotBackup
 	BackedUpItems             map[itemKey]struct{}
 	CSISnapshots              []snapshotv1api.VolumeSnapshot
 }

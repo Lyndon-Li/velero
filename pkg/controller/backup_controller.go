@@ -758,11 +758,13 @@ func (c *backupController) waitSnapshotBackup(backup *pkgbackup.Request, backupL
 	for i := range snapshotBackupList.Items {
 		snapshotBackup := snapshotBackupList.Items[i]
 
+		var updated *velerov1api.SnapshotBackup
+		var pollErr error
 		eg.Go(func() error {
 			checkFunc := func() (bool, error) {
-				updated, err := c.snapshotBackupClient.SnapshotBackups(snapshotBackup.Namespace).Get(ctx, snapshotBackup.Name, metav1.GetOptions{})
-				if err != nil {
-					return false, errors.Wrapf(err, fmt.Sprintf("failed to get snapshotbackup %s", snapshotBackup.Name))
+				updated, pollErr = c.snapshotBackupClient.SnapshotBackups(snapshotBackup.Namespace).Get(ctx, snapshotBackup.Name, metav1.GetOptions{})
+				if pollErr != nil {
+					return false, errors.Wrapf(pollErr, fmt.Sprintf("failed to get snapshotbackup %s", snapshotBackup.Name))
 				}
 
 				if updated.Status.Phase == velerov1api.SnapshotBackupPhaseFailed {
@@ -782,6 +784,10 @@ func (c *backupController) waitSnapshotBackup(backup *pkgbackup.Request, backupL
 				errs = append(errs, err)
 			} else {
 				backupLog.WithField("snapshotBackup", snapshotBackup.Name).Info("SnapshotBackup completes")
+			}
+
+			if updated != nil {
+				backup.SnapshotBackups = append(backup.SnapshotBackups, updated)
 			}
 
 			return err
@@ -901,6 +907,11 @@ func persistBackup(backup *pkgbackup.Request,
 		persistErrs = append(persistErrs, errs...)
 	}
 
+	snapshotBackups, errs := encodeToJSONGzip(backup.SnapshotBackups, "snapshot backups list")
+	if errs != nil {
+		persistErrs = append(persistErrs, errs...)
+	}
+
 	csiSnapshotJSON, errs := encodeToJSONGzip(csiVolumeSnapshots, "csi volume snapshots list")
 	if errs != nil {
 		persistErrs = append(persistErrs, errs...)
@@ -937,6 +948,7 @@ func persistBackup(backup *pkgbackup.Request,
 		Contents:                  backupContents,
 		Log:                       backupLog,
 		PodVolumeBackups:          podVolumeBackups,
+		SnapshotBackups:           snapshotBackups,
 		VolumeSnapshots:           nativeVolumeSnapshots,
 		BackupResourceList:        backupResourceList,
 		CSIVolumeSnapshots:        csiSnapshotJSON,

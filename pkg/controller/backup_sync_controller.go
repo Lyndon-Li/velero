@@ -211,6 +211,44 @@ func (b *backupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			}
 		}
 
+		// process the snapshot backups from object store, if any
+		snapshotBackups, err := backupStore.GetSnapshotBackups(backupName)
+		if err != nil {
+			log.WithError(errors.WithStack(err)).Error("Error getting snapshot backups for this backup from backup store")
+			continue
+		}
+
+		for _, snapshotBackup := range snapshotBackups {
+			log := log.WithField("snapshotBackup", snapshotBackup.Name)
+			log.Debug("Checking this snapshot backup to see if it needs to be synced into the cluster")
+
+			for i, ownerRef := range snapshotBackup.OwnerReferences {
+				if ownerRef.APIVersion == velerov1api.SchemeGroupVersion.String() && ownerRef.Kind == "Backup" && ownerRef.Name == backup.Name {
+					log.WithField("uid", backup.UID).Debugf("Updating snapshot backup's owner reference UID")
+					snapshotBackup.OwnerReferences[i].UID = backup.UID
+				}
+			}
+
+			if _, ok := snapshotBackup.Labels[velerov1api.BackupUIDLabel]; ok {
+				snapshotBackup.Labels[velerov1api.BackupUIDLabel] = string(backup.UID)
+			}
+
+			snapshotBackup.Namespace = backup.Namespace
+			snapshotBackup.ResourceVersion = ""
+
+			err = b.client.Create(ctx, snapshotBackup, &client.CreateOptions{})
+			switch {
+			case err != nil && kuberrs.IsAlreadyExists(err):
+				log.Debug("Snapshot backup already exists in cluster")
+				continue
+			case err != nil && !kuberrs.IsAlreadyExists(err):
+				log.WithError(errors.WithStack(err)).Error("Error syncing snapshot backup into cluster")
+				continue
+			default:
+				log.Debug("Synced snapshot backup into cluster")
+			}
+		}
+
 		if features.IsEnabled(velerov1api.CSIFeatureFlag) {
 			// we are syncing these objects only to ensure that the storage snapshots are cleaned up
 			// on backup deletion or expiry.
