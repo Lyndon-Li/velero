@@ -64,16 +64,52 @@ spec:
           spec:
             description: SnapshotBackupSpec is the specification for a SnapshotBackup.
             properties:
-              backupPvc:
-                description: BackupPvc is the name of the PVC for the snapshot to
-                  be backed up
+              backupName:
+                description: BackupName is the name of the backup which owns this
+                  snapshot backup.
                 type: string
               backupStorageLocation:
                 description: BackupStorageLocation is the name of the backup storage
                   location where the backup repository is stored.
                 type: string
-              repoIdentifier:
-                description: RepoIdentifier is the backup repository identifier.
+              csiSnapshot:
+                description: If SnapshotType is CSI, CSISnapshot provides the information
+                  of the CSI snapshot.
+                properties:
+                  csiSnapshotTimeout:
+                    description: CSISnapshotTimeout specifies the time used to wait
+                      for CSI VolumeSnapshot status turns to ReadyToUse during creation,
+                      before returning error as timeout.
+                    type: string
+                  storageClass:
+                    description: StorageClass is the name of the storage class of
+                      the PVC that the volume snapshot is created from
+                    type: string
+                  volumeSnapshot:
+                    description: VolumeSnapshot is the name of the volume snapshot
+                      to be backed up
+                    type: string
+                required:
+                - csiSnapshotTimeout
+                - storageClass
+                - volumeSnapshot
+                type: object
+              datamover:
+                description: DataMover specifies the data mover to be used by the
+                  backup. If DataMover is "" or "velero", the built-in data mover
+                  will be used.
+                type: string
+              snapshotType:
+                description: SnapshotType is the type of the snapshot to be backed
+                  up.
+                type: string
+              sourceNamespace:
+                description: SourceNamespace is the original namespace where the volume
+                  is backed up from.
+                type: string
+              sourcePVC:
+                description: SourcePVC is the name of the PVC which the snapshot is
+                  taken for.
                 type: string
               tags:
                 additionalProperties:
@@ -81,18 +117,13 @@ spec:
                 description: Tags are a map of key-value pairs that should be applied
                   to the volume backup as tags.
                 type: object
-              uploaderType:
-                description: UploaderType is the type of the uploader to handle the
-                  data transfer.
-                enum:
-                - kopia
-                - restic
-                - ""
-                type: string
             required:
-            - backupPvc
+            - backupName
             - backupStorageLocation
-            - repoIdentifier
+            - csiSnapshot
+            - snapshotType
+            - sourceNamespace
+            - sourcePVC
             type: object
           status:
             description: SnapshotBackupStatus is the current status of a SnapshotBackup.

@@ -77,6 +77,11 @@ spec:
                       for CSI VolumeSnapshot status turns to ReadyToUse during creation,
                       before returning error as timeout. The default value is 10 minute.
                     type: string
+                  datamover:
+                    description: DataMover specifies the data mover to be used by
+                      the backup. If DataMover is "" or "velero", the built-in data
+                      mover will be used.
+                    type: string
                   defaultVolumesToFsBackup:
                     description: DefaultVolumesToFsBackup specifies whether pod volume
                       file system backup should be used for all volumes by default.

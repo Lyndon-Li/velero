@@ -22,25 +22,47 @@ import (
 
 // SnapshotBackupSpec is the specification for a SnapshotBackup.
 type SnapshotBackupSpec struct {
-	// BackupPvc is the name of the PVC for the snapshot to be backed up
-	BackupPvc string `json:"backupPvc"`
+	// SnapshotType is the type of the snapshot to be backed up.
+	SnapshotType string `json:"snapshotType"`
+
+	// If SnapshotType is CSI, CSISnapshot provides the information of the CSI snapshot.
+	CSISnapshot CSISnapshotSpec `json:"csiSnapshot"`
+
+	// BackupName is the name of the backup which owns this snapshot backup.
+	BackupName string `json:"backupName"`
+
+	// SourcePVC is the name of the PVC which the snapshot is taken for.
+	SourcePVC string `json:"sourcePVC"`
+
+	// DataMover specifies the data mover to be used by the backup.
+	// If DataMover is "" or "velero", the built-in data mover will be used.
+	// +optional
+	DataMover string `json:"datamover,omitempty"`
 
 	// BackupStorageLocation is the name of the backup storage location
 	// where the backup repository is stored.
 	BackupStorageLocation string `json:"backupStorageLocation"`
 
-	// RepoIdentifier is the backup repository identifier.
-	RepoIdentifier string `json:"repoIdentifier"`
-
-	// UploaderType is the type of the uploader to handle the data transfer.
-	// +kubebuilder:validation:Enum=kopia;restic;""
-	// +optional
-	UploaderType string `json:"uploaderType"`
+	// SourceNamespace is the original namespace where the volume is backed up from.
+	SourceNamespace string `json:"sourceNamespace"`
 
 	// Tags are a map of key-value pairs that should be applied to the
 	// volume backup as tags.
 	// +optional
 	Tags map[string]string `json:"tags,omitempty"`
+}
+
+// CSISnapshotSpec is the specification for a CSI snapshot.
+type CSISnapshotSpec struct {
+	// VolumeSnapshot is the name of the volume snapshot to be backed up
+	VolumeSnapshot string `json:"volumeSnapshot"`
+
+	// StorageClass is the name of the storage class of the PVC that the volume snapshot is created from
+	StorageClass string `json:"storageClass"`
+
+	// CSISnapshotTimeout specifies the time used to wait for CSI VolumeSnapshot status turns to
+	// ReadyToUse during creation, before returning error as timeout.
+	CSISnapshotTimeout metav1.Duration `json:"csiSnapshotTimeout"`
 }
 
 // SnapshotBackupPhase represents the lifecycle phase of a SnapshotBackup.

@@ -17,31 +17,57 @@ limitations under the License.
 package v1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // SnapshotRestoreSpec is the specification for a SnapshotRestore.
 type SnapshotRestoreSpec struct {
-	// RestorePvc is the name of the PVC for volume to be restored
-	RestorePvc string `json:"restorePvc"`
+	// TargetVolume is the information of the target PVC and PV.
+	TargetVolume TargetVolumeSpec `json:"targetVolume"`
+
+	// RestoreName is the name of the restore which owns this snapshot restore.
+	RestoreName string `json:"restoreName"`
+
+	// BackupName is the name of the backup for this snapshot restore.
+	BackupName string `json:"backupName"`
 
 	// BackupStorageLocation is the name of the backup storage location
 	// where the backup repository is stored.
 	BackupStorageLocation string `json:"backupStorageLocation"`
 
-	// RepoIdentifier is the backup repository identifier.
-	RepoIdentifier string `json:"repoIdentifier"`
-
-	// UploaderType is the type of the uploader to handle the data transfer.
-	// +kubebuilder:validation:Enum=kopia;restic;""
+	// DataMover specifies the data mover to be used by the backup.
+	// If DataMover is "" or "velero", the built-in data mover will be used.
 	// +optional
-	UploaderType string `json:"uploaderType"`
+	DataMover string `json:"datamover,omitempty"`
 
-	// SnapshotID is the ID of the volume snapshot to be restored.
+	// SnapshotID is the ID of the Velero backup snapshot to be restored from.
 	SnapshotID string `json:"snapshotID"`
 
-	// SourceNamespace is the original namespace for namaspace mapping.
+	// SourceNamespace is the original namespace where the volume is backed up from.
 	SourceNamespace string `json:"sourceNamespace"`
+}
+
+// TargetPVCSpec is the specification for a target PVC.
+type TargetVolumeSpec struct {
+	// PVC is the name of the target pvc
+	PVC string `json:"pvc"`
+
+	// PV is the name of the target pv
+	PV string `json:"pv"`
+
+	// Namespace is the namespace of the target pvc
+	Namespace string `json:"namespace"`
+
+	// StorageClass is the name of the storage class of the target PVC
+	StorageClass string `json:"storageClass"`
+
+	// Resources specify the resource requirements of the target PVC
+	Resources corev1.ResourceRequirements `json:"resources"`
+
+	// PVOperationTimeout specifies the time used to wait for PV operations,
+	// before returning error as timeout.
+	PVOperationTimeout metav1.Duration `json:"pvOperationTimeout"`
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.

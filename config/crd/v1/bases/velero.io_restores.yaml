@@ -46,6 +46,11 @@ spec:
                   should be moved
                 nullable: true
                 type: boolean
+              datamover:
+                description: DataMover specifies the data mover to be used by the
+                  backup. If DataMover is "" or "velero", the built-in data mover
+                  will be used.
+                type: string
               excludedNamespaces:
                 description: ExcludedNamespaces contains a list of namespaces that
                   are not included in the restore.

@@ -16,8 +16,14 @@ limitations under the License.
 package kube
 
 import (
+	"context"
+
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
 // IsPodRunning does a well-rounded check to make sure the specified pod is running stably.
@@ -36,4 +42,20 @@ func IsPodRunning(pod *corev1api.Pod) error {
 	}
 
 	return nil
+}
+
+func DeletePodIfAny(ctx context.Context, podGetter corev1client.PodsGetter, podName string, podNamespace string, log logrus.FieldLogger) {
+	pod, err := podGetter.Pods(podNamespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.WithError(err).Errorf("Failed to get volume snapshot %s/%s", podNamespace, podName)
+		}
+
+		return
+	}
+
+	err = podGetter.Pods(pod.Namespace).Delete(ctx, pod.Name, *&metav1.DeleteOptions{})
+	if err != nil {
+		log.WithError(err).Errorf("Failed to delete pod %s/%s", pod.Namespace, pod.Name)
+	}
 }

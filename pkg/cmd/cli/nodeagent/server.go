@@ -43,6 +43,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 
+	snapshotv1client "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
+
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/buildinfo"
@@ -50,6 +52,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/cmd"
 	"github.com/vmware-tanzu/velero/pkg/cmd/util/signals"
 	"github.com/vmware-tanzu/velero/pkg/controller"
+	"github.com/vmware-tanzu/velero/pkg/features"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
@@ -99,16 +102,17 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 }
 
 type nodeAgentServer struct {
-	logger         logrus.FieldLogger
-	ctx            context.Context
-	cancelFunc     context.CancelFunc
-	fileSystem     filesystem.Interface
-	mgr            manager.Manager
-	metrics        *metrics.ServerMetrics
-	kubeClient     kubernetes.Interface
-	metricsAddress string
-	namespace      string
-	nodeName       string
+	logger            logrus.FieldLogger
+	ctx               context.Context
+	cancelFunc        context.CancelFunc
+	fileSystem        filesystem.Interface
+	mgr               manager.Manager
+	metrics           *metrics.ServerMetrics
+	kubeClient        kubernetes.Interface
+	csiSnapshotClient *snapshotv1client.Clientset
+	metricsAddress    string
+	namespace         string
+	nodeName          string
 }
 
 func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, metricAddress string) (*nodeAgentServer, error) {
@@ -160,6 +164,14 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, metri
 	if err != nil {
 		return nil, err
 	}
+
+	if features.IsEnabled(velerov1api.CSIFeatureFlag) {
+		s.csiSnapshotClient, err = snapshotv1client.NewForConfig(clientConfig)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	if err := s.validatePodVolumesHostPath(s.kubeClient); err != nil {
 		return nil, err
 	}
@@ -220,7 +232,7 @@ func (s *nodeAgentServer) run() {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
 
-	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, clock.RealClock{}, s.metrics, credentialGetter,
+	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, s.csiSnapshotClient, clock.RealClock{}, s.metrics, credentialGetter,
 		s.nodeName, filesystem.NewFileSystem(), s.logger).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the snapshot backup controller")
 	}

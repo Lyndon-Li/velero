@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -47,6 +48,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/uploader/provider"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
+	"github.com/vmware-tanzu/velero/pkg/util/datamover"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -113,85 +115,34 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log.Info("Snapshot restore starting with phase %v", ssr.Status.Phase)
 
 	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1api.SnapshotRestorePhaseNew {
-		//Create pod and mount pvc
-		pod := &corev1.Pod{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      ssr.Spec.RestorePvc,
-				Namespace: ssr.Namespace,
-				OwnerReferences: []metav1.OwnerReference{
-					{
-						APIVersion: velerov1api.SchemeGroupVersion.String(),
-						Kind:       "SnapshotRestore",
-						Name:       ssr.Name,
-						UID:        ssr.UID,
-						Controller: boolptr.True(),
-					},
-				},
-				Labels: map[string]string{
-					velerov1api.SnapshotRestoreLabel: ssr.Name,
-				},
-			},
-			Spec: corev1.PodSpec{
-				Containers: []corev1.Container{
-					{
-						Name:    ssr.Spec.RestorePvc,
-						Image:   "gcr.io/velero-gcp/busybox",
-						Command: []string{"sleep", "infinity"},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name:      ssr.Spec.RestorePvc,
-							MountPath: "/" + ssr.Spec.RestorePvc,
-						}},
-					},
-				},
-				Volumes: []corev1.Volume{{
-					Name: ssr.Spec.RestorePvc,
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: ssr.Spec.RestorePvc,
-						},
-					},
-				}},
-			},
-		}
 
-		if err := s.Client.Create(ctx, pod, &client.CreateOptions{}); err != nil {
+		if err := s.createRestorePod(ctx, ssr, log); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
-				return s.updateStatusToFailed(ctx, ssr, err, fmt.Sprintf("error creating pod %s in namespace %s", pod.Name, pod.Namespace), log)
+				return s.errorOut(ctx, ssr, err, "error creating restore pod", log)
+			} else {
+				return ctrl.Result{}, nil
 			}
 		}
 
-		log.WithField("pod", pod.Name).Info("Snapshot restore pod is created")
+		log.Info("Snapshot restore pod is created")
 
-		return ctrl.Result{}, nil
-	}
-
-	pod := &corev1.Pod{}
-	err := s.Client.Get(ctx, types.NamespacedName{
-		Namespace: ssr.Namespace,
-		Name:      ssr.Spec.RestorePvc,
-	}, pod)
-	if err != nil {
-		return ctrl.Result{}, nil
-	}
-
-	log.WithField("pod", pod.Name).Infof("Restore pod is in running state in node %s", pod.Spec.NodeName)
-
-	pvc := &corev1.PersistentVolumeClaim{}
-	if err := wait.PollImmediate(PollInterval, PollTimeout, func() (done bool, err error) {
-		if err := s.Client.Get(ctx, types.NamespacedName{
-			Namespace: ssr.Namespace,
-			Name:      ssr.Spec.RestorePvc,
-		}, pvc); err != nil {
-			return false, err
-		} else {
-			return pvc.Status.Phase == v1.ClaimBound, nil
+		if err := s.createRestorePVC(ctx, ssr, log); err != nil {
+			return s.errorOut(ctx, ssr, err, "error to create restore pvc", log)
 		}
-	}); err != nil {
-		log.WithField("restore pvc", ssr.Spec.RestorePvc).Debug("restore pvc is not bound")
-		return ctrl.Result{}, err
+
+		log.Info("Restore pvc is created")
+
+		return ctrl.Result{}, nil
 	}
 
-	log.WithField("pod", pod.Name).Info("Restore PVC is ready")
+	path, err := s.waitRestorePVCExposed(ctx, ssr, log)
+	if err != nil {
+		return s.errorOut(ctx, ssr, err, "restore PVC is not ready", log)
+	} else if path == "" {
+		return ctrl.Result{}, nil
+	}
+
+	log.Info("Restore PVC is ready")
 
 	original := ssr.DeepCopy()
 	ssr.Status.Phase = velerov1api.SnapshotRestorePhaseInProgress
@@ -203,29 +154,18 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	log.Info("SnapshotRestore is marked as in progress")
 
-	deletePod := true
-
-	defer func() {
-		if deletePod {
-			log.Infof("deleting pod %s in namespace %s on failure", pod.Name, pod.Namespace)
-			var gracePeriodSeconds int64 = 0
-			if delErr := s.Client.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &gracePeriodSeconds}); delErr != nil {
-				s.updateStatusToFailed(ctx, ssr, delErr, fmt.Sprintf("error delete pod %s in namespace %s", pod.Name, pod.Namespace), log)
-			}
-		}
-	}()
-
-	if err := s.processRestore(ctx, ssr, pod, log); err != nil {
+	if err := s.processRestore(ctx, ssr, path, log); err != nil {
 		log.WithError(err).Error("Unable to process the SnapshotRestore")
-		return s.updateStatusToFailed(ctx, ssr, err, fmt.Sprintf("running restore, stderr=%v", err), log)
+		return s.errorOut(ctx, ssr, err, fmt.Sprintf("running restore, stderr=%v", err), log)
 	}
 
-	deletePod = false
-	log.Infof("deleting pod %s in namespace %s", pod.Name, pod.Namespace)
-	var gracePeriodSeconds int64 = 0
-	if err := s.Client.Delete(ctx, pod, &client.DeleteOptions{GracePeriodSeconds: &gracePeriodSeconds}); err != nil {
-		return s.updateStatusToFailed(ctx, ssr, err, fmt.Sprintf("error delete pod %s in namespace %s", pod.Name, pod.Namespace), log)
+	err = s.rebindRestoreVolume(ctx, ssr, log)
+	if err != nil {
+		return s.errorOut(ctx, ssr, err, "error rebind restore volume", log)
 	}
+
+	log.Info("Cleaning up exposed environment")
+	s.cleanUpExposeEnv(ctx, ssr, log)
 
 	original = ssr.DeepCopy()
 	ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCompleted
@@ -239,21 +179,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 }
 
-func (s *SnapshotRestoreReconciler) processRestore(ctx context.Context, req *velerov1api.SnapshotRestore, pod *corev1api.Pod, log logrus.FieldLogger) error {
-	volumeDir, err := kube.GetVolumeDirectory(ctx, log, pod, req.Spec.RestorePvc, s.Client)
-	if err != nil {
-		return errors.Wrap(err, "error getting volume directory name")
-	}
-
-	// Get the full path of the new volume's directory as mounted in the daemonset pod, which
-	// will look like: /host_pods/<new-pod-uid>/volumes/<volume-plugin-name>/<volume-dir>
-	volumePath, err := kube.SinglePathMatch(
-		fmt.Sprintf("/host_pods/%s/volumes/*/%s", string(pod.UID), volumeDir),
-		s.fileSystem, log)
-	if err != nil {
-		return errors.Wrap(err, "error identifying path of volume")
-	}
-
+func (s *SnapshotRestoreReconciler) processRestore(ctx context.Context, req *velerov1api.SnapshotRestore, path string, log logrus.FieldLogger) error {
 	backupLocation := &velerov1api.BackupStorageLocation{}
 	if err := s.Get(ctx, client.ObjectKey{
 		Namespace: req.Namespace,
@@ -262,13 +188,13 @@ func (s *SnapshotRestoreReconciler) processRestore(ctx context.Context, req *vel
 		return errors.Wrap(err, "error getting backup storage location")
 	}
 
-	backupRepo, err := s.repositoryEnsurer.EnsureRepo(ctx, req.Namespace, req.Spec.SourceNamespace, req.Spec.BackupStorageLocation, req.Spec.UploaderType)
+	backupRepo, err := s.repositoryEnsurer.EnsureRepo(ctx, req.Namespace, req.Spec.SourceNamespace, req.Spec.BackupStorageLocation, datamover.GetUploaderType(req.Spec.DataMover))
 	if err != nil {
 		return errors.Wrap(err, "error ensure backup repository")
 	}
 
-	uploaderProv, err := provider.NewUploaderProvider(ctx, s.Client, req.Spec.UploaderType,
-		req.Spec.RepoIdentifier, backupLocation, backupRepo, s.credentialGetter, repokey.RepoKeySelector(), log)
+	uploaderProv, err := provider.NewUploaderProvider(ctx, s.Client, datamover.GetUploaderType(req.Spec.DataMover),
+		"", backupLocation, backupRepo, s.credentialGetter, repokey.RepoKeySelector(), log)
 	if err != nil {
 		return errors.Wrap(err, "error creating uploader")
 	}
@@ -279,7 +205,7 @@ func (s *SnapshotRestoreReconciler) processRestore(ctx context.Context, req *vel
 		}
 	}()
 
-	if err = uploaderProv.RunRestore(ctx, req.Spec.SnapshotID, volumePath, s.NewSnapshotBackupProgressUpdater(req, log, ctx)); err != nil {
+	if err = uploaderProv.RunRestore(ctx, req.Spec.SnapshotID, path, s.NewSnapshotBackupProgressUpdater(req, log, ctx)); err != nil {
 		return errors.Wrapf(err, "error running restore err=%v", err)
 	}
 
@@ -370,6 +296,12 @@ func prepareSnapshotRestore(ssb *velerov1api.SnapshotRestore) {
 	ssb.Status.Phase = velerov1api.SnapshotRestorePhasePrepared
 }
 
+func (s *SnapshotRestoreReconciler) errorOut(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
+	s.cleanUpExposeEnv(ctx, ssr, log)
+
+	return s.updateStatusToFailed(ctx, ssr, err, msg, log)
+}
+
 func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
 	log.Infof("updateStatusToFailed %v", ssr.Status.Phase)
 	original := ssr.DeepCopy()
@@ -391,13 +323,224 @@ func (s *SnapshotRestoreReconciler) NewSnapshotBackupProgressUpdater(ssr *velero
 
 //UpdateProgress which implement ProgressUpdater interface to update pvr progress status
 func (s *SnapshotRestoreProgressUpdater) UpdateProgress(p *uploader.UploaderProgress) {
+	restoreVCName := s.SnapshotRestore.Name
 	original := s.SnapshotRestore.DeepCopy()
 	s.SnapshotRestore.Status.Progress = velerov1api.DataMoveOperationProgress{TotalBytes: p.TotalBytes, BytesDone: p.BytesDone}
 	if s.Cli == nil {
-		s.Log.Errorf("failed to update snapshot %s restore progress with uninitailize client", s.SnapshotRestore.Spec.RestorePvc)
+		s.Log.Errorf("failed to update snapshot %s restore progress with uninitailize client", restoreVCName)
 		return
 	}
 	if err := s.Cli.Patch(s.Ctx, s.SnapshotRestore, client.MergeFrom(original)); err != nil {
-		s.Log.Errorf("update restore snapshot %s  progress with %v", s.SnapshotRestore.Spec.RestorePvc, err)
+		s.Log.Errorf("update restore snapshot %s  progress with %v", restoreVCName, err)
 	}
+}
+
+func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+	restorePodName := ssr.Name
+	restorePVCName := ssr.Name
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      restorePodName,
+			Namespace: ssr.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					Kind:       "SnapshotRestore",
+					Name:       ssr.Name,
+					UID:        ssr.UID,
+					Controller: boolptr.True(),
+				},
+			},
+			Labels: map[string]string{
+				velerov1api.SnapshotRestoreLabel: ssr.Name,
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:    restorePodName,
+					Image:   "gcr.io/velero-gcp/busybox",
+					Command: []string{"sleep", "infinity"},
+					VolumeMounts: []corev1.VolumeMount{{
+						Name:      restorePVCName,
+						MountPath: "/" + restorePVCName,
+					}},
+				},
+			},
+			Volumes: []corev1.Volume{{
+				Name: restorePVCName,
+				VolumeSource: corev1.VolumeSource{
+					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+						ClaimName: restorePVCName,
+					},
+				},
+			}},
+		},
+	}
+
+	return s.Client.Create(ctx, pod, &client.CreateOptions{})
+}
+
+func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+	restorePVCName := ssr.Name
+
+	volumeMode := kube.GetVolumeModeFromDataMover(ssr.Spec.DataMover)
+
+	pvcObj := &corev1api.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ssr.Namespace,
+			Name:      restorePVCName,
+		},
+		Spec: corev1api.PersistentVolumeClaimSpec{
+			AccessModes: []corev1api.PersistentVolumeAccessMode{
+				corev1api.ReadWriteOnce,
+			},
+			StorageClassName: &ssr.Spec.TargetVolume.StorageClass,
+			VolumeMode:       &volumeMode,
+			Resources:        ssr.Spec.TargetVolume.Resources,
+		},
+	}
+
+	restorePVC, err := s.kubeClient.CoreV1().PersistentVolumeClaims(pvcObj.Namespace).Create(ctx, pvcObj, metav1.CreateOptions{})
+	if err != nil {
+		return errors.Wrap(err, "error to create restore pvc")
+	}
+
+	log.WithField("restorePVC", restorePVC.Name).Infof("Restore PVC is created")
+
+	defer func() {
+		if err != nil {
+			kube.DeletePVCIfAny(ctx, s.kubeClient.CoreV1(), restorePVC.Name, restorePVC.Namespace, log)
+		}
+	}()
+
+	return nil
+}
+
+func (s *SnapshotRestoreReconciler) waitRestorePVCExposed(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) (string, error) {
+	restorePodName := ssr.Name
+	restorePVCName := ssr.Name
+
+	pod := &corev1.Pod{}
+	err := s.Client.Get(ctx, types.NamespacedName{
+		Namespace: ssr.Namespace,
+		Name:      restorePodName,
+	}, pod)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.WithField("restore pod", restorePodName).Error("Restore pod is not running on the current node")
+			return "", nil
+		} else {
+			return "", errors.Wrapf(err, "error to get restore pod %s", restorePodName)
+		}
+	}
+
+	log.WithField("pod", pod.Name).Infof("Restore pod is in running state in node %s", pod.Spec.NodeName)
+
+	pvc := &corev1.PersistentVolumeClaim{}
+	pollInterval := 2 * time.Second
+	if err := wait.PollImmediate(pollInterval, ssr.Spec.TargetVolume.PVOperationTimeout.Duration, func() (done bool, err error) {
+		if err := s.Client.Get(ctx, types.NamespacedName{
+			Namespace: ssr.Namespace,
+			Name:      restorePVCName,
+		}, pvc); err != nil {
+			return false, err
+		} else {
+			return pvc.Status.Phase == v1.ClaimBound, nil
+		}
+	}); err != nil {
+		if err == wait.ErrWaitTimeout {
+			log.WithField("restore pvc", restorePVCName).Error("restore pvc is not bound till timeout")
+			return "", nil
+		} else {
+			return "", errors.Wrapf(err, "error to get restore PVC %s", restorePVCName)
+		}
+	}
+
+	log.WithField("restore pvc", restorePVCName).Info("Restore PVC is bound")
+
+	path, err := datamover.GetPodVolumeHostPath(ctx, pod, pvc, s.Client, s.fileSystem, log)
+	if err != nil {
+		return "", errors.Wrap(err, "error to get restore pvc host path")
+	}
+
+	log.WithField("restore pod", pod.Name).WithField("restore pvc", pvc.Name).Infof("Got restore PVC host path %s", path)
+
+	return path, nil
+}
+
+func (s *SnapshotRestoreReconciler) cleanUpExposeEnv(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) {
+	restorePodName := ssr.Name
+	restorePVCName := ssr.Name
+
+	kube.DeletePodIfAny(ctx, s.kubeClient.CoreV1(), restorePodName, ssr.Namespace, log)
+	kube.DeletePVCIfAny(ctx, s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, log)
+}
+
+func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+	restorePVCName := ssr.Name
+
+	_, restorePV, err := kube.WaitPVCBound(ctx, s.kubeClient.CoreV1(), s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.TargetVolume.PVOperationTimeout.Duration)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to get PV from restore PVC %s", restorePVCName))
+	}
+
+	log.WithField("restore PV", restorePV.Name).Info("Restore PV is retrieved")
+
+	retained, err := kube.RetainPV(ctx, s.kubeClient.CoreV1(), restorePV)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to retain PV %s", restorePV.Name))
+	}
+
+	log.WithField("restore PV", restorePV.Name).WithField("retained", (retained != nil)).Info("Restore PV is retained")
+
+	defer func() {
+		if retained != nil {
+			log.WithField("restore PV", restorePV.Name).Info("Rollback PV binding policy")
+			kube.DeletePVIfAny(ctx, s.kubeClient.CoreV1(), retained.Name, log)
+		}
+	}()
+
+	err = kube.EnsureDeletePVC(ctx, s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.TargetVolume.PVOperationTimeout.Duration)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to delete restore PVC %s", restorePVCName))
+	}
+
+	log.WithField("restore PVC", restorePVCName).Info("Restore PVC is deleted")
+
+	err = kube.EnsureDeletePV(ctx, s.kubeClient.CoreV1(), restorePV, ssr.Spec.TargetVolume.PVOperationTimeout.Duration)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to delete restore PV %s", restorePV.Name))
+	}
+
+	log.WithField("restore PV", restorePV.Name).Info("Restore PV is deleted")
+
+	retained = nil
+
+	workloadPV, err := createWorkloadPV(ctx, s.kubeClient, restorePV, ssr.Spec.TargetVolume.PV)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to create workload PV from restore PV %s", restorePV.Name))
+	}
+
+	log.WithField("workload PV", workloadPV.Name).WithField("restore PV", restorePV.Name).Info("Workload PV is created")
+
+	return nil
+}
+
+func createWorkloadPV(ctx context.Context, kubeClient kubernetes.Interface, restorePV *corev1api.PersistentVolume, name string) (*corev1api.PersistentVolume, error) {
+	updated := restorePV.DeepCopy()
+	delete(updated.Annotations, kube.KubeAnnBindCompleted)
+	delete(updated.Annotations, kube.KubeAnnBoundByController)
+	updated.Spec.ClaimRef = nil
+	updated.Name = name
+	updated.ResourceVersion = ""
+	updated.UID = ""
+
+	created, err := kubeClient.CoreV1().PersistentVolumes().Create(ctx, updated, metav1.CreateOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return created, nil
 }

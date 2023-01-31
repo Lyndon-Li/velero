@@ -117,6 +117,11 @@ type RestoreSpec struct {
 	// +optional
 	// +nullable
 	CSISnapshotMoveData *bool `json:"csiSnapshotMoveData,omitempty"`
+
+	// DataMover specifies the data mover to be used by the backup.
+	// If DataMover is "" or "velero", the built-in data mover will be used.
+	// +optional
+	DataMover string `json:"datamover,omitempty"`
 }
 
 // RestoreHooks contains custom behaviors that should be executed during or post restore.
