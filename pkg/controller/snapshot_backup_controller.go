@@ -113,6 +113,11 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, errors.Wrap(err, "getting SnapshotBackup")
 	}
 
+	if ssb.Spec.DataMover != "" {
+		log.WithField("data mover", ssb.Spec.DataMover).Info("Snapshot backup is not to be processed by velero")
+		return ctrl.Result{}, nil
+	}
+
 	switch ssb.Status.Phase {
 	case "", velerov1api.SnapshotBackupPhaseNew, velerov1api.SnapshotBackupPhasePrepared:
 		// Only process new items.
@@ -482,7 +487,7 @@ func (r *SnapshotBackupReconciler) closeObjectLock(ctx context.Context, ssb *vel
 
 func (r *SnapshotBackupReconciler) exposeSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
 	switch ssb.Spec.SnapshotType {
-	case "CSI":
+	case velerov1api.SnapshotTypeCSI:
 		return r.exposeCSISnapshot(ctx, ssb, log)
 	default:
 		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
@@ -492,7 +497,7 @@ func (r *SnapshotBackupReconciler) exposeSnapshot(ctx context.Context, ssb *vele
 func (r *SnapshotBackupReconciler) waitSnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup,
 	log logrus.FieldLogger) (*snapshotExposeResult, error) {
 	switch ssb.Spec.SnapshotType {
-	case "CSI":
+	case velerov1api.SnapshotTypeCSI:
 		return r.waitCSISnapshotExposed(ctx, ssb, log)
 	default:
 		return nil, errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
@@ -501,7 +506,7 @@ func (r *SnapshotBackupReconciler) waitSnapshotExposed(ctx context.Context, ssb 
 
 func (r *SnapshotBackupReconciler) cleanUpSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
 	switch ssb.Spec.SnapshotType {
-	case "CSI":
+	case velerov1api.SnapshotTypeCSI:
 		return r.cleanUpCSISnapshot(ctx, ssb, log)
 	default:
 		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
@@ -520,14 +525,14 @@ func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, s
 	}, pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			log.WithField("backup pod", backupPodName).Errorf("Backup pod is not running on the current node %s", r.NodeName)
+			log.WithField("backup pod", backupPodName).Errorf("Backup pod is not running in the current node %s", r.NodeName)
 			return nil, nil
 		} else {
 			return nil, errors.Wrapf(err, "error to get backup pod %s", backupPodName)
 		}
 	}
 
-	log.WithField("pod", pod.Name).Infof("Backup pod is in running state in node %s", pod.Spec.NodeName)
+	log.WithField("pod", pod.Name).Infof("Backup pod is in running state in node %s", r.NodeName)
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	pollInterval := 2 * time.Second

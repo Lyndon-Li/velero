@@ -17,12 +17,14 @@ package kube
 
 import (
 	"context"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
 
@@ -58,4 +60,31 @@ func DeletePodIfAny(ctx context.Context, podGetter corev1client.PodsGetter, podN
 	if err != nil {
 		log.WithError(err).Errorf("Failed to delete pod %s/%s", pod.Namespace, pod.Name)
 	}
+}
+
+func EnsureDeletePod(ctx context.Context, podGetter corev1client.PodsGetter, pod string, namespace string, timeout time.Duration) error {
+	err := podGetter.Pods(namespace).Delete(ctx, pod, metav1.DeleteOptions{})
+	if err != nil {
+		return errors.Wrapf(err, "error to delete pod %s", pod)
+	}
+
+	interval := 1 * time.Second
+	err = wait.PollImmediate(interval, timeout, func() (bool, error) {
+		_, err := podGetter.Pods(namespace).Get(ctx, pod, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+
+			return false, errors.Wrapf(err, "failed to get pod %s", pod)
+		}
+
+		return false, nil
+	})
+
+	if err != nil {
+		return errors.Wrapf(err, "fail to retrieve pod info for %s", pod)
+	}
+
+	return nil
 }

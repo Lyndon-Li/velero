@@ -94,6 +94,12 @@ spec:
                 - storageClass
                 - volumeSnapshot
                 type: object
+              dataMoverConfig:
+                additionalProperties:
+                  type: string
+                description: DataMoverConfig is for data-mover-specific configuration
+                  fields.
+                type: object
               datamover:
                 description: DataMover specifies the data mover to be used by the
                   backup. If DataMover is "" or "velero", the built-in data mover
@@ -105,7 +111,8 @@ spec:
                 type: string
               sourceNamespace:
                 description: SourceNamespace is the original namespace where the volume
-                  is backed up from.
+                  is backed up from. It is the same namespace for SourcePVC and CSI
+                  namespaced objects.
                 type: string
               sourcePVC:
                 description: SourcePVC is the name of the PVC which the snapshot is
@@ -115,7 +122,7 @@ spec:
                 additionalProperties:
                   type: string
                 description: Tags are a map of key-value pairs that should be applied
-                  to the volume backup as tags.
+                  to the snapshot backup as tags.
                 type: object
             required:
             - backupName

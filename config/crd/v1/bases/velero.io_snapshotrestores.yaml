@@ -69,6 +69,12 @@ spec:
                 description: BackupStorageLocation is the name of the backup storage
                   location where the backup repository is stored.
                 type: string
+              dataMoverConfig:
+                additionalProperties:
+                  type: string
+                description: DataMoverConfig is for data-mover-specific configuration
+                  fields.
+                type: object
               datamover:
                 description: DataMover specifies the data mover to be used by the
                   backup. If DataMover is "" or "velero", the built-in data mover
@@ -84,24 +90,27 @@ spec:
                 type: string
               sourceNamespace:
                 description: SourceNamespace is the original namespace where the volume
-                  is backed up from.
+                  is backed up from. It may be different from SourcePVC's namespace
+                  if namespace is remapped during restore.
                 type: string
               targetVolume:
                 description: TargetVolume is the information of the target PVC and
                   PV.
                 properties:
                   namespace:
-                    description: Namespace is the namespace of the target pvc
+                    description: Namespace is the namespace of the target PVC
+                    type: string
+                  operationTimeout:
+                    description: PVOperationTimeout specifies the time used to wait
+                      for PVC/PV operations, before returning error as timeout.
                     type: string
                   pv:
-                    description: PV is the name of the target pv
-                    type: string
-                  pvOperationTimeout:
-                    description: PVOperationTimeout specifies the time used to wait
-                      for PV operations, before returning error as timeout.
+                    description: PV is the name of the target PV that PVC binds to.
+                      It is created by this snapshot restore.
                     type: string
                   pvc:
-                    description: PVC is the name of the target pvc
+                    description: PVC is the name of the target PVC that is created
+                      by Velero restore
                     type: string
                   resources:
                     description: Resources specify the resource requirements of the
@@ -131,13 +140,13 @@ spec:
                         type: object
                     type: object
                   storageClass:
-                    description: StorageClass is the name of the storage class of
-                      the target PVC
+                    description: StorageClass is the name of the storage class used
+                      by the target PVC
                     type: string
                 required:
                 - namespace
+                - operationTimeout
                 - pv
-                - pvOperationTimeout
                 - pvc
                 - resources
                 - storageClass

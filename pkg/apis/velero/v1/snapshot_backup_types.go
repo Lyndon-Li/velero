@@ -23,7 +23,7 @@ import (
 // SnapshotBackupSpec is the specification for a SnapshotBackup.
 type SnapshotBackupSpec struct {
 	// SnapshotType is the type of the snapshot to be backed up.
-	SnapshotType string `json:"snapshotType"`
+	SnapshotType SnapshotType `json:"snapshotType"`
 
 	// If SnapshotType is CSI, CSISnapshot provides the information of the CSI snapshot.
 	CSISnapshot CSISnapshotSpec `json:"csiSnapshot"`
@@ -44,13 +44,24 @@ type SnapshotBackupSpec struct {
 	BackupStorageLocation string `json:"backupStorageLocation"`
 
 	// SourceNamespace is the original namespace where the volume is backed up from.
+	// It is the same namespace for SourcePVC and CSI namespaced objects.
 	SourceNamespace string `json:"sourceNamespace"`
 
+	// DataMoverConfig is for data-mover-specific configuration fields.
+	// +optional
+	DataMoverConfig map[string]string `json:"dataMoverConfig,omitempty"`
+
 	// Tags are a map of key-value pairs that should be applied to the
-	// volume backup as tags.
+	// snapshot backup as tags.
 	// +optional
 	Tags map[string]string `json:"tags,omitempty"`
 }
+
+type SnapshotType string
+
+const (
+	SnapshotTypeCSI SnapshotType = "CSI"
+)
 
 // CSISnapshotSpec is the specification for a CSI snapshot.
 type CSISnapshotSpec struct {

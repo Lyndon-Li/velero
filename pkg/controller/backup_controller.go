@@ -796,9 +796,6 @@ func (c *backupController) waitSnapshotBackup(backup *pkgbackup.Request, backupL
 
 	eg.Wait()
 
-	///sleep 1 min to make sure the plugin finishes its processing first whatever the processing is
-	time.Sleep(time.Minute)
-
 	return errs
 }
 

@@ -45,29 +45,35 @@ type SnapshotRestoreSpec struct {
 	SnapshotID string `json:"snapshotID"`
 
 	// SourceNamespace is the original namespace where the volume is backed up from.
+	// It may be different from SourcePVC's namespace if namespace is remapped during restore.
 	SourceNamespace string `json:"sourceNamespace"`
+
+	// DataMoverConfig is for data-mover-specific configuration fields.
+	// +optional
+	DataMoverConfig map[string]string `json:"dataMoverConfig,omitempty"`
 }
 
 // TargetPVCSpec is the specification for a target PVC.
 type TargetVolumeSpec struct {
-	// PVC is the name of the target pvc
+	// PVC is the name of the target PVC that is created by Velero restore
 	PVC string `json:"pvc"`
 
-	// PV is the name of the target pv
+	// PV is the name of the target PV that PVC binds to.
+	// It is created by this snapshot restore.
 	PV string `json:"pv"`
 
-	// Namespace is the namespace of the target pvc
+	// Namespace is the namespace of the target PVC
 	Namespace string `json:"namespace"`
 
-	// StorageClass is the name of the storage class of the target PVC
+	// StorageClass is the name of the storage class used by the target PVC
 	StorageClass string `json:"storageClass"`
 
 	// Resources specify the resource requirements of the target PVC
 	Resources corev1.ResourceRequirements `json:"resources"`
 
-	// PVOperationTimeout specifies the time used to wait for PV operations,
+	// PVOperationTimeout specifies the time used to wait for PVC/PV operations,
 	// before returning error as timeout.
-	PVOperationTimeout metav1.Duration `json:"pvOperationTimeout"`
+	OperationTimeout metav1.Duration `json:"operationTimeout"`
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.

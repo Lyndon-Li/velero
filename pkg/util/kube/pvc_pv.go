@@ -157,7 +157,7 @@ func DeletePVIfAny(ctx context.Context, pvGetter corev1client.PersistentVolumesG
 func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvc string, namespace string, timeout time.Duration) error {
 	err := pvcGetter.PersistentVolumeClaims(namespace).Delete(ctx, pvc, metav1.DeleteOptions{})
 	if err != nil {
-		return errors.Wrap(err, "error to delete pvc")
+		return errors.Wrapf(err, "error to delete pvc %s", pvc)
 	}
 
 	interval := 1 * time.Second
@@ -168,7 +168,7 @@ func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.PersistentVolum
 				return true, nil
 			}
 
-			return false, errors.Wrapf(err, fmt.Sprintf("failed to get pvc %s", pvc))
+			return false, errors.Wrapf(err, "failed to get pvc %s", pvc)
 		}
 
 		return false, nil
@@ -181,32 +181,28 @@ func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.PersistentVolum
 	return nil
 }
 
-func EnsureDeletePV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume, timeout time.Duration) error {
-	if pv == nil {
-		return nil
-	}
-
-	err := pvGetter.PersistentVolumes().Delete(ctx, pv.Name, metav1.DeleteOptions{})
+func EnsureDeletePV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv string, timeout time.Duration) error {
+	err := pvGetter.PersistentVolumes().Delete(ctx, pv, metav1.DeleteOptions{})
 	if err != nil {
-		return errors.Wrap(err, "error to delete pvc")
+		return errors.Wrapf(err, "error to delete pv %s", pv)
 	}
 
 	interval := 1 * time.Second
 	err = wait.PollImmediate(interval, timeout, func() (bool, error) {
-		_, err := pvGetter.PersistentVolumes().Get(ctx, pv.Name, metav1.GetOptions{})
+		_, err := pvGetter.PersistentVolumes().Get(ctx, pv, metav1.GetOptions{})
 		if err != nil {
 			if apierrors.IsNotFound(err) {
 				return true, nil
 			}
 
-			return false, errors.Wrapf(err, fmt.Sprintf("failed to get pvc %s", pv.Name))
+			return false, errors.Wrapf(err, "failed to get pv %s", pv)
 		}
 
 		return false, nil
 	})
 
 	if err != nil {
-		return errors.Wrapf(err, "fail to retrieve pvc info for %s", pv.Name)
+		return errors.Wrapf(err, "fail to retrieve pv info for %s", pv)
 	}
 
 	return nil
