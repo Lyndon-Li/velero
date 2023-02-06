@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -41,23 +42,17 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
-	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/datamover"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
-	"github.com/vmware-tanzu/velero/pkg/repository"
-	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
-	"github.com/vmware-tanzu/velero/pkg/uploader"
-	"github.com/vmware-tanzu/velero/pkg/uploader/provider"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/csi"
-	"github.com/vmware-tanzu/velero/pkg/util/datamover"
-	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	snapshotterClientSet "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
-	appsv1 "k8s.io/api/apps/v1"
+	batchv1api "k8s.io/api/batch/v1"
 )
 
 // SnapshotBackupReconciler reconciles a Snapshotbackup object
@@ -68,30 +63,13 @@ type SnapshotBackupReconciler struct {
 	csiSnapshotClient *snapshotterClientSet.Clientset
 	Clock             clock.Clock
 	Metrics           *metrics.ServerMetrics
-	CredentialGetter  *credentials.CredentialGetter
 	NodeName          string
-	FileSystem        filesystem.Interface
+	VeleroImage       string
 	Log               logrus.FieldLogger
-	RepositoryEnsurer *repository.RepositoryEnsurer
 }
 
-type SnapshotBackupProgressUpdater struct {
-	SnapshotBackup *velerov1api.SnapshotBackup
-	Log            logrus.FieldLogger
-	Ctx            context.Context
-	Cli            client.Client
-}
-
-type snapshotExposeResult struct {
-	csiExpose cSISnapshotExposeResult
-}
-
-type cSISnapshotExposeResult struct {
-	path string
-}
-
-func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient *snapshotterClientSet.Clientset, clock clock.Clock, metrics *metrics.ServerMetrics, cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, log logrus.FieldLogger) *SnapshotBackupReconciler {
-	return &SnapshotBackupReconciler{scheme, client, kubeClient, csiSnapshotClient, clock, metrics, cred, nodeName, fs, log, repository.NewRepositoryEnsurer(client, log)}
+func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient *snapshotterClientSet.Clientset, clock clock.Clock, metrics *metrics.ServerMetrics, nodeName string, image string, log logrus.FieldLogger) *SnapshotBackupReconciler {
+	return &SnapshotBackupReconciler{scheme, client, kubeClient, csiSnapshotClient, clock, metrics, nodeName, image, log}
 }
 
 // +kubebuilder:rbac:groups=velero.io,resources=snapshotbackup,verbs=get;list;watch;create;update;patch;delete
@@ -104,6 +82,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"controller":     "snapshotbackup",
 		"snapshotbackup": req.NamespacedName,
 	})
+
 	var ssb velerov1api.SnapshotBackup
 	if err := s.Client.Get(ctx, req.NamespacedName, &ssb); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -119,7 +98,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	switch ssb.Status.Phase {
-	case "", velerov1api.SnapshotBackupPhaseNew, velerov1api.SnapshotBackupPhasePrepared:
+	case "", velerov1api.SnapshotBackupPhaseNew, velerov1api.SnapshotBackupPhasePrepared, velerov1api.SnapshotBackupPhaseDataPathExit:
 		// Only process new items.
 	default:
 		log.WithField("phase", ssb.Status.Phase).Info("Snapshot backup is not new or Prepared, not processing")
@@ -129,15 +108,15 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	log.Infof("Snapshot backup starting with phase %v", ssb.Status.Phase)
 
 	if ssb.Status.Phase == "" || ssb.Status.Phase == velerov1api.SnapshotBackupPhaseNew {
-		if err := s.createObjectLock(ctx, &ssb); err != nil {
+		if _, err := s.createBackupJob(ctx, &ssb); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
-				return s.errorOut(ctx, &ssb, err, "error to create object lock", log)
+				return s.errorOut(ctx, &ssb, err, "error to create backup job", log)
 			} else {
 				return ctrl.Result{}, nil
 			}
 		}
 
-		log.Info("Object lock is created")
+		log.Info("Backup job is created")
 
 		if err := s.exposeSnapshot(ctx, &ssb, log); err != nil {
 			return s.errorOut(ctx, &ssb, err, "error to expose snapshot", log)
@@ -146,97 +125,63 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Info("Snapshot is exposed")
 
 		return ctrl.Result{}, nil
-	}
+	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhasePrepared {
+		_, _, err := s.waitBackupJob(ctx, &ssb, log)
+		if err != nil {
+			return s.errorOut(ctx, &ssb, err, "backup job is not ready", log)
+		}
 
-	sser, err := s.waitSnapshotExposed(ctx, &ssb, log)
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, "exposed snapshot is not ready", log)
-	} else if sser == nil {
+		exposed, err := s.waitSnapshotExposed(ctx, &ssb, log)
+		if err != nil {
+			return s.errorOut(ctx, &ssb, err, "exposed snapshot is not ready", log)
+		} else if !exposed {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Exposed snapshot is ready")
+
+		// Update status to InProgress.
+		original := ssb.DeepCopy()
+		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseInProgress
+		ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
+		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshotBackup status")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("SnapshotBackup is marked as in progress")
+
+		return ctrl.Result{}, err
+	} else {
+		//ssbOutput, err := s.getBackupResult(ctx, &ssb, log)
+		err := s.checkBackupResult(ctx, &ssb, log)
+		if err != nil {
+			return s.errorOut(ctx, &ssb, err, "error check snapshot backup result", log)
+		}
+		// if err != nil {
+		// 	return s.errorOut(ctx, &ssb, err, "error get snapshot backup result", log)
+		// } else if ssbOutput.ExitCode != 0 {
+		// 	return s.errorOut(ctx, &ssb, err, fmt.Sprintf("running backup, stderr=%v", ssbOutput.Message), log)
+		// }
+
+		log.Info("cleaning up exposed snapshot")
+		if delErr := s.cleanUpSnapshot(ctx, &ssb, log); delErr != nil {
+			return s.errorOut(ctx, &ssb, err, "error clean up exposed snapshot", log)
+		}
+
+		// Update status to Completed with path & snapshot ID.
+		original := ssb.DeepCopy()
+		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCompleted
+		// ssb.Status.SnapshotID = ssbOutput.SnapshotID
+		ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
+
+		if err = s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating PodVolumeBackup status")
+			return ctrl.Result{}, err
+		}
+		log.Info("snapshot backup completed")
 		return ctrl.Result{}, nil
 	}
-
-	log.Info("Exposed snapshot is ready")
-
-	// Update status to InProgress.
-	original := ssb.DeepCopy()
-	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseInProgress
-	ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
-	if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
-		log.WithError(err).Error("error updating SnapshotBackup status")
-		return ctrl.Result{}, err
-	}
-
-	log.Info("SnapshotBackup is marked as in progress")
-
-	s.closeObjectLock(ctx, &ssb, log)
-
-	backupLocation := &velerov1api.BackupStorageLocation{}
-	if err := s.Client.Get(context.Background(), client.ObjectKey{
-		Namespace: ssb.Namespace,
-		Name:      ssb.Spec.BackupStorageLocation,
-	}, backupLocation); err != nil {
-		return s.errorOut(ctx, &ssb, err, "error getting backup storage location", log)
-	}
-
-	backupRepo, err := s.RepositoryEnsurer.EnsureRepo(ctx, ssb.Namespace, ssb.Spec.SourceNamespace, ssb.Spec.BackupStorageLocation, datamover.GetUploaderType(ssb.Spec.DataMover))
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, "error ensure backup repository", log)
-	}
-
-	var uploaderProv provider.Provider
-	uploaderProv, err = NewUploaderProviderFunc(ctx, s.Client, datamover.GetUploaderType(ssb.Spec.DataMover), "",
-		backupLocation, backupRepo, s.CredentialGetter, repokey.RepoKeySelector(), log)
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, "error creating uploader", log)
-	}
-
-	// If this is a PVC, look for the most recent completed pod volume backup for it and get
-	// its snapshot ID to do new backup based on it. Without this,
-	// if the pod using the PVC (and therefore the directory path under /host_pods/) has
-	// changed since the PVC's last backup, for backup, it will not be able to identify a suitable
-	// parent snapshot to use, and will have to do a full rescan of the contents of the PVC.
-	var parentSnapshotID string
-	if pvcUID, ok := ssb.Labels[velerov1api.PVCUIDLabel]; ok {
-		parentSnapshotID = s.getParentSnapshot(ctx, log, pvcUID, &ssb)
-		if parentSnapshotID == "" {
-			log.Info("No parent snapshot found for PVC, not based on parent snapshot for this backup")
-		} else {
-			log.WithField("parentSnapshotID", parentSnapshotID).Info("Based on parent snapshot for this backup")
-		}
-	}
-
-	defer func() {
-		if err := uploaderProv.Close(ctx); err != nil {
-			log.Errorf("failed to close uploader provider with error %v", err)
-		}
-	}()
-
-	snapshotID, emptySnapshot, err := uploaderProv.RunBackup(ctx, sser.csiExpose.path, ssb.Spec.Tags, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(&ssb, log, ctx))
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, fmt.Sprintf("running backup, stderr=%v", err), log)
-	}
-
-	log.Info("cleaning up exposed snapshot")
-	if delErr := s.cleanUpSnapshot(ctx, &ssb, log); delErr != nil {
-		return s.errorOut(ctx, &ssb, err, "error clean up exposed snapshot", log)
-	}
-
-	// Update status to Completed with path & snapshot ID.
-	original = ssb.DeepCopy()
-	ssb.Status.Path = sser.csiExpose.path
-	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCompleted
-	ssb.Status.SnapshotID = snapshotID
-	ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
-	if emptySnapshot {
-		ssb.Status.Message = "volume was empty so no snapshot was taken"
-	}
-	if err = s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
-		log.WithError(err).Error("error updating PodVolumeBackup status")
-		return ctrl.Result{}, err
-	}
-	log.Info("snapshot backup completed")
-	return ctrl.Result{}, nil
-
 }
 
 // SetupWithManager registers the SnapshotBackup controller.
@@ -254,11 +199,15 @@ func (r *SnapshotBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 					r.Log.WithField("pod", newObj.Name).Info("Pod is a snapshot backup")
 
-					if newObj.Status.Phase != v1.PodRunning {
+					if newObj.Spec.NodeName == "" {
 						return false
 					}
 
-					if newObj.Spec.NodeName == "" {
+					if newObj.Status.Phase == v1.PodPending {
+						return false
+					}
+
+					if newObj.Status.Phase == v1.PodUnknown {
 						return false
 					}
 
@@ -291,15 +240,23 @@ func (r *SnapshotBackupReconciler) findSnapshotBackupForPod(podObj client.Object
 		return []reconcile.Request{}
 	}
 
-	if ssb.Status.Phase != "" && ssb.Status.Phase != velerov1api.SnapshotBackupPhaseNew {
-		return []reconcile.Request{}
+	if pod.Status.Phase == corev1.PodRunning {
+		if ssb.Status.Phase != "" && ssb.Status.Phase != velerov1api.SnapshotBackupPhaseNew {
+			return []reconcile.Request{}
+		}
+
+		r.Log.WithField("Backup pod", pod.Name).Infof("Preparing SnapshotBackup %s", ssb.Name)
+		r.patchSnapshotBackup(context.Background(), ssb, prepareSnapshotBackup)
+	} else {
+		if ssb.Status.Phase != velerov1api.SnapshotBackupPhaseInProgress {
+			return []reconcile.Request{}
+		}
+
+		r.Log.WithField("Backup pod", pod.Name).Infof("Data path exits for SnapshotBackup %s", ssb.Name)
+		r.patchSnapshotBackup(context.Background(), ssb, snapshotBackupDataPathExit)
 	}
 
 	requests := make([]reconcile.Request, 1)
-
-	r.Log.WithField("Backup pod", pod.Name).Infof("Preparing SnapshotBackup %s", ssb.Name)
-	r.patchSnapshotBackup(context.Background(), ssb, prepareSnapshotBackup)
-
 	requests[0] = reconcile.Request{
 		NamespacedName: types.NamespacedName{
 			Namespace: ssb.Namespace,
@@ -324,67 +281,12 @@ func prepareSnapshotBackup(ssb *velerov1api.SnapshotBackup) {
 	ssb.Status.Phase = velerov1api.SnapshotBackupPhasePrepared
 }
 
-// getParentSnapshot finds the most recent completed PodVolumeBackup for the
-// specified PVC and returns its snapshot ID. Any errors encountered are
-// logged but not returned since they do not prevent a backup from proceeding.
-func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log logrus.FieldLogger, pvcUID string, ssb *velerov1api.SnapshotBackup) string {
-	log = log.WithField("pvcUID", pvcUID)
-	log.Infof("Looking for most recent completed SnapshotBackup for this PVC")
-
-	listOpts := &client.ListOptions{
-		Namespace: ssb.Namespace,
-	}
-	matchingLabels := client.MatchingLabels(map[string]string{velerov1api.PVCUIDLabel: pvcUID})
-	matchingLabels.ApplyToList(listOpts)
-
-	var ssbList velerov1api.SnapshotBackupList
-	if err := r.Client.List(ctx, &ssbList, listOpts); err != nil {
-		log.WithError(errors.WithStack(err)).Error("getting list of SnapshotBackups for this PVC")
-	}
-
-	// Go through all the podvolumebackups for the PVC and look for the most
-	// recent completed one to use as the parent.
-	var mostRecentSSB velerov1api.SnapshotBackup
-	for _, ssbItem := range ssbList.Items {
-		if datamover.GetUploaderType(ssbItem.Spec.DataMover) != datamover.GetUploaderType(ssb.Spec.DataMover) {
-			continue
-		}
-		if ssbItem.Status.Phase != velerov1api.SnapshotBackupPhaseCompleted {
-			continue
-		}
-
-		if ssbItem.Spec.BackupStorageLocation != ssb.Spec.BackupStorageLocation {
-			// Check the backup storage location is the same as spec in order to
-			// support backup to multiple backup-locations. Otherwise, there exists
-			// a case that backup volume snapshot to the second location would
-			// failed, since the founded parent ID is only valid for the first
-			// backup location, not the second backup location. Also, the second
-			// backup should not use the first backup parent ID since its for the
-			// first backup location only.
-			continue
-		}
-
-		if mostRecentSSB.Status == (velerov1api.SnapshotBackupStatus{}) || ssb.Status.StartTimestamp.After(mostRecentSSB.Status.StartTimestamp.Time) {
-			mostRecentSSB = ssbItem
-		}
-	}
-
-	if mostRecentSSB.Status == (velerov1api.SnapshotBackupStatus{}) {
-		log.Info("No completed SnapshotBackup found for PVC")
-		return ""
-	}
-
-	log.WithFields(map[string]interface{}{
-		"parentSnapshotBackup": mostRecentSSB.Name,
-		"parentSnapshotID":     mostRecentSSB.Status.SnapshotID,
-	}).Info("Found most recent completed SnapshotBackup for PVC")
-
-	return mostRecentSSB.Status.SnapshotID
+func snapshotBackupDataPathExit(ssb *velerov1api.SnapshotBackup) {
+	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseDataPathExit
 }
 
 func (s *SnapshotBackupReconciler) errorOut(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
 	s.cleanUpSnapshot(ctx, ssb, log)
-	s.closeObjectLock(ctx, ssb, log)
 
 	return s.updateStatusToFailed(ctx, ssb, err, msg, log)
 }
@@ -405,30 +307,12 @@ func (s *SnapshotBackupReconciler) updateStatusToFailed(ctx context.Context, ssb
 	return ctrl.Result{}, nil
 }
 
-func (s *SnapshotBackupReconciler) NewSnapshotBackupProgressUpdater(ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger, ctx context.Context) *SnapshotBackupProgressUpdater {
-	return &SnapshotBackupProgressUpdater{ssb, log, ctx, s.Client}
-}
+func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *velerov1api.SnapshotBackup) (*corev1.Pod, error) {
+	podName := ssb.Name
 
-//UpdateProgress which implement ProgressUpdater interface to update snapshot backup progress status
-func (s *SnapshotBackupProgressUpdater) UpdateProgress(p *uploader.UploaderProgress) {
-	original := s.SnapshotBackup.DeepCopy()
-	backupPVCName := s.SnapshotBackup.Name
-	s.SnapshotBackup.Status.Progress = velerov1api.DataMoveOperationProgress{TotalBytes: p.TotalBytes, BytesDone: p.BytesDone}
-	if s.Cli == nil {
-		s.Log.Errorf("failed to update snapshot %s backup progress with uninitailize client", backupPVCName)
-		return
-	}
-	if err := s.Cli.Patch(s.Ctx, s.SnapshotBackup, client.MergeFrom(original)); err != nil {
-		s.Log.Errorf("update backup snapshot %s  progress with %v", backupPVCName, err)
-	}
-}
-
-func (r *SnapshotBackupReconciler) createObjectLock(ctx context.Context, ssb *velerov1api.SnapshotBackup) error {
-	deployName := ssb.Name
-	var replicas int32 = 0
-	deploy := &appsv1.Deployment{
+	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      deployName,
+			Name:      podName,
 			Namespace: ssb.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{
@@ -443,80 +327,32 @@ func (r *SnapshotBackupReconciler) createObjectLock(ctx context.Context, ssb *ve
 				velerov1api.SnapshotBackupLabel: ssb.Name,
 			},
 		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{velerov1api.SnapshotBackupLabel: ssb.Name}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{velerov1api.SnapshotBackupLabel: ssb.Name},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  deployName,
-							Image: "gcr.io/velero-gcp/busybox",
-						},
-					},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:    podName,
+					Image:   r.VeleroImage,
+					Command: []string{"dm", "snapshot-backup", ssb.Name},
 				},
 			},
 		},
 	}
 
-	_, err := r.kubeClient.AppsV1().Deployments(ssb.Namespace).Create(ctx, deploy, metav1.CreateOptions{})
+	switch ssb.Spec.SnapshotType {
+	case velerov1api.SnapshotTypeCSI:
+		r.buildCSIBackupPodSpec(&pod.Spec, ssb)
+	}
 
-	return err
-}
-
-func (r *SnapshotBackupReconciler) closeObjectLock(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) {
-	deployName := ssb.Name
-
-	deploy, err := r.kubeClient.AppsV1().Deployments(ssb.Namespace).Get(ctx, deployName, metav1.GetOptions{})
+	updated, err := r.kubeClient.CoreV1().Pods(ssb.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.WithField("deploy", deployName).WithError(err).Error("error to get object lock")
-		}
-
-		return
+		return nil, errors.Wrap(err, "error to create backup pod")
 	}
 
-	r.kubeClient.AppsV1().Deployments(deploy.Namespace).Delete(ctx, deploy.Name, metav1.DeleteOptions{})
-	if err != nil {
-		log.WithField("deploy", deployName).WithError(err).Error("error to delete object lock")
-	}
+	return updated, nil
 }
 
-func (r *SnapshotBackupReconciler) exposeSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
-	switch ssb.Spec.SnapshotType {
-	case velerov1api.SnapshotTypeCSI:
-		return r.exposeCSISnapshot(ctx, ssb, log)
-	default:
-		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
-	}
-}
-
-func (r *SnapshotBackupReconciler) waitSnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup,
-	log logrus.FieldLogger) (*snapshotExposeResult, error) {
-	switch ssb.Spec.SnapshotType {
-	case velerov1api.SnapshotTypeCSI:
-		return r.waitCSISnapshotExposed(ctx, ssb, log)
-	default:
-		return nil, errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
-	}
-}
-
-func (r *SnapshotBackupReconciler) cleanUpSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
-	switch ssb.Spec.SnapshotType {
-	case velerov1api.SnapshotTypeCSI:
-		return r.cleanUpCSISnapshot(ctx, ssb, log)
-	default:
-		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
-	}
-}
-
-func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup,
-	log logrus.FieldLogger) (*snapshotExposeResult, error) {
+func (r *SnapshotBackupReconciler) getBackupPod(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) (*corev1.Pod, error) {
 	backupPodName := ssb.Name
-	backupPVCName := ssb.Name
 
 	pod := &corev1.Pod{}
 	err := r.Client.Get(ctx, types.NamespacedName{
@@ -534,9 +370,182 @@ func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, s
 
 	log.WithField("pod", pod.Name).Infof("Backup pod is in running state in node %s", r.NodeName)
 
+	return pod, nil
+}
+
+func (r *SnapshotBackupReconciler) createBackupJob(ctx context.Context, ssb *velerov1api.SnapshotBackup) (*batchv1api.Job, error) {
+	backupJobName := ssb.Name
+	var parallelism int32 = 1
+	var backupoffLimit int32 = 0
+
+	job := &batchv1api.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      backupJobName,
+			Namespace: ssb.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					Kind:       "SnapshotBackup",
+					Name:       ssb.Name,
+					UID:        ssb.UID,
+					Controller: boolptr.True(),
+				},
+			},
+			Labels: map[string]string{
+				velerov1api.SnapshotBackupLabel: ssb.Name,
+			},
+		},
+		Spec: batchv1api.JobSpec{
+			Parallelism:  &parallelism,
+			BackoffLimit: &backupoffLimit,
+			Selector:     &metav1.LabelSelector{MatchLabels: map[string]string{velerov1api.SnapshotBackupLabel: ssb.Name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{velerov1api.SnapshotBackupLabel: ssb.Name},
+				},
+				Spec: corev1.PodSpec{
+					Containers: []corev1.Container{
+						{
+							Name:    backupJobName,
+							Image:   r.VeleroImage,
+							Command: []string{"dm", "snapshot-backup", ssb.Name},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	switch ssb.Spec.SnapshotType {
+	case velerov1api.SnapshotTypeCSI:
+		r.buildCSIBackupPodSpec(&job.Spec.Template.Spec, ssb)
+	}
+
+	updated, err := r.kubeClient.BatchV1().Jobs(ssb.Namespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "error to create backup job")
+	}
+
+	return updated, nil
+}
+
+func (r *SnapshotBackupReconciler) buildCSIBackupPodSpec(podSpec *v1.PodSpec, ssb *velerov1api.SnapshotBackup) {
+	backupPVCName := ssb.Name
+
+	podSpec.Containers[0].VolumeMounts = append(podSpec.Containers[0].VolumeMounts, corev1.VolumeMount{
+		Name:      backupPVCName,
+		MountPath: datamover.GetPodMountPath(),
+	})
+
+	podSpec.Volumes = append(podSpec.Volumes, corev1.Volume{
+		Name: backupPVCName,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: backupPVCName,
+			},
+		},
+	})
+}
+
+func (r *SnapshotBackupReconciler) waitBackupJob(ctx context.Context, ssb *velerov1api.SnapshotBackup,
+	log logrus.FieldLogger) (*batchv1api.Job, *corev1.Pod, error) {
+	backupJobName := ssb.Name
+
+	pod, err := r.getBackupPod(ctx, ssb, log)
+	if pod == nil {
+		return nil, nil, err
+	}
+
+	job := &batchv1api.Job{}
+	r.Client.Get(ctx, types.NamespacedName{
+		Namespace: ssb.Namespace,
+		Name:      backupJobName,
+	}, job)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "error to get backup pod %s", backupJobName)
+	}
+
+	log.WithField("job", job.Name).Infof("Backup job is ready")
+
+	return job, pod, nil
+}
+
+func (r *SnapshotBackupReconciler) checkBackupResult(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+	pod, err := r.getBackupPod(ctx, ssb, log)
+	if pod == nil {
+		return errors.Wrap(err, "error to get backup pod")
+	}
+
+	if pod.Status.Phase == corev1.PodFailed {
+		return errors.Errorf("backup failed with message %s", pod.Status.Message)
+	}
+
+	if pod.Status.ContainerStatuses[0].State.Terminated == nil {
+		return errors.New("backup pod doesn't seem to complete")
+	}
+
+	return nil
+}
+
+func (r *SnapshotBackupReconciler) getBackupResult(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) (*datamover.SnapshotBackupOutput, error) {
+	pod, err := r.getBackupPod(ctx, ssb, log)
+	if pod == nil {
+		return nil, errors.Wrap(err, "error to get backup pod")
+	}
+
+	ssbOutput := &datamover.SnapshotBackupOutput{}
+
+	if pod.Status.Phase == corev1.PodFailed {
+		ssbOutput.ExitCode = -1
+		ssbOutput.Message = fmt.Sprintf("Backup pod failed with message %s", pod.Status.Message)
+	} else {
+		if pod.Status.ContainerStatuses[0].State.Terminated == nil {
+			ssbOutput.ExitCode = -1
+			ssbOutput.Message = "Backup pod doesn't seem to complete"
+		} else {
+			json.Unmarshal([]byte(pod.Status.ContainerStatuses[0].State.Terminated.Message), ssbOutput)
+		}
+	}
+
+	return ssbOutput, nil
+}
+
+func (r *SnapshotBackupReconciler) exposeSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+	switch ssb.Spec.SnapshotType {
+	case velerov1api.SnapshotTypeCSI:
+		return r.exposeCSISnapshot(ctx, ssb, log)
+	default:
+		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
+	}
+}
+
+func (r *SnapshotBackupReconciler) waitSnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) (bool, error) {
+	switch ssb.Spec.SnapshotType {
+	case velerov1api.SnapshotTypeCSI:
+		return r.waitCSISnapshotExposed(ctx, ssb, log)
+	default:
+		return false, errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
+	}
+}
+
+func (r *SnapshotBackupReconciler) cleanUpSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+	backupPodName := ssb.Name
+	kube.DeletePodIfAny(ctx, r.kubeClient.CoreV1(), backupPodName, ssb.Namespace, log)
+
+	switch ssb.Spec.SnapshotType {
+	case velerov1api.SnapshotTypeCSI:
+		return r.cleanUpCSISnapshot(ctx, ssb, log)
+	default:
+		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
+	}
+}
+
+func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) (bool, error) {
+	backupPVCName := ssb.Name
+
 	pvc := &corev1.PersistentVolumeClaim{}
 	pollInterval := 2 * time.Second
-	err = wait.PollImmediate(pollInterval, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration, func() (done bool, err error) {
+	err := wait.PollImmediate(pollInterval, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration, func() (done bool, err error) {
 		if err := r.Client.Get(ctx, types.NamespacedName{
 			Namespace: ssb.Namespace,
 			Name:      backupPVCName,
@@ -550,32 +559,21 @@ func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, s
 	if err != nil {
 		if err == wait.ErrWaitTimeout {
 			log.WithField("backup pvc", backupPVCName).Error("backup pvc is not bound till timeout")
-			return nil, nil
+			return false, nil
 		} else {
-			return nil, errors.Wrapf(err, "error to get backup PVC %s", backupPVCName)
+			return false, errors.Wrapf(err, "error to get backup PVC %s", backupPVCName)
 		}
 	}
 
 	log.WithField("backup pvc", backupPVCName).Info("Backup PVC is bound")
 
-	sser := snapshotExposeResult{}
-
-	sser.csiExpose.path, err = datamover.GetPodVolumeHostPath(ctx, pod, pvc, r.Client, r.FileSystem, log)
-	if err != nil {
-		return nil, errors.Wrap(err, "error to get backup pvc host path")
-	}
-
-	log.WithField("backup pod", pod.Name).WithField("backup pvc", pvc.Name).Infof("Got backup PVC host path %s", sser.csiExpose.path)
-
-	return &sser, nil
+	return true, nil
 }
 
 func (r *SnapshotBackupReconciler) cleanUpCSISnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
-	backupPodName := ssb.Name
 	backupPVCName := ssb.Name
 	backupVSName := ssb.Name
 
-	kube.DeletePodIfAny(ctx, r.kubeClient.CoreV1(), backupPodName, ssb.Namespace, log)
 	kube.DeletePVCIfAny(ctx, r.kubeClient.CoreV1(), backupPVCName, ssb.Namespace, log)
 	csi.DeleteVolumeSnapshotIfAny(ctx, r.csiSnapshotClient, backupVSName, ssb.Namespace, log)
 	csi.DeleteVolumeSnapshotIfAny(ctx, r.csiSnapshotClient, ssb.Spec.CSISnapshot.VolumeSnapshot, ssb.Spec.SourceNamespace, log)
@@ -691,19 +689,6 @@ func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *v
 		}
 	}()
 
-	backupPod, err := r.createBackupPod(ctx, ssb, backupPVC)
-	if err != nil {
-		return errors.Wrap(err, "error to create backup pod")
-	}
-
-	curLog.WithField("pod name", backupPod.Name).Info("Backup pod is created")
-
-	defer func() {
-		if err != nil {
-			kube.DeletePodIfAny(ctx, r.kubeClient.CoreV1(), backupPod.Name, backupPod.Namespace, log)
-		}
-	}()
-
 	return nil
 }
 
@@ -777,55 +762,4 @@ func (r *SnapshotBackupReconciler) createBackupPVC(ctx context.Context, ssb *vel
 	}
 
 	return pvc, err
-}
-
-func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *velerov1api.SnapshotBackup, backupPVC *corev1.PersistentVolumeClaim) (*corev1.Pod, error) {
-	podName := ssb.Name
-
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podName,
-			Namespace: ssb.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
-					Kind:       "SnapshotBackup",
-					Name:       ssb.Name,
-					UID:        ssb.UID,
-					Controller: boolptr.True(),
-				},
-			},
-			Labels: map[string]string{
-				velerov1api.SnapshotBackupLabel: ssb.Name,
-			},
-		},
-		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{
-				{
-					Name:    podName,
-					Image:   "gcr.io/velero-gcp/busybox",
-					Command: []string{"sleep", "infinity"},
-					VolumeMounts: []corev1.VolumeMount{{
-						Name:      backupPVC.Name,
-						MountPath: "/" + backupPVC.Name,
-					}},
-				},
-			},
-			Volumes: []corev1.Volume{{
-				Name: backupPVC.Name,
-				VolumeSource: corev1.VolumeSource{
-					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: backupPVC.Name,
-					},
-				},
-			}},
-		},
-	}
-
-	updated, err := r.kubeClient.CoreV1().Pods(ssb.Namespace).Create(ctx, pod, metav1.CreateOptions{})
-	if err != nil {
-		return nil, errors.Wrap(err, "error to create backup pod")
-	}
-
-	return updated, nil
 }

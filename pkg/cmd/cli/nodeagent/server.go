@@ -46,6 +46,7 @@ import (
 	snapshotv1client "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
+	"github.com/vmware-tanzu/velero/internal/velero"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/buildinfo"
 	"github.com/vmware-tanzu/velero/pkg/client"
@@ -232,8 +233,8 @@ func (s *nodeAgentServer) run() {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
 
-	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, s.csiSnapshotClient, clock.RealClock{}, s.metrics, credentialGetter,
-		s.nodeName, filesystem.NewFileSystem(), s.logger).SetupWithManager(s.mgr); err != nil {
+	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, s.csiSnapshotClient, clock.RealClock{},
+		s.metrics, s.nodeName, velero.DefaultVeleroImage(), s.logger).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the snapshot backup controller")
 	}
 	if err = controller.NewSnapshotRestoreReconciler(s.logger, s.mgr.GetClient(), s.kubeClient, credentialGetter, s.nodeName).SetupWithManager(s.mgr); err != nil {

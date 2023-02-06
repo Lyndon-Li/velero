@@ -60,3 +60,7 @@ func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, pvc *corev1.Pers
 
 	return path, nil
 }
+
+func GetPodMountPath() string {
+	return "/var/snapshot_data_mover"
+}

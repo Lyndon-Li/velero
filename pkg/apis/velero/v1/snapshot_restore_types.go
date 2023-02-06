@@ -77,15 +77,16 @@ type TargetVolumeSpec struct {
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;Completed;Failed
+// +kubebuilder:validation:Enum=New;Prepared;InProgress;DataPathExit;Completed;Failed
 type SnapshotRestorePhase string
 
 const (
-	SnapshotRestorePhaseNew        SnapshotRestorePhase = "New"
-	SnapshotRestorePhasePrepared   SnapshotRestorePhase = "Prepared"
-	SnapshotRestorePhaseInProgress SnapshotRestorePhase = "InProgress"
-	SnapshotRestorePhaseCompleted  SnapshotRestorePhase = "Completed"
-	SnapshotRestorePhaseFailed     SnapshotRestorePhase = "Failed"
+	SnapshotRestorePhaseNew          SnapshotRestorePhase = "New"
+	SnapshotRestorePhasePrepared     SnapshotRestorePhase = "Prepared"
+	SnapshotRestorePhaseInProgress   SnapshotRestorePhase = "InProgress"
+	SnapshotRestorePhaseDataPathExit SnapshotBackupPhase  = "DataPathExit"
+	SnapshotRestorePhaseCompleted    SnapshotRestorePhase = "Completed"
+	SnapshotRestorePhaseFailed       SnapshotRestorePhase = "Failed"
 )
 
 // SnapshotRestoreStatus is the current status of a SnapshotRestore.

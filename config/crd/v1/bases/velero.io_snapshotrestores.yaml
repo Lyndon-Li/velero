@@ -178,6 +178,7 @@ spec:
                 - New
                 - Prepared
                 - InProgress
+                - DataPathExit
                 - Completed
                 - Failed
                 type: string
