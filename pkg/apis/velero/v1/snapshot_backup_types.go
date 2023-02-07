@@ -77,11 +77,12 @@ type CSISnapshotSpec struct {
 }
 
 // SnapshotBackupPhase represents the lifecycle phase of a SnapshotBackup.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Completed;Failed
 type SnapshotBackupPhase string
 
 const (
 	SnapshotBackupPhaseNew        SnapshotBackupPhase = "New"
+	SnapshotBackupPhaseAccepted   SnapshotBackupPhase = "Accepted"
 	SnapshotBackupPhasePrepared   SnapshotBackupPhase = "Prepared"
 	SnapshotBackupPhaseInProgress SnapshotBackupPhase = "InProgress"
 	SnapshotBackupPhaseCompleted  SnapshotBackupPhase = "Completed"

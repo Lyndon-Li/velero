@@ -77,11 +77,12 @@ type TargetVolumeSpec struct {
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Completed;Failed
 type SnapshotRestorePhase string
 
 const (
 	SnapshotRestorePhaseNew        SnapshotRestorePhase = "New"
+	SnapshotRestorePhaseAccepted   SnapshotRestorePhase = "Accepted"
 	SnapshotRestorePhasePrepared   SnapshotRestorePhase = "Prepared"
 	SnapshotRestorePhaseInProgress SnapshotRestorePhase = "InProgress"
 	SnapshotRestorePhaseCompleted  SnapshotRestorePhase = "Completed"

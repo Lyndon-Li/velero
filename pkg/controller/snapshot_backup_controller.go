@@ -57,7 +57,6 @@ import (
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	snapshotterClientSet "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
-	appsv1 "k8s.io/api/apps/v1"
 )
 
 // SnapshotBackupReconciler reconciles a Snapshotbackup object
@@ -129,15 +128,16 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	log.Infof("Snapshot backup starting with phase %v", ssb.Status.Phase)
 
 	if ssb.Status.Phase == "" || ssb.Status.Phase == velerov1api.SnapshotBackupPhaseNew {
-		if err := s.createObjectLock(ctx, &ssb); err != nil {
-			if !apierrors.IsAlreadyExists(err) {
-				return s.errorOut(ctx, &ssb, err, "error to create object lock", log)
-			} else {
-				return ctrl.Result{}, nil
-			}
+		accepted, err := s.acceptSnapshotBackup(ctx, &ssb)
+		if err != nil {
+			return s.errorOut(ctx, &ssb, err, "error to accept the snapshot backup", log)
 		}
 
-		log.Info("Object lock is created")
+		if !accepted {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Snapshot backup is accepted")
 
 		if err := s.exposeSnapshot(ctx, &ssb, log); err != nil {
 			return s.errorOut(ctx, &ssb, err, "error to expose snapshot", log)
@@ -167,8 +167,6 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	log.Info("SnapshotBackup is marked as in progress")
-
-	s.closeObjectLock(ctx, &ssb, log)
 
 	backupLocation := &velerov1api.BackupStorageLocation{}
 	if err := s.Client.Get(context.Background(), client.ObjectKey{
@@ -252,8 +250,6 @@ func (r *SnapshotBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						return false
 					}
 
-					r.Log.WithField("pod", newObj.Name).Info("Pod is a snapshot backup")
-
 					if newObj.Status.Phase != v1.PodRunning {
 						return false
 					}
@@ -291,7 +287,7 @@ func (r *SnapshotBackupReconciler) findSnapshotBackupForPod(podObj client.Object
 		return []reconcile.Request{}
 	}
 
-	if ssb.Status.Phase != "" && ssb.Status.Phase != velerov1api.SnapshotBackupPhaseNew {
+	if ssb.Status.Phase != velerov1api.SnapshotBackupPhaseAccepted {
 		return []reconcile.Request{}
 	}
 
@@ -384,7 +380,6 @@ func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log lo
 
 func (s *SnapshotBackupReconciler) errorOut(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
 	s.cleanUpSnapshot(ctx, ssb, log)
-	s.closeObjectLock(ctx, ssb, log)
 
 	return s.updateStatusToFailed(ctx, ssb, err, msg, log)
 }
@@ -423,65 +418,22 @@ func (s *SnapshotBackupProgressUpdater) UpdateProgress(p *uploader.UploaderProgr
 	}
 }
 
-func (r *SnapshotBackupReconciler) createObjectLock(ctx context.Context, ssb *velerov1api.SnapshotBackup) error {
-	deployName := ssb.Name
-	var replicas int32 = 0
-	deploy := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      deployName,
-			Namespace: ssb.Namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
-					Kind:       "SnapshotBackup",
-					Name:       ssb.Name,
-					UID:        ssb.UID,
-					Controller: boolptr.True(),
-				},
-			},
-			Labels: map[string]string{
-				velerov1api.SnapshotBackupLabel: ssb.Name,
-			},
-		},
-		Spec: appsv1.DeploymentSpec{
-			Replicas: &replicas,
-			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{velerov1api.SnapshotBackupLabel: ssb.Name}},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{velerov1api.SnapshotBackupLabel: ssb.Name},
-				},
-				Spec: corev1.PodSpec{
-					Containers: []corev1.Container{
-						{
-							Name:  deployName,
-							Image: "gcr.io/velero-gcp/busybox",
-						},
-					},
-				},
-			},
-		},
-	}
+func (r *SnapshotBackupReconciler) acceptSnapshotBackup(ctx context.Context, ssb *velerov1api.SnapshotBackup) (bool, error) {
+	updated := ssb.DeepCopy()
+	updated.Status.Phase = velerov1api.SnapshotBackupPhaseAccepted
 
-	_, err := r.kubeClient.AppsV1().Deployments(ssb.Namespace).Create(ctx, deploy, metav1.CreateOptions{})
+	r.Log.Infof("Accepting snapshot backup %s", ssb.Name)
 
-	return err
-}
+	time.Sleep(2 * time.Second)
 
-func (r *SnapshotBackupReconciler) closeObjectLock(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) {
-	deployName := ssb.Name
-
-	deploy, err := r.kubeClient.AppsV1().Deployments(ssb.Namespace).Get(ctx, deployName, metav1.GetOptions{})
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.WithField("deploy", deployName).WithError(err).Error("error to get object lock")
-		}
-
-		return
-	}
-
-	r.kubeClient.AppsV1().Deployments(deploy.Namespace).Delete(ctx, deploy.Name, metav1.DeleteOptions{})
-	if err != nil {
-		log.WithField("deploy", deployName).WithError(err).Error("error to delete object lock")
+	err := r.Client.Update(ctx, updated)
+	if err == nil {
+		return true, nil
+	} else if apierrors.IsConflict(err) {
+		r.Log.WithField("SnapshotBackup", ssb.Name).Error("This snapshot backup has been accepted by others")
+		return false, nil
+	} else {
+		return false, err
 	}
 }
 

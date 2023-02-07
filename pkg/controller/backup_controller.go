@@ -742,7 +742,7 @@ func (c *backupController) waitSnapshotBackup(backup *pkgbackup.Request, backupL
 	ctx := context.Background()
 
 	eg, _ := errgroup.WithContext(ctx)
-	timeout := backup.Spec.CSISnapshotTimeout.Duration
+	timeout := 4 * time.Hour
 	interval := 5 * time.Second
 	var errs []error
 

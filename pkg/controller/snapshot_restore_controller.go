@@ -120,13 +120,19 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log.Infof("Snapshot restore starting with phase %v", ssr.Status.Phase)
 
 	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1api.SnapshotRestorePhaseNew {
+		accepted, err := s.acceptSnapshotRestore(ctx, ssr)
+		if err != nil {
+			return s.errorOut(ctx, ssr, err, "error to accept the snapshot restore", log)
+		}
+
+		if !accepted {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Snapshot restore is accepted")
 
 		if err := s.createRestorePod(ctx, ssr, log); err != nil {
-			if !apierrors.IsAlreadyExists(err) {
-				return s.errorOut(ctx, ssr, err, "error creating restore pod", log)
-			} else {
-				return ctrl.Result{}, nil
-			}
+			return s.errorOut(ctx, ssr, err, "error creating restore pod", log)
 		}
 
 		log.Info("Snapshot restore pod is created")
@@ -229,8 +235,6 @@ func (s *SnapshotRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						return false
 					}
 
-					s.logger.WithField("pod", newObj.Name).Info("Pod is a snapshot restore")
-
 					if newObj.Status.Phase != v1.PodRunning {
 						return false
 					}
@@ -268,7 +272,7 @@ func (s *SnapshotRestoreReconciler) findSnapshotRestoreForPod(podObj client.Obje
 		return []reconcile.Request{}
 	}
 
-	if ssr.Status.Phase != "" && ssr.Status.Phase != velerov1api.SnapshotRestorePhaseNew {
+	if ssr.Status.Phase != velerov1api.SnapshotRestorePhaseAccepted {
 		return []reconcile.Request{}
 	}
 
@@ -337,6 +341,25 @@ func (s *SnapshotRestoreProgressUpdater) UpdateProgress(p *uploader.UploaderProg
 	}
 	if err := s.Cli.Patch(s.Ctx, s.SnapshotRestore, client.MergeFrom(original)); err != nil {
 		s.Log.Errorf("update restore snapshot %s  progress with %v", restoreVCName, err)
+	}
+}
+
+func (r *SnapshotRestoreReconciler) acceptSnapshotRestore(ctx context.Context, ssr *velerov1api.SnapshotRestore) (bool, error) {
+	updated := ssr.DeepCopy()
+	updated.Status.Phase = velerov1api.SnapshotRestorePhaseAccepted
+
+	r.logger.Infof("Accepting snapshot restore %s", ssr.Name)
+
+	time.Sleep(2 * time.Second)
+
+	err := r.Client.Update(ctx, updated)
+	if err == nil {
+		return true, nil
+	} else if apierrors.IsConflict(err) {
+		r.logger.WithField("SnapshotRestore", ssr.Name).Error("This snapshot restore has been accepted by others")
+		return false, nil
+	} else {
+		return false, err
 	}
 }
 
