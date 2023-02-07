@@ -71,7 +71,7 @@ type Manager interface {
 
 	// Forget removes a snapshot from the list of
 	// available snapshots in a repo.
-	Forget(context.Context, SnapshotIdentifier) error
+	Forget(context.Context, *velerov1api.BackupRepository, string) error
 	// DefaultMaintenanceFrequency returns the default maintenance frequency from the specific repo
 	DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error)
 }
@@ -190,12 +190,7 @@ func (m *manager) UnlockRepo(repo *velerov1api.BackupRepository) error {
 	return prd.EnsureUnlockRepo(context.Background(), param)
 }
 
-func (m *manager) Forget(ctx context.Context, snapshot SnapshotIdentifier) error {
-	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
-	if err != nil {
-		return err
-	}
-
+func (m *manager) Forget(ctx context.Context, repo *velerov1api.BackupRepository, snapshotID string) error {
 	m.repoLocker.LockExclusive(repo.Name)
 	defer m.repoLocker.UnlockExclusive(repo.Name)
 
@@ -207,7 +202,8 @@ func (m *manager) Forget(ctx context.Context, snapshot SnapshotIdentifier) error
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	return prd.Forget(context.Background(), snapshot.SnapshotID, param)
+
+	return prd.Forget(context.Background(), snapshotID, param)
 }
 
 func (m *manager) DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error) {

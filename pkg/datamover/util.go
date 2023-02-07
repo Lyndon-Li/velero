@@ -25,6 +25,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -63,4 +65,23 @@ func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, pvc *corev1.Pers
 
 func GetPodMountPath() string {
 	return "/var/snapshot_data_mover"
+}
+
+// GetSnapshotIdentifier returns the snapshots represented by SnapshotIdentifier for the given SnapshotBackups
+func GetSnapshotIdentifier(snapshotBackups *velerov1api.SnapshotBackupList) []repository.SnapshotIdentifier {
+	var res []repository.SnapshotIdentifier
+	for _, item := range snapshotBackups.Items {
+		if item.Status.SnapshotID == "" {
+			continue
+		}
+
+		res = append(res, repository.SnapshotIdentifier{
+			VolumeNamespace:       item.Spec.SourceNamespace,
+			BackupStorageLocation: item.Spec.BackupStorageLocation,
+			SnapshotID:            item.Status.SnapshotID,
+			RepositoryType:        velerov1api.BackupRepositoryTypeKopia,
+		})
+	}
+
+	return res
 }

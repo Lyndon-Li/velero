@@ -612,7 +612,7 @@ func (c *restoreController) waitSnapshotRestore(restore *pkgrestore.Request, res
 	errs := pkgrestore.Result{}
 
 	eg, _ := errgroup.WithContext(ctx)
-	timeout := restore.Backup.Spec.CSISnapshotTimeout.Duration
+	timeout := 4 * time.Hour
 	interval := 5 * time.Second
 
 	listOptions := label.NewListOptionsForRestore(label.GetValidName(restore.Name))

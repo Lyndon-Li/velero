@@ -35,6 +35,7 @@ import (
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	"github.com/vmware-tanzu/velero/internal/delete"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/datamover"
 	"github.com/vmware-tanzu/velero/pkg/discovery"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
@@ -61,6 +62,7 @@ type backupDeletionReconciler struct {
 	logger            logrus.FieldLogger
 	backupTracker     BackupTracker
 	repoMgr           repository.Manager
+	repoEnsurer       *repository.RepositoryEnsurer
 	metrics           *metrics.ServerMetrics
 	clock             clock.Clock
 	discoveryHelper   discovery.Helper
@@ -75,6 +77,7 @@ func NewBackupDeletionReconciler(
 	client client.Client,
 	backupTracker BackupTracker,
 	repoMgr repository.Manager,
+	repoEnsurer *repository.RepositoryEnsurer,
 	metrics *metrics.ServerMetrics,
 	helper discovery.Helper,
 	newPluginManager func(logrus.FieldLogger) clientmgmt.Manager,
@@ -86,6 +89,7 @@ func NewBackupDeletionReconciler(
 		logger:            logger,
 		backupTracker:     backupTracker,
 		repoMgr:           repoMgr,
+		repoEnsurer:       repoEnsurer,
 		metrics:           metrics,
 		clock:             clock.RealClock{},
 		discoveryHelper:   helper,
@@ -307,8 +311,8 @@ func (r *backupDeletionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			}
 		}
 	}
-	log.Info("Removing pod volume snapshots")
-	if deleteErrs := r.deletePodVolumeSnapshots(ctx, backup); len(deleteErrs) > 0 {
+	log.Info("Removing snapshots from backup repo")
+	if deleteErrs := r.deleteBackupRepoSnapshots(ctx, backup, log); len(deleteErrs) > 0 {
 		for _, err := range deleteErrs {
 			errs = append(errs, err.Error())
 		}
@@ -447,26 +451,84 @@ func (r *backupDeletionReconciler) deleteExistingDeletionRequests(ctx context.Co
 	return errs
 }
 
-func (r *backupDeletionReconciler) deletePodVolumeSnapshots(ctx context.Context, backup *velerov1api.Backup) []error {
-	if r.repoMgr == nil {
-		return nil
+func (r *backupDeletionReconciler) deleteBackupRepoSnapshots(ctx context.Context, backup *velerov1api.Backup, log logrus.FieldLogger) []error {
+	if r.repoMgr == nil || r.repoEnsurer == nil {
+		return []error{errors.New("repository is invalid")}
 	}
 
-	snapshots, err := getSnapshotsInBackup(ctx, backup, r.Client)
+	var errs []error
+	var snapshots []repository.SnapshotIdentifier
+	podVolumeSnaps, err := getPodVolumeSnapshots(ctx, backup, r.Client)
 	if err != nil {
-		return []error{err}
+		errs = append(errs, err)
+	} else {
+		snapshots = append(snapshots, podVolumeSnaps...)
 	}
+
+	dataMoveSnaps, err := getDataMoveSnapshots(ctx, backup, r.Client)
+	if err != nil {
+		errs = append(errs, err)
+	} else {
+		snapshots = append(snapshots, dataMoveSnaps...)
+	}
+
+	if len(snapshots) == 0 {
+		return errs
+	}
+
+	log.Infof("Deleting snapshots from backup repository, count %v", len(snapshots))
 
 	ctx2, cancelFunc := context.WithTimeout(ctx, snapshotDeleteTimeout)
 	defer cancelFunc()
 
-	var errs []error
+	repoMap := map[repository.BackupRepositoryKey]*velerov1api.BackupRepository{}
+
 	for _, snapshot := range snapshots {
-		if err := r.repoMgr.Forget(ctx2, snapshot); err != nil {
+		repo := repoMap[repoKeyFromSnapshot(backup.Namespace, snapshot)]
+		if repo == nil {
+			var repoErr error
+			repo, repoErr = r.getBackupRepositoryBySnapshot(ctx, backup.Namespace, snapshot)
+			if repoErr != nil {
+				errs = append(errs, repoErr)
+			} else {
+				repoMap[repoKeyFromSnapshot(backup.Namespace, snapshot)] = repo
+			}
+		}
+
+		if repo == nil {
+			continue
+		}
+
+		if err := r.repoMgr.Forget(ctx2, repo, snapshot.SnapshotID); err != nil {
 			errs = append(errs, err)
+		} else {
+			log.WithField("snapshot ID", snapshot.SnapshotID).Info("Deleted snapshot from backup repository")
 		}
 	}
+
 	return errs
+}
+
+func (r *backupDeletionReconciler) getBackupRepositoryBySnapshot(ctx context.Context, namespace string,
+	snapshot repository.SnapshotIdentifier) (*velerov1api.BackupRepository, error) {
+	repo, err := r.repoEnsurer.EnsureRepo(ctx, namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error to ensure backup repo, volume namespace %s, BSL %s, repository type %s", snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
+	}
+
+	if err := r.repoMgr.ConnectToRepo(repo); err != nil {
+		return nil, errors.Wrapf(err, "error to connect backup repo, volume namespace %s, BSL %s, repository type %s", snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
+	}
+
+	return repo, nil
+}
+
+func repoKeyFromSnapshot(namespace string, snapshot repository.SnapshotIdentifier) repository.BackupRepositoryKey {
+	return repository.BackupRepositoryKey{
+		VolumeNamespace: snapshot.VolumeNamespace,
+		BackupLocation:  snapshot.BackupStorageLocation,
+		RepositoryType:  snapshot.RepositoryType,
+	}
 }
 
 func (r *backupDeletionReconciler) patchDeleteBackupRequest(ctx context.Context, req *velerov1api.DeleteBackupRequest, mutate func(*velerov1api.DeleteBackupRequest)) (*velerov1api.DeleteBackupRequest, error) {
@@ -504,9 +566,9 @@ func (r *backupDeletionReconciler) patchBackup(ctx context.Context, backup *vele
 	return backup, nil
 }
 
-// getSnapshotsInBackup returns a list of all pod volume snapshot ids associated with
+// getPodVolumeSnapshots returns a list of all pod volume snapshot ids associated with
 // a given Velero backup.
-func getSnapshotsInBackup(ctx context.Context, backup *velerov1api.Backup, kbClient client.Client) ([]repository.SnapshotIdentifier, error) {
+func getPodVolumeSnapshots(ctx context.Context, backup *velerov1api.Backup, kbClient client.Client) ([]repository.SnapshotIdentifier, error) {
 	podVolumeBackups := &velerov1api.PodVolumeBackupList{}
 	options := &client.ListOptions{
 		LabelSelector: labels.Set(map[string]string{
@@ -520,4 +582,22 @@ func getSnapshotsInBackup(ctx context.Context, backup *velerov1api.Backup, kbCli
 	}
 
 	return podvolume.GetSnapshotIdentifier(podVolumeBackups), nil
+}
+
+// getDataMoveSnapshots returns a list of all data move snapshot ids associated with
+// a given Velero backup.
+func getDataMoveSnapshots(ctx context.Context, backup *velerov1api.Backup, kbClient client.Client) ([]repository.SnapshotIdentifier, error) {
+	snapshotbackups := &velerov1api.SnapshotBackupList{}
+	options := &client.ListOptions{
+		LabelSelector: labels.Set(map[string]string{
+			velerov1api.BackupNameLabel: label.GetValidName(backup.Name),
+		}).AsSelector(),
+	}
+
+	err := kbClient.List(ctx, snapshotbackups, options)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	return datamover.GetSnapshotIdentifier(snapshotbackups), nil
 }

@@ -813,6 +813,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			s.mgr.GetClient(),
 			backupTracker,
 			s.repoManager,
+			s.repoEnsurer,
 			s.metrics,
 			s.discoveryHelper,
 			newPluginManager,
