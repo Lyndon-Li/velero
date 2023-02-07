@@ -6,7 +6,6 @@ import (
 	context "context"
 
 	mock "github.com/stretchr/testify/mock"
-	repository "github.com/vmware-tanzu/velero/pkg/repository"
 
 	time "time"
 
@@ -53,13 +52,13 @@ func (_m *Manager) DefaultMaintenanceFrequency(repo *v1.BackupRepository) (time.
 	return r0, r1
 }
 
-// Forget provides a mock function with given fields: _a0, _a1
-func (_m *Manager) Forget(_a0 context.Context, _a1 repository.SnapshotIdentifier) error {
-	ret := _m.Called(_a0, _a1)
+// Forget provides a mock function with given fields: _a0, _a1, _a2
+func (_m *Manager) Forget(_a0 context.Context, _a1 *v1.BackupRepository, _a2 string) error {
+	ret := _m.Called(_a0, _a1, _a2)
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, repository.SnapshotIdentifier) error); ok {
-		r0 = rf(_a0, _a1)
+	if rf, ok := ret.Get(0).(func(context.Context, *v1.BackupRepository, string) error); ok {
+		r0 = rf(_a0, _a1, _a2)
 	} else {
 		r0 = ret.Error(0)
 	}
