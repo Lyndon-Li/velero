@@ -69,6 +69,11 @@ spec:
                 description: BackupStorageLocation is the name of the backup storage
                   location where the backup repository is stored.
                 type: string
+              cancel:
+                description: Cancel indicates request to cancel the ongoing snapshot
+                  restore. It can be set when the snapshot restore is in InProgress
+                  phase
+                type: boolean
               dataMoverConfig:
                 additionalProperties:
                   type: string
@@ -179,6 +184,8 @@ spec:
                 - Accepted
                 - Prepared
                 - InProgress
+                - Canceling
+                - Canceled
                 - Completed
                 - Failed
                 type: string

@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -61,17 +62,23 @@ import (
 
 // SnapshotBackupReconciler reconciles a Snapshotbackup object
 type SnapshotBackupReconciler struct {
-	Scheme            *runtime.Scheme
-	Client            client.Client
-	kubeClient        kubernetes.Interface
-	csiSnapshotClient *snapshotterClientSet.Clientset
-	Clock             clock.Clock
-	Metrics           *metrics.ServerMetrics
-	CredentialGetter  *credentials.CredentialGetter
-	NodeName          string
-	FileSystem        filesystem.Interface
-	Log               logrus.FieldLogger
-	RepositoryEnsurer *repository.RepositoryEnsurer
+	Scheme              *runtime.Scheme
+	Client              client.Client
+	kubeClient          kubernetes.Interface
+	csiSnapshotClient   *snapshotterClientSet.Clientset
+	Clock               clock.Clock
+	Metrics             *metrics.ServerMetrics
+	CredentialGetter    *credentials.CredentialGetter
+	NodeName            string
+	FileSystem          filesystem.Interface
+	Log                 logrus.FieldLogger
+	RepositoryEnsurer   *repository.RepositoryEnsurer
+	DataPathTrackerLock sync.Mutex
+	DataPathTracker     map[string]DataPathContext
+}
+
+type DataPathContext struct {
+	cancelRoutine context.CancelFunc
 }
 
 type SnapshotBackupProgressUpdater struct {
@@ -90,7 +97,20 @@ type cSISnapshotExposeResult struct {
 }
 
 func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient *snapshotterClientSet.Clientset, clock clock.Clock, metrics *metrics.ServerMetrics, cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, log logrus.FieldLogger) *SnapshotBackupReconciler {
-	return &SnapshotBackupReconciler{scheme, client, kubeClient, csiSnapshotClient, clock, metrics, cred, nodeName, fs, log, repository.NewRepositoryEnsurer(client, log)}
+	return &SnapshotBackupReconciler{
+		Scheme:            scheme,
+		Client:            client,
+		kubeClient:        kubeClient,
+		csiSnapshotClient: csiSnapshotClient,
+		Clock:             clock,
+		Metrics:           metrics,
+		CredentialGetter:  cred,
+		NodeName:          nodeName,
+		FileSystem:        fs,
+		Log:               log,
+		RepositoryEnsurer: repository.NewRepositoryEnsurer(client, log),
+		DataPathTracker:   make(map[string]DataPathContext),
+	}
 }
 
 // +kubebuilder:rbac:groups=velero.io,resources=snapshotbackup,verbs=get;list;watch;create;update;patch;delete
@@ -103,6 +123,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"controller":     "snapshotbackup",
 		"snapshotbackup": req.NamespacedName,
 	})
+
 	var ssb velerov1api.SnapshotBackup
 	if err := s.Client.Get(ctx, req.NamespacedName, &ssb); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -117,17 +138,9 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	switch ssb.Status.Phase {
-	case "", velerov1api.SnapshotBackupPhaseNew, velerov1api.SnapshotBackupPhasePrepared:
-		// Only process new items.
-	default:
-		log.WithField("phase", ssb.Status.Phase).Info("Snapshot backup is not new or Prepared, not processing")
-		return ctrl.Result{}, nil
-	}
-
-	log.Infof("Snapshot backup starting with phase %v", ssb.Status.Phase)
-
 	if ssb.Status.Phase == "" || ssb.Status.Phase == velerov1api.SnapshotBackupPhaseNew {
+		log.Info("Snapshot backup starting")
+
 		accepted, err := s.acceptSnapshotBackup(ctx, &ssb)
 		if err != nil {
 			return s.errorOut(ctx, &ssb, err, "error to accept the snapshot backup", log)
@@ -146,95 +159,157 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Info("Snapshot is exposed")
 
 		return ctrl.Result{}, nil
-	}
+	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhasePrepared {
+		log.Info("Snapshot backup is prepared")
 
-	sser, err := s.waitSnapshotExposed(ctx, &ssb, log)
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, "exposed snapshot is not ready", log)
-	} else if sser == nil {
+		sser, err := s.waitSnapshotExposed(ctx, &ssb, log)
+		if err != nil {
+			return s.errorOut(ctx, &ssb, err, "exposed snapshot is not ready", log)
+		} else if sser == nil {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Exposed snapshot is ready")
+
+		// Update status to InProgress.
+		original := ssb.DeepCopy()
+		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseInProgress
+		ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
+		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshotBackup status")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("SnapshotBackup is marked as in progress")
+
+		s.runCancelableDataPath(ctx, &ssb, sser, log)
+
+		return ctrl.Result{}, nil
+	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhaseInProgress && ssb.Spec.Cancel {
+		s.DataPathTrackerLock.Lock()
+		dataPathContext, found := s.DataPathTracker[ssb.Name]
+		s.DataPathTrackerLock.Unlock()
+		if !found {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Snapshot backup is being canceled")
+
+		// Update status to Canceling.
+		original := ssb.DeepCopy()
+		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCanceling
+		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshotBackup status")
+			return ctrl.Result{}, err
+		}
+
+		dataPathContext.cancelRoutine()
+
+		return ctrl.Result{}, nil
+	} else {
+		log.WithField("phase", ssb.Status.Phase).Info("Snapshot backup is not in the expected phase")
 		return ctrl.Result{}, nil
 	}
+}
 
-	log.Info("Exposed snapshot is ready")
+func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ssb *velerov1api.SnapshotBackup, sser *snapshotExposeResult, log logrus.FieldLogger) {
+	cancelCtx, cancel := context.WithCancel(ctx)
 
-	// Update status to InProgress.
-	original := ssb.DeepCopy()
-	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseInProgress
-	ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
-	if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
-		log.WithError(err).Error("error updating SnapshotBackup status")
-		return ctrl.Result{}, err
-	}
+	log.Info("Creating data path routine")
 
-	log.Info("SnapshotBackup is marked as in progress")
+	go func() {
+		defer func() {
+			s.DataPathTrackerLock.Lock()
+			delete(s.DataPathTracker, ssb.Name)
+			s.DataPathTrackerLock.Unlock()
 
-	backupLocation := &velerov1api.BackupStorageLocation{}
-	if err := s.Client.Get(context.Background(), client.ObjectKey{
-		Namespace: ssb.Namespace,
-		Name:      ssb.Spec.BackupStorageLocation,
-	}, backupLocation); err != nil {
-		return s.errorOut(ctx, &ssb, err, "error getting backup storage location", log)
-	}
+			cancel()
+		}()
 
-	backupRepo, err := s.RepositoryEnsurer.EnsureRepo(ctx, ssb.Namespace, ssb.Spec.SourceNamespace, ssb.Spec.BackupStorageLocation, datamover.GetUploaderType(ssb.Spec.DataMover))
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, "error ensure backup repository", log)
-	}
-
-	var uploaderProv provider.Provider
-	uploaderProv, err = NewUploaderProviderFunc(ctx, s.Client, datamover.GetUploaderType(ssb.Spec.DataMover), "",
-		backupLocation, backupRepo, s.CredentialGetter, repokey.RepoKeySelector(), log)
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, "error creating uploader", log)
-	}
-
-	// If this is a PVC, look for the most recent completed pod volume backup for it and get
-	// its snapshot ID to do new backup based on it. Without this,
-	// if the pod using the PVC (and therefore the directory path under /host_pods/) has
-	// changed since the PVC's last backup, for backup, it will not be able to identify a suitable
-	// parent snapshot to use, and will have to do a full rescan of the contents of the PVC.
-	var parentSnapshotID string
-	if pvcUID, ok := ssb.Labels[velerov1api.PVCUIDLabel]; ok {
-		parentSnapshotID = s.getParentSnapshot(ctx, log, pvcUID, &ssb)
-		if parentSnapshotID == "" {
-			log.Info("No parent snapshot found for PVC, not based on parent snapshot for this backup")
-		} else {
-			log.WithField("parentSnapshotID", parentSnapshotID).Info("Based on parent snapshot for this backup")
+		backupLocation := &velerov1api.BackupStorageLocation{}
+		if err := s.Client.Get(ctx, client.ObjectKey{
+			Namespace: ssb.Namespace,
+			Name:      ssb.Spec.BackupStorageLocation,
+		}, backupLocation); err != nil {
+			s.errorOut(ctx, ssb, err, "error getting backup storage location", log)
+			return
 		}
-	}
 
-	defer func() {
-		if err := uploaderProv.Close(ctx); err != nil {
-			log.Errorf("failed to close uploader provider with error %v", err)
+		backupRepo, err := s.RepositoryEnsurer.EnsureRepo(ctx, ssb.Namespace, ssb.Spec.SourceNamespace, ssb.Spec.BackupStorageLocation, datamover.GetUploaderType(ssb.Spec.DataMover))
+		if err != nil {
+			s.errorOut(ctx, ssb, err, "error ensure backup repository", log)
+			return
+		}
+
+		var uploaderProv provider.Provider
+		uploaderProv, err = NewUploaderProviderFunc(ctx, s.Client, datamover.GetUploaderType(ssb.Spec.DataMover), "",
+			backupLocation, backupRepo, s.CredentialGetter, repokey.RepoKeySelector(), log)
+		if err != nil {
+			s.errorOut(ctx, ssb, err, "error creating uploader", log)
+			return
+		}
+
+		// If this is a PVC, look for the most recent completed pod volume backup for it and get
+		// its snapshot ID to do new backup based on it. Without this,
+		// if the pod using the PVC (and therefore the directory path under /host_pods/) has
+		// changed since the PVC's last backup, for backup, it will not be able to identify a suitable
+		// parent snapshot to use, and will have to do a full rescan of the contents of the PVC.
+		var parentSnapshotID string
+		if pvcUID, ok := ssb.Labels[velerov1api.PVCUIDLabel]; ok {
+			parentSnapshotID = s.getParentSnapshot(ctx, log, pvcUID, ssb)
+			if parentSnapshotID == "" {
+				log.Info("No parent snapshot found for PVC, not based on parent snapshot for this backup")
+			} else {
+				log.WithField("parentSnapshotID", parentSnapshotID).Info("Based on parent snapshot for this backup")
+			}
+		}
+
+		defer func() {
+			if uploaderProv != nil {
+				if err := uploaderProv.Close(ctx); err != nil {
+					log.Errorf("failed to close uploader provider with error %v", err)
+				}
+			}
+		}()
+
+		snapshotID, emptySnapshot, err := uploaderProv.RunBackup(cancelCtx, sser.csiExpose.path, ssb.Spec.Tags, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(ssb, log, ctx))
+		if err != nil && err != provider.ErrorCanceled {
+			s.errorOut(ctx, ssb, err, fmt.Sprintf("running backup, stderr=%v", err), log)
+			return
+		}
+
+		log.Info("cleaning up exposed snapshot")
+		if err := s.cleanUpSnapshot(ctx, ssb, log); err != nil {
+			log.WithError(err).Error("Failed to clean up exposed snapshot")
+		}
+
+		original := ssb.DeepCopy()
+
+		if err == provider.ErrorCanceled {
+			ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCanceled
+			ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
+		} else {
+			// Update status to Completed with path & snapshot ID.
+			ssb.Status.Path = sser.csiExpose.path
+			ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCompleted
+			ssb.Status.SnapshotID = snapshotID
+			ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
+
+			if emptySnapshot {
+				ssb.Status.Message = "volume was empty so no snapshot was taken"
+			}
+		}
+
+		if err := s.Client.Patch(ctx, ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshoteBackup status")
+		} else {
+			log.Infof("SnapshotBackup is marked as %s", ssb.Status.Phase)
 		}
 	}()
 
-	snapshotID, emptySnapshot, err := uploaderProv.RunBackup(ctx, sser.csiExpose.path, ssb.Spec.Tags, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(&ssb, log, ctx))
-	if err != nil {
-		return s.errorOut(ctx, &ssb, err, fmt.Sprintf("running backup, stderr=%v", err), log)
-	}
-
-	log.Info("cleaning up exposed snapshot")
-	if delErr := s.cleanUpSnapshot(ctx, &ssb, log); delErr != nil {
-		return s.errorOut(ctx, &ssb, err, "error clean up exposed snapshot", log)
-	}
-
-	// Update status to Completed with path & snapshot ID.
-	original = ssb.DeepCopy()
-	ssb.Status.Path = sser.csiExpose.path
-	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCompleted
-	ssb.Status.SnapshotID = snapshotID
-	ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
-	if emptySnapshot {
-		ssb.Status.Message = "volume was empty so no snapshot was taken"
-	}
-	if err = s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
-		log.WithError(err).Error("error updating PodVolumeBackup status")
-		return ctrl.Result{}, err
-	}
-	log.Info("snapshot backup completed")
-	return ctrl.Result{}, nil
-
+	s.DataPathTrackerLock.Lock()
+	s.DataPathTracker[ssb.Name] = DataPathContext{cancelRoutine: cancel}
+	s.DataPathTrackerLock.Unlock()
 }
 
 // SetupWithManager registers the SnapshotBackup controller.
@@ -379,25 +454,28 @@ func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log lo
 }
 
 func (s *SnapshotBackupReconciler) errorOut(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
-	s.cleanUpSnapshot(ctx, ssb, log)
+	if delErr := s.cleanUpSnapshot(ctx, ssb, log); delErr != nil {
+		log.WithError(delErr).Error("Failed to clean up exposed snapshot")
+	}
 
-	return s.updateStatusToFailed(ctx, ssb, err, msg, log)
+	return ctrl.Result{}, s.updateStatusToFailed(ctx, ssb, err, msg, log)
 }
 
-func (s *SnapshotBackupReconciler) updateStatusToFailed(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
+func (s *SnapshotBackupReconciler) updateStatusToFailed(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) error {
 	original := ssb.DeepCopy()
 	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseFailed
 	ssb.Status.Message = errors.WithMessage(err, msg).Error()
 	if ssb.Status.StartTimestamp.IsZero() {
 		ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
 	}
+
 	ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
 	if err = s.Client.Patch(ctx, ssb, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("error updating SnapshotBackup status")
-		return ctrl.Result{}, err
+		return err
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (s *SnapshotBackupReconciler) NewSnapshotBackupProgressUpdater(ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger, ctx context.Context) *SnapshotBackupProgressUpdater {

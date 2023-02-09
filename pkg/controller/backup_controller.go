@@ -771,6 +771,10 @@ func (c *backupController) waitSnapshotBackup(backup *pkgbackup.Request, backupL
 					return false, errors.Errorf("snapshot backup failed, %s", updated.Status.Message)
 				}
 
+				if updated.Status.Phase == velerov1api.SnapshotBackupPhaseCanceled {
+					return false, errors.Errorf("snapshot backup is canceled, %s", updated.Status.Message)
+				}
+
 				if updated.Status.Phase == velerov1api.SnapshotBackupPhaseCompleted {
 					return true, nil
 				}

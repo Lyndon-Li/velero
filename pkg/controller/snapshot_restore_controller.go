@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -63,18 +64,21 @@ func NewSnapshotRestoreReconciler(logger logrus.FieldLogger, client client.Clien
 		clock:             &clock.RealClock{},
 		nodeName:          nodeName,
 		repositoryEnsurer: repository.NewRepositoryEnsurer(client, logger),
+		DataPathTracker:   make(map[string]DataPathContext),
 	}
 }
 
 type SnapshotRestoreReconciler struct {
 	client.Client
-	kubeClient        kubernetes.Interface
-	logger            logrus.FieldLogger
-	credentialGetter  *credentials.CredentialGetter
-	fileSystem        filesystem.Interface
-	clock             clock.Clock
-	nodeName          string
-	repositoryEnsurer *repository.RepositoryEnsurer
+	kubeClient          kubernetes.Interface
+	logger              logrus.FieldLogger
+	credentialGetter    *credentials.CredentialGetter
+	fileSystem          filesystem.Interface
+	clock               clock.Clock
+	nodeName            string
+	repositoryEnsurer   *repository.RepositoryEnsurer
+	DataPathTrackerLock sync.Mutex
+	DataPathTracker     map[string]DataPathContext
 }
 
 type SnapshotRestoreProgressUpdater struct {
@@ -109,17 +113,9 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	switch ssr.Status.Phase {
-	case "", velerov1api.SnapshotRestorePhaseNew, velerov1api.SnapshotRestorePhasePrepared:
-		// Only process new items.
-	default:
-		log.Debug("Snapshot restore is not new or Prepared, not processing")
-		return ctrl.Result{}, nil
-	}
-
-	log.Infof("Snapshot restore starting with phase %v", ssr.Status.Phase)
-
 	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1api.SnapshotRestorePhaseNew {
+		log.Info("Snapshot backup starting")
+
 		accepted, err := s.acceptSnapshotRestore(ctx, ssr)
 		if err != nil {
 			return s.errorOut(ctx, ssr, err, "error to accept the snapshot restore", log)
@@ -144,83 +140,134 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Info("Restore pvc is created")
 
 		return ctrl.Result{}, nil
-	}
+	} else if ssr.Status.Phase == velerov1api.SnapshotRestorePhasePrepared {
+		path, err := s.waitRestorePVCExposed(ctx, ssr, log)
+		if err != nil {
+			return s.errorOut(ctx, ssr, err, "restore PVC is not ready", log)
+		} else if path == "" {
+			return ctrl.Result{}, nil
+		}
 
-	path, err := s.waitRestorePVCExposed(ctx, ssr, log)
-	if err != nil {
-		return s.errorOut(ctx, ssr, err, "restore PVC is not ready", log)
-	} else if path == "" {
+		log.Info("Restore PVC is ready")
+
+		original := ssr.DeepCopy()
+		ssr.Status.Phase = velerov1api.SnapshotRestorePhaseInProgress
+		ssr.Status.StartTimestamp = &metav1.Time{Time: s.clock.Now()}
+		if err := s.Patch(ctx, ssr, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("Unable to update status to in progress")
+			return ctrl.Result{}, err
+		}
+
+		log.Info("SnapshotRestore is marked as in progress")
+
+		s.runCancelableDataPath(ctx, ssr, path, log)
+
+		return ctrl.Result{}, nil
+	} else if ssr.Status.Phase == velerov1api.SnapshotRestorePhaseInProgress && ssr.Spec.Cancel {
+		s.DataPathTrackerLock.Lock()
+		dataPathContext, found := s.DataPathTracker[ssr.Name]
+		s.DataPathTrackerLock.Unlock()
+		if !found {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Snapshot restore is being canceled")
+
+		// Update status to Canceling.
+		original := ssr.DeepCopy()
+		ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCanceling
+		if err := s.Client.Patch(ctx, ssr, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshotRestore status")
+			return ctrl.Result{}, err
+		}
+
+		dataPathContext.cancelRoutine()
+
+		return ctrl.Result{}, nil
+	} else {
+		log.WithField("phase", ssr.Status.Phase).Info("Snapshot restore is not in the expected phase")
 		return ctrl.Result{}, nil
 	}
-
-	log.Info("Restore PVC is ready")
-
-	original := ssr.DeepCopy()
-	ssr.Status.Phase = velerov1api.SnapshotRestorePhaseInProgress
-	ssr.Status.StartTimestamp = &metav1.Time{Time: s.clock.Now()}
-	if err := s.Patch(ctx, ssr, client.MergeFrom(original)); err != nil {
-		log.WithError(err).Error("Unable to update status to in progress")
-		return ctrl.Result{}, err
-	}
-
-	log.Info("SnapshotRestore is marked as in progress")
-
-	if err := s.processRestore(ctx, ssr, path, log); err != nil {
-		log.WithError(err).Error("Unable to process the SnapshotRestore")
-		return s.errorOut(ctx, ssr, err, fmt.Sprintf("running restore, stderr=%v", err), log)
-	}
-
-	err = s.rebindRestoreVolume(ctx, ssr, log)
-	if err != nil {
-		return s.errorOut(ctx, ssr, err, "error rebind restore volume", log)
-	}
-
-	log.Info("Cleaning up exposed environment")
-	s.cleanUpExposeEnv(ctx, ssr, log)
-
-	original = ssr.DeepCopy()
-	ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCompleted
-	ssr.Status.CompletionTimestamp = &metav1.Time{Time: s.clock.Now()}
-	if err := s.Patch(ctx, ssr.DeepCopy(), client.MergeFrom(original)); err != nil {
-		log.WithError(err).Error("Unable to update status to completed")
-		return ctrl.Result{}, err
-	}
-	log.Info("Restore completed")
-	return ctrl.Result{}, nil
-
 }
 
-func (s *SnapshotRestoreReconciler) processRestore(ctx context.Context, req *velerov1api.SnapshotRestore, path string, log logrus.FieldLogger) error {
-	backupLocation := &velerov1api.BackupStorageLocation{}
-	if err := s.Get(ctx, client.ObjectKey{
-		Namespace: req.Namespace,
-		Name:      req.Spec.BackupStorageLocation,
-	}, backupLocation); err != nil {
-		return errors.Wrap(err, "error getting backup storage location")
-	}
+func (s *SnapshotRestoreReconciler) runCancelableDataPath(ctx context.Context, ssr *velerov1api.SnapshotRestore, path string, log logrus.FieldLogger) {
+	cancelCtx, cancel := context.WithCancel(ctx)
 
-	backupRepo, err := s.repositoryEnsurer.EnsureRepo(ctx, req.Namespace, req.Spec.SourceNamespace, req.Spec.BackupStorageLocation, datamover.GetUploaderType(req.Spec.DataMover))
-	if err != nil {
-		return errors.Wrap(err, "error ensure backup repository")
-	}
+	log.Info("Creating data path routine")
 
-	uploaderProv, err := provider.NewUploaderProvider(ctx, s.Client, datamover.GetUploaderType(req.Spec.DataMover),
-		"", backupLocation, backupRepo, s.credentialGetter, repokey.RepoKeySelector(), log)
-	if err != nil {
-		return errors.Wrap(err, "error creating uploader")
-	}
+	go func() {
+		defer func() {
+			s.DataPathTrackerLock.Lock()
+			delete(s.DataPathTracker, ssr.Name)
+			s.DataPathTrackerLock.Unlock()
 
-	defer func() {
-		if err := uploaderProv.Close(ctx); err != nil {
-			log.Errorf("failed to close uploader provider with error %v", err)
+			cancel()
+		}()
+
+		backupLocation := &velerov1api.BackupStorageLocation{}
+		if err := s.Get(ctx, client.ObjectKey{
+			Namespace: ssr.Namespace,
+			Name:      ssr.Spec.BackupStorageLocation,
+		}, backupLocation); err != nil {
+			s.errorOut(ctx, ssr, err, "error getting backup storage location", log)
+			return
+		}
+
+		backupRepo, err := s.repositoryEnsurer.EnsureRepo(ctx, ssr.Namespace, ssr.Spec.SourceNamespace, ssr.Spec.BackupStorageLocation, datamover.GetUploaderType(ssr.Spec.DataMover))
+		if err != nil {
+			s.errorOut(ctx, ssr, err, "error ensure backup repository", log)
+			return
+		}
+
+		uploaderProv, err := provider.NewUploaderProvider(ctx, s.Client, datamover.GetUploaderType(ssr.Spec.DataMover),
+			"", backupLocation, backupRepo, s.credentialGetter, repokey.RepoKeySelector(), log)
+		if err != nil {
+			s.errorOut(ctx, ssr, err, "error creating uploader", log)
+			return
+		}
+
+		defer func() {
+			if err := uploaderProv.Close(ctx); err != nil {
+				log.Errorf("failed to close uploader provider with error %v", err)
+			}
+		}()
+
+		err = uploaderProv.RunRestore(cancelCtx, ssr.Spec.SnapshotID, path, s.NewSnapshotBackupProgressUpdater(ssr, log, ctx))
+		if err != nil && err != provider.ErrorCanceled {
+			s.errorOut(ctx, ssr, err, fmt.Sprintf("running restore, err=%v", err), log)
+			return
+		}
+
+		if err == nil {
+			if err := s.rebindRestoreVolume(ctx, ssr, log); err != nil {
+				s.errorOut(ctx, ssr, err, "error rebind restore volume", log)
+				return
+			}
+		}
+
+		log.Info("Cleaning up exposed environment")
+		s.cleanUpExposeEnv(ctx, ssr, log)
+
+		original := ssr.DeepCopy()
+
+		if err == provider.ErrorCanceled {
+			ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCanceled
+			ssr.Status.CompletionTimestamp = &metav1.Time{Time: s.clock.Now()}
+		} else {
+			ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCompleted
+			ssr.Status.CompletionTimestamp = &metav1.Time{Time: s.clock.Now()}
+		}
+
+		if err := s.Patch(ctx, ssr.DeepCopy(), client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("Unable to update status")
+		} else {
+			log.Infof("SnapshotRestore is marked as %s", ssr.Status.Phase)
 		}
 	}()
 
-	if err = uploaderProv.RunRestore(ctx, req.Spec.SnapshotID, path, s.NewSnapshotBackupProgressUpdater(req, log, ctx)); err != nil {
-		return errors.Wrapf(err, "error running restore err=%v", err)
-	}
-
-	return nil
+	s.DataPathTrackerLock.Lock()
+	s.DataPathTracker[ssr.Name] = DataPathContext{cancelRoutine: cancel}
+	s.DataPathTrackerLock.Unlock()
 }
 
 func (s *SnapshotRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -308,10 +355,10 @@ func prepareSnapshotRestore(ssb *velerov1api.SnapshotRestore) {
 func (s *SnapshotRestoreReconciler) errorOut(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
 	s.cleanUpExposeEnv(ctx, ssr, log)
 
-	return s.updateStatusToFailed(ctx, ssr, err, msg, log)
+	return ctrl.Result{}, s.updateStatusToFailed(ctx, ssr, err, msg, log)
 }
 
-func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
+func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) error {
 	log.Infof("updateStatusToFailed %v", ssr.Status.Phase)
 	original := ssr.DeepCopy()
 	ssr.Status.Phase = velerov1api.SnapshotRestorePhaseFailed
@@ -320,10 +367,10 @@ func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ss
 
 	if err = s.Client.Patch(ctx, ssr, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("error updating SnapshotRestore status")
-		return ctrl.Result{}, err
+		return err
 	}
 
-	return ctrl.Result{}, nil
+	return nil
 }
 
 func (s *SnapshotRestoreReconciler) NewSnapshotBackupProgressUpdater(ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger, ctx context.Context) *SnapshotRestoreProgressUpdater {
