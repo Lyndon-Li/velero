@@ -638,6 +638,10 @@ func (c *restoreController) waitSnapshotRestore(restore *pkgrestore.Request, res
 					return false, errors.Errorf("snapshot restore failed, %s", updated.Status.Message)
 				}
 
+				if updated.Status.Phase == velerov1api.SnapshotRestorePhaseCanceled {
+					return false, errors.Errorf("snapshot restore is canceled, %s", updated.Status.Message)
+				}
+
 				if updated.Status.Phase == velerov1api.SnapshotRestorePhaseCompleted {
 					return true, nil
 				}

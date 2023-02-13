@@ -37,6 +37,8 @@ import (
 const restoreProgressCheckInterval = 10 * time.Second
 const backupProgressCheckInterval = 10 * time.Second
 
+var ErrorCanceled error = errors.New("uploader is canceled")
+
 // Provider which is designed for one pod volume to do the backup or restore
 type Provider interface {
 	// RunBackup which will do backup for one specific volume and return snapshotID, isSnapshotEmpty, error

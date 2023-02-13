@@ -97,17 +97,9 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	switch ssb.Status.Phase {
-	case "", velerov1api.SnapshotBackupPhaseNew, velerov1api.SnapshotBackupPhasePrepared, velerov1api.SnapshotBackupPhaseDataPathExit:
-		// Only process new items.
-	default:
-		log.WithField("phase", ssb.Status.Phase).Info("Snapshot backup is not new or Prepared, not processing")
-		return ctrl.Result{}, nil
-	}
-
-	log.Infof("Snapshot backup starting with phase %v", ssb.Status.Phase)
-
 	if ssb.Status.Phase == "" || ssb.Status.Phase == velerov1api.SnapshotBackupPhaseNew {
+		log.Info("Snapshot backup starting")
+
 		if _, err := s.createBackupJob(ctx, &ssb); err != nil {
 			if !apierrors.IsAlreadyExists(err) {
 				return s.errorOut(ctx, &ssb, err, "error to create backup job", log)
@@ -126,6 +118,8 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		return ctrl.Result{}, nil
 	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhasePrepared {
+		log.Info("Snapshot backup is prepared")
+
 		_, _, err := s.waitBackupJob(ctx, &ssb, log)
 		if err != nil {
 			return s.errorOut(ctx, &ssb, err, "backup job is not ready", log)
@@ -151,8 +145,35 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		log.Info("SnapshotBackup is marked as in progress")
 
-		return ctrl.Result{}, err
-	} else {
+		return ctrl.Result{}, nil
+	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhaseInProgress && ssb.Spec.Cancel {
+		log.Info("Snapshot backup is being canceled")
+
+		// Update status to Canceling.
+		original := ssb.DeepCopy()
+		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCanceling
+		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshotBackup status")
+			return ctrl.Result{}, err
+		}
+
+		if err := s.cancelSnapshotBackup(ctx, &ssb); err != nil {
+			log.WithError(err).Error("error canceling SnapshotBackup")
+			return ctrl.Result{}, err
+		}
+
+		// Update status to Canceled.
+		original = ssb.DeepCopy()
+		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCanceled
+		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
+			log.WithError(err).Error("error updating SnapshotBackup status")
+			return ctrl.Result{}, err
+		}
+
+		return ctrl.Result{}, nil
+	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhaseDataPathExit {
+		log.Info("Snapshot backup data path exits")
+
 		//ssbOutput, err := s.getBackupResult(ctx, &ssb, log)
 		err := s.checkBackupResult(ctx, &ssb, log)
 		if err != nil {
@@ -180,6 +201,9 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			return ctrl.Result{}, err
 		}
 		log.Info("snapshot backup completed")
+		return ctrl.Result{}, nil
+	} else {
+		log.WithField("phase", ssb.Status.Phase).Info("Snapshot backup is not in the expected phase")
 		return ctrl.Result{}, nil
 	}
 }
@@ -537,6 +561,16 @@ func (r *SnapshotBackupReconciler) cleanUpSnapshot(ctx context.Context, ssb *vel
 		return r.cleanUpCSISnapshot(ctx, ssb, log)
 	default:
 		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
+	}
+}
+
+func (r *SnapshotBackupReconciler) cancelSnapshotBackup(ctx context.Context, ssb *velerov1api.SnapshotBackup) error {
+	backupPodName := ssb.Name
+	err := kube.EnsureDeletePod(ctx, r.kubeClient.CoreV1(), backupPodName, ssb.Namespace, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration)
+	if apierrors.IsNotFound(err) {
+		return nil
+	} else {
+		return err
 	}
 }
 

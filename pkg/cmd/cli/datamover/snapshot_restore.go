@@ -25,10 +25,12 @@ import (
 	"github.com/spf13/cobra"
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/vmware-tanzu/velero/internal/credentials"
 	"github.com/vmware-tanzu/velero/pkg/buildinfo"
 	"github.com/vmware-tanzu/velero/pkg/client"
 	"github.com/vmware-tanzu/velero/pkg/cmd"
 	"github.com/vmware-tanzu/velero/pkg/cmd/util/signals"
+	datapath "github.com/vmware-tanzu/velero/pkg/datamover"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 )
 
@@ -96,15 +98,13 @@ func (s *snapshotRestorer) run() {
 
 	s.logger.Infof("Starting run data path for snapshot backup %s", s.request)
 
-	// credSecretStore, err := credentials.NewNamespacedSecretStore(s.kbclient, s.namespace)
-	// if err != nil {
-	// 	s.logger.Fatalf("Failed to create secret file store: %v", err)
-	// }
+	credSecretStore, err := credentials.NewNamespacedSecretStore(s.kbclient, s.namespace)
+	if err != nil {
+		s.logger.Fatalf("Failed to create secret file store: %v", err)
+	}
 
-	// credentialGetter := &credentials.CredentialGetter{FromFile: nil, FromSecret: credSecretStore}
+	credentialGetter := &credentials.CredentialGetter{FromFile: nil, FromSecret: credSecretStore}
 
-	// datapath := datapath.NewSnapshotRestore(s.ctx, s.kbclient, credentialGetter, s.logger)
-	// if err := datapath.Run(s.request, s.namespace); err != nil {
-	// 	s.logger.Fatalf("Failed to run data path for snapshot backup %s, error %v", s.request, err)
-	// }
+	datapath := datapath.NewSnapshotRestore(s.ctx, s.kbclient, credentialGetter, s.logger)
+	datapath.Run(s.request, s.namespace)
 }

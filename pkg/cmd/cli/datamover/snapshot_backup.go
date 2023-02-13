@@ -106,7 +106,5 @@ func (s *snapshotBackupper) run() {
 	credentialGetter := &credentials.CredentialGetter{FromFile: nil, FromSecret: credSecretStore}
 
 	datapath := datapath.NewSnapshotBackup(s.ctx, s.kbclient, credentialGetter, s.logger)
-	if err := datapath.Run(s.request, s.namespace); err != nil {
-		s.logger.Fatalf("Failed to run data path for snapshot backup %s, error %v", s.request, err)
-	}
+	datapath.Run(s.request, s.namespace)
 }

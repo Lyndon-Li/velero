@@ -19,6 +19,8 @@ package datamover
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -84,4 +86,14 @@ func GetSnapshotIdentifier(snapshotBackups *velerov1api.SnapshotBackupList) []re
 	}
 
 	return res
+}
+
+func onCtrlC(f func()) {
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+
+	go func() {
+		<-c
+		f()
+	}()
 }

@@ -51,6 +51,10 @@ type SnapshotRestoreSpec struct {
 	// DataMoverConfig is for data-mover-specific configuration fields.
 	// +optional
 	DataMoverConfig map[string]string `json:"dataMoverConfig,omitempty"`
+
+	// Cancel indicates request to cancel the ongoing snapshot restore. It can be set
+	// when the snapshot restore is in InProgress phase
+	Cancel bool `json:"cancel,omitempty"`
 }
 
 // TargetPVCSpec is the specification for a target PVC.
@@ -77,14 +81,16 @@ type TargetVolumeSpec struct {
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;DataPathExit;Completed;Failed
+// +kubebuilder:validation:Enum=New;Prepared;InProgress;Canceling;Canceled;DataPathExit;Completed;Failed
 type SnapshotRestorePhase string
 
 const (
 	SnapshotRestorePhaseNew          SnapshotRestorePhase = "New"
 	SnapshotRestorePhasePrepared     SnapshotRestorePhase = "Prepared"
 	SnapshotRestorePhaseInProgress   SnapshotRestorePhase = "InProgress"
-	SnapshotRestorePhaseDataPathExit SnapshotBackupPhase  = "DataPathExit"
+	SnapshotRestorePhaseDataPathExit SnapshotRestorePhase = "DataPathExit"
+	SnapshotRestorePhaseCanceling    SnapshotRestorePhase = "Canceling"
+	SnapshotRestorePhaseCanceled     SnapshotRestorePhase = "Canceled"
 	SnapshotRestorePhaseCompleted    SnapshotRestorePhase = "Completed"
 	SnapshotRestorePhaseFailed       SnapshotRestorePhase = "Failed"
 )

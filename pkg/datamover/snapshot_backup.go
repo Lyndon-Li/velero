@@ -69,8 +69,14 @@ func NewSnapshotBackup(ctx context.Context, client client.Client, getter *creden
 	}
 }
 
-func (s *SnapshotBackup) Run(snapshotBackupName string, namespace string) error {
+func (s *SnapshotBackup) Run(snapshotBackupName string, namespace string) {
 	ctx := s.Ctx
+	cancelCtx, cancel := context.WithCancel(s.Ctx)
+
+	defer func() {
+		cancel()
+	}()
+
 	log := s.Log.WithFields(logrus.Fields{
 		"snapshotbackup": snapshotBackupName,
 	})
@@ -81,7 +87,7 @@ func (s *SnapshotBackup) Run(snapshotBackupName string, namespace string) error 
 		Name:      snapshotBackupName,
 	}, ssb); err != nil {
 		s.errorOut(ssb, err, "error getting snapshot backup", log)
-		return err
+		return
 	}
 
 	backupLocation := &velerov1api.BackupStorageLocation{}
@@ -90,13 +96,13 @@ func (s *SnapshotBackup) Run(snapshotBackupName string, namespace string) error 
 		Name:      ssb.Spec.BackupStorageLocation,
 	}, backupLocation); err != nil {
 		s.errorOut(ssb, err, "error getting backup storage location", log)
-		return err
+		return
 	}
 
 	backupRepo, err := s.RepositoryEnsurer.EnsureRepo(ctx, ssb.Namespace, ssb.Spec.SourceNamespace, ssb.Spec.BackupStorageLocation, GetUploaderType(ssb.Spec.DataMover))
 	if err != nil {
 		s.errorOut(ssb, err, "error ensure backup repository", log)
-		return err
+		return
 	}
 
 	var uploaderProv provider.Provider
@@ -104,7 +110,7 @@ func (s *SnapshotBackup) Run(snapshotBackupName string, namespace string) error 
 		backupLocation, backupRepo, s.CredentialGetter, repokey.RepoKeySelector(), log)
 	if err != nil {
 		s.errorOut(ssb, err, "error creating uploader", log)
-		return err
+		return
 	}
 
 	// If this is a PVC, look for the most recent completed pod volume backup for it and get
@@ -128,19 +134,18 @@ func (s *SnapshotBackup) Run(snapshotBackupName string, namespace string) error 
 		}
 	}()
 
-	snapshotID, emptySnapshot, err := uploaderProv.RunBackup(ctx, GetPodMountPath(), ssb.Spec.Tags, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(ssb, log, ctx))
+	onCtrlC(cancel)
+
+	snapshotID, emptySnapshot, err := uploaderProv.RunBackup(cancelCtx, GetPodMountPath(), ssb.Spec.Tags, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(ssb, log, ctx))
 	if err != nil {
 		s.errorOut(ssb, err, "error running backup", log)
-		return err
+		return
 	}
 
 	err = s.complete(ssb, snapshotID, emptySnapshot)
 	if err != nil {
-		log.WithError(err).Error("failed to write snapshot backup output")
-		return err
+		log.WithError(err).Error("failed to complete snapshot backup")
 	}
-
-	return nil
 }
 
 // getParentSnapshot finds the most recent completed PodVolumeBackup for the

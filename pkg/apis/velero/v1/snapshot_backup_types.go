@@ -26,7 +26,9 @@ type SnapshotBackupSpec struct {
 	SnapshotType SnapshotType `json:"snapshotType"`
 
 	// If SnapshotType is CSI, CSISnapshot provides the information of the CSI snapshot.
-	CSISnapshot CSISnapshotSpec `json:"csiSnapshot"`
+	// +optional
+	// +nullable
+	CSISnapshot *CSISnapshotSpec `json:"csiSnapshot"`
 
 	// BackupName is the name of the backup which owns this snapshot backup.
 	BackupName string `json:"backupName"`
@@ -55,6 +57,10 @@ type SnapshotBackupSpec struct {
 	// snapshot backup as tags.
 	// +optional
 	Tags map[string]string `json:"tags,omitempty"`
+
+	// Cancel indicates request to cancel the ongoing snapshot backup. It can be set
+	// when the snapshot backup is in InProgress phase
+	Cancel bool `json:"cancel,omitempty"`
 }
 
 type SnapshotType string
@@ -77,7 +83,7 @@ type CSISnapshotSpec struct {
 }
 
 // SnapshotBackupPhase represents the lifecycle phase of a SnapshotBackup.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;DataPathExit;Completed;Failed
+// +kubebuilder:validation:Enum=New;Prepared;InProgress;Canceling;Canceled;DataPathExit;Completed;Failed
 type SnapshotBackupPhase string
 
 const (
@@ -85,6 +91,8 @@ const (
 	SnapshotBackupPhasePrepared     SnapshotBackupPhase = "Prepared"
 	SnapshotBackupPhaseInProgress   SnapshotBackupPhase = "InProgress"
 	SnapshotBackupPhaseDataPathExit SnapshotBackupPhase = "DataPathExit"
+	SnapshotBackupPhaseCanceling  SnapshotBackupPhase = "Canceling"
+	SnapshotBackupPhaseCanceled   SnapshotBackupPhase = "Canceled"
 	SnapshotBackupPhaseCompleted    SnapshotBackupPhase = "Completed"
 	SnapshotBackupPhaseFailed       SnapshotBackupPhase = "Failed"
 )

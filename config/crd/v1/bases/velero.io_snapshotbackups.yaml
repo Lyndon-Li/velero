@@ -72,9 +72,15 @@ spec:
                 description: BackupStorageLocation is the name of the backup storage
                   location where the backup repository is stored.
                 type: string
+              cancel:
+                description: Cancel indicates request to cancel the ongoing snapshot
+                  backup. It can be set when the snapshot backup is in InProgress
+                  phase
+                type: boolean
               csiSnapshot:
                 description: If SnapshotType is CSI, CSISnapshot provides the information
                   of the CSI snapshot.
+                nullable: true
                 properties:
                   csiSnapshotTimeout:
                     description: CSISnapshotTimeout specifies the time used to wait
@@ -127,7 +133,6 @@ spec:
             required:
             - backupName
             - backupStorageLocation
-            - csiSnapshot
             - snapshotType
             - sourceNamespace
             - sourcePVC
@@ -156,6 +161,8 @@ spec:
                 - New
                 - Prepared
                 - InProgress
+                - Canceling
+                - Canceled
                 - DataPathExit
                 - Completed
                 - Failed
