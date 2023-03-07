@@ -47,7 +47,7 @@ type backupStatusLine struct {
 
 // GetSnapshotID runs provided 'restic snapshots' command to get the ID of a snapshot
 // and an error if a unique snapshot cannot be identified.
-func GetSnapshotID(snapshotIdCmd *Command) (string, error) {
+func GetSnapshotID(snapshotIdCmd *Command, assertExist bool) (string, error) {
 	stdout, stderr, err := exec.RunCommand(snapshotIdCmd.Cmd())
 	if err != nil {
 		return "", errors.Wrapf(err, "error running command, stderr=%s", stderr)
@@ -62,11 +62,28 @@ func GetSnapshotID(snapshotIdCmd *Command) (string, error) {
 		return "", errors.Wrap(err, "error unmarshalling restic snapshots result")
 	}
 
-	if len(snapshots) != 1 {
-		return "", errors.Errorf("expected one matching snapshot by command: %s, got %d", snapshotIdCmd.String(), len(snapshots))
+	if len(snapshots) > 1 {
+		return "", errors.Errorf("multiple matching snapshot by command: %s, got %d", snapshotIdCmd.String(), len(snapshots))
 	}
 
-	return snapshots[0].ShortID, nil
+	if len(snapshots) == 0 {
+		if assertExist {
+			return "", errors.Errorf("expected one matching snapshot by command: %s, got %d", snapshotIdCmd.String(), len(snapshots))
+		} else {
+			return "", nil
+		}
+	} else {
+		return snapshots[0].ShortID, nil
+	}
+}
+
+func DeleteSnapshot(forgetSnapshotCmd *Command) error {
+	_, stderr, err := exec.RunCommand(forgetSnapshotCmd.Cmd())
+	if err != nil {
+		return errors.Wrapf(err, "error running command, stderr=%s", stderr)
+	}
+
+	return nil
 }
 
 // RunBackup runs a `restic backup` command and watches the output to provide

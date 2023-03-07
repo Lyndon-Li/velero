@@ -141,16 +141,14 @@ func (rp *resticProvider) RunBackup(
 			log.Debugf("Restic backup got empty dir with %s path", path)
 			return "", true, nil
 		}
+
+		rp.deleteResticSnapshotIfAny(tags, log)
+
 		return "", false, errors.WithStack(fmt.Errorf("error running restic backup command %s with error: %v stderr: %v", backupCmd.String(), err, stderrBuf))
 	}
+
 	// GetSnapshotID
-	snapshotIdCmd := restic.GetSnapshotCommand(rp.repoIdentifier, rp.credentialsFile, tags)
-	snapshotIdCmd.Env = rp.cmdEnv
-	snapshotIdCmd.CACertFile = rp.caCertFile
-	if len(rp.extraFlags) != 0 {
-		snapshotIdCmd.ExtraFlags = append(snapshotIdCmd.ExtraFlags, rp.extraFlags...)
-	}
-	snapshotID, err := restic.GetSnapshotID(snapshotIdCmd)
+	snapshotID, err := rp.getSnapshotId(tags, true)
 	if err != nil {
 		return "", false, errors.WithStack(fmt.Errorf("error getting snapshot id with error: %v", err))
 	}
@@ -183,4 +181,35 @@ func (rp *resticProvider) RunRestore(
 
 	log.Infof("Run command=%s, stdout=%s, stderr=%s", restoreCmd.Command, stdout, stderr)
 	return err
+}
+
+func (rp *resticProvider) getSnapshotId(tags map[string]string, assertExist bool) (string, error) {
+	snapshotIdCmd := restic.GetSnapshotCommand(rp.repoIdentifier, rp.credentialsFile, tags)
+	snapshotIdCmd.Env = rp.cmdEnv
+	snapshotIdCmd.CACertFile = rp.caCertFile
+	if len(rp.extraFlags) != 0 {
+		snapshotIdCmd.ExtraFlags = append(snapshotIdCmd.ExtraFlags, rp.extraFlags...)
+	}
+
+	return restic.GetSnapshotID(snapshotIdCmd, assertExist)
+}
+
+func (rp *resticProvider) deleteResticSnapshotIfAny(tags map[string]string, log logrus.FieldLogger) {
+	snapshotID, err := rp.getSnapshotId(tags, false)
+	if err != nil {
+		log.WithError(err).Warn("Failed to snapshot id")
+		return
+	}
+
+	forgetSnapshotCmd := restic.ForgetCommand(rp.repoIdentifier, snapshotID)
+	forgetSnapshotCmd.Env = rp.cmdEnv
+	forgetSnapshotCmd.CACertFile = rp.caCertFile
+	if len(rp.extraFlags) != 0 {
+		forgetSnapshotCmd.ExtraFlags = append(forgetSnapshotCmd.ExtraFlags, rp.extraFlags...)
+	}
+
+	err = restic.DeleteSnapshot(forgetSnapshotCmd)
+	if err != nil {
+		log.WithField("snapshot Id", snapshotID).WithError(err).Warn("Failed to delete snapshot")
+	}
 }
