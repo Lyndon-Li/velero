@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package restore
+package results
 
 import (
 	"testing"
@@ -193,4 +193,20 @@ func TestAdd(t *testing.T) {
 			assert.Equal(t, tc.want, tc.result)
 		})
 	}
+}
+
+func TestIsEmpty(t *testing.T) {
+	result := &Result{
+		Velero:     nil,
+		Cluster:    nil,
+		Namespaces: nil,
+	}
+	assert.True(t, result.IsEmpty())
+
+	result = &Result{
+		Velero:     []string{"error"},
+		Cluster:    nil,
+		Namespaces: nil,
+	}
+	assert.False(t, result.IsEmpty())
 }

@@ -148,6 +148,26 @@ func (b *backupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			continue
 		}
 
+		if backup.Status.Phase == velerov1api.BackupPhaseWaitingForPluginOperations ||
+			backup.Status.Phase == velerov1api.BackupPhaseWaitingForPluginOperationsPartiallyFailed {
+
+			if backup.Status.Expiration == nil || backup.Status.Expiration.After(time.Now()) {
+				log.Debugf("Skipping non-expired WaitingForPluginOperations backup %v", backup.Name)
+				continue
+			}
+			log.Debug("WaitingForPluginOperations Backup is past expiration, syncing for garbage collection")
+			backup.Status.Phase = velerov1api.BackupPhasePartiallyFailed
+		}
+		if backup.Status.Phase == velerov1api.BackupPhaseFinalizingAfterPluginOperations ||
+			backup.Status.Phase == velerov1api.BackupPhaseFinalizingAfterPluginOperationsPartiallyFailed {
+
+			if backup.Status.Expiration == nil || backup.Status.Expiration.After(time.Now()) {
+				log.Debugf("Skipping non-expired FinalizingAfterPluginOperations backup %v", backup.Name)
+				continue
+			}
+			log.Debug("FinalizingAfterPluginOperations Backup is past expiration, syncing for garbage collection")
+			backup.Status.Phase = velerov1api.BackupPhasePartiallyFailed
+		}
 		backup.Namespace = b.namespace
 		backup.ResourceVersion = ""
 
@@ -208,44 +228,6 @@ func (b *backupSyncReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				continue
 			default:
 				log.Debug("Synced pod volume backup into cluster")
-			}
-		}
-
-		// process the snapshot backups from object store, if any
-		snapshotBackups, err := backupStore.GetSnapshotBackups(backupName)
-		if err != nil {
-			log.WithError(errors.WithStack(err)).Error("Error getting snapshot backups for this backup from backup store")
-			continue
-		}
-
-		for _, snapshotBackup := range snapshotBackups {
-			log := log.WithField("snapshotBackup", snapshotBackup.Name)
-			log.Debug("Checking this snapshot backup to see if it needs to be synced into the cluster")
-
-			for i, ownerRef := range snapshotBackup.OwnerReferences {
-				if ownerRef.APIVersion == velerov1api.SchemeGroupVersion.String() && ownerRef.Kind == "Backup" && ownerRef.Name == backup.Name {
-					log.WithField("uid", backup.UID).Debugf("Updating snapshot backup's owner reference UID")
-					snapshotBackup.OwnerReferences[i].UID = backup.UID
-				}
-			}
-
-			if _, ok := snapshotBackup.Labels[velerov1api.BackupUIDLabel]; ok {
-				snapshotBackup.Labels[velerov1api.BackupUIDLabel] = string(backup.UID)
-			}
-
-			snapshotBackup.Namespace = backup.Namespace
-			snapshotBackup.ResourceVersion = ""
-
-			err = b.client.Create(ctx, snapshotBackup, &client.CreateOptions{})
-			switch {
-			case err != nil && kuberrs.IsAlreadyExists(err):
-				log.Debug("Snapshot backup already exists in cluster")
-				continue
-			case err != nil && !kuberrs.IsAlreadyExists(err):
-				log.WithError(errors.WithStack(err)).Error("Error syncing snapshot backup into cluster")
-				continue
-			default:
-				log.Debug("Synced snapshot backup into cluster")
 			}
 		}
 

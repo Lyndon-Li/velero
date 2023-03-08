@@ -93,7 +93,7 @@ spec:
   namespaceMapping:
     namespace-backup-from: namespace-to-restore-to
   # restorePVs specifies whether to restore all included PVs
-  # from snapshot (via the cloudprovider). Optional
+  # from snapshot. Optional
   restorePVs: true
   # preserveNodePorts specifies whether to restore old nodePorts from backup,
   # so that the exposed port numbers on the node will remain the same after restore. Optional
@@ -179,7 +179,9 @@ spec:
           onError: Continue
 # RestoreStatus captures the current status of a Velero restore. Users should not set any data here.
 status:
-  # The current phase. Valid values are New, FailedValidation, InProgress, Completed, PartiallyFailed, Failed.
+  # The current phase.
+  # Valid values are New, FailedValidation, InProgress, WaitingForPluginOperations,
+  # WaitingForPluginOperationsPartiallyFailed, Completed, PartiallyFailed, Failed.
   phase: ""
   # An array of any validation errors encountered.
   validationErrors: null

@@ -34,6 +34,7 @@ message ExecuteResponse {
     bytes item = 1;
     repeated generated.ResourceIdentifier additionalItems = 2;
     string operationID = 3;
+    repeated generated.ResourceIdentifier itemsToUpdate = 4;
 }
 ```
 The BackupItemAction service gets two new rpc methods:
@@ -69,12 +70,25 @@ One new shared message type will be added, as this will also be needed for v2 Re
 message OperationProgress {
     bool completed = 1;
     string err = 2;
-    int64 completed = 3;
-    int64 total = 4;
+    int64 nCompleted = 3;
+    int64 nTotal = 4;
     string operationUnits = 5;
     string description = 6;
     google.protobuf.Timestamp started = 7;
     google.protobuf.Timestamp updated = 8;
+}
+```
+
+In addition to the two new rpc methods added to the BackupItemAction interface, there is also a new `Name()` method. This one is only actually used internally by Velero to get the name that the plugin was registered with, but it still must be defined in a plugin which implements BackupItemActionV2 in order to implement the interface. It doesn't really matter what it returns, though, as this particular method is not delegated to the plugin via RPC calls. The new (and modified) interface methods for `BackupItemAction` are as follows:
+```
+type BackupItemAction interface {
+...
+	Name() string
+...
+	Execute(item runtime.Unstructured, backup *api.Backup) (runtime.Unstructured, []velero.ResourceIdentifier, string, []velero.ResourceIdentifier, error)
+	Progress(operationID string, backup *api.Backup) (velero.OperationProgress, error)
+	Cancel(operationID string, backup *api.Backup) error
+...
 }
 ```
 

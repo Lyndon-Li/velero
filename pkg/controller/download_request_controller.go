@@ -23,7 +23,7 @@ import (
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/clock"
+	clocks "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -35,11 +35,14 @@ import (
 // downloadRequestReconciler reconciles a DownloadRequest object
 type downloadRequestReconciler struct {
 	client kbclient.Client
-	clock  clock.Clock
+	clock  clocks.Clock
 	// use variables to refer to these functions so they can be
 	// replaced with fakes for testing.
 	newPluginManager  func(logrus.FieldLogger) clientmgmt.Manager
 	backupStoreGetter persistence.ObjectBackupStoreGetter
+
+	// used to force update of async backup item operations before processing download request
+	backupItemOperationsMap *BackupItemOperationsMap
 
 	log logrus.FieldLogger
 }
@@ -47,17 +50,19 @@ type downloadRequestReconciler struct {
 // NewDownloadRequestReconciler initializes and returns downloadRequestReconciler struct.
 func NewDownloadRequestReconciler(
 	client kbclient.Client,
-	clock clock.Clock,
+	clock clocks.Clock,
 	newPluginManager func(logrus.FieldLogger) clientmgmt.Manager,
 	backupStoreGetter persistence.ObjectBackupStoreGetter,
 	log logrus.FieldLogger,
+	backupItemOperationsMap *BackupItemOperationsMap,
 ) *downloadRequestReconciler {
 	return &downloadRequestReconciler{
-		client:            client,
-		clock:             clock,
-		newPluginManager:  newPluginManager,
-		backupStoreGetter: backupStoreGetter,
-		log:               log,
+		client:                  client,
+		clock:                   clock,
+		newPluginManager:        newPluginManager,
+		backupStoreGetter:       backupStoreGetter,
+		backupItemOperationsMap: backupItemOperationsMap,
+		log:                     log,
 	}
 }
 
@@ -121,7 +126,8 @@ func (r *downloadRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		downloadRequest.Status.Expiration = &metav1.Time{Time: r.clock.Now().Add(persistence.DownloadURLTTL)}
 
 		if downloadRequest.Spec.Target.Kind == velerov1api.DownloadTargetKindRestoreLog ||
-			downloadRequest.Spec.Target.Kind == velerov1api.DownloadTargetKindRestoreResults {
+			downloadRequest.Spec.Target.Kind == velerov1api.DownloadTargetKindRestoreResults ||
+			downloadRequest.Spec.Target.Kind == velerov1api.DownloadTargetKindRestoreResourceList {
 			restore := &velerov1api.Restore{}
 			if err := r.client.Get(ctx, kbclient.ObjectKey{
 				Namespace: downloadRequest.Namespace,
@@ -157,6 +163,13 @@ func (r *downloadRequestReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, errors.WithStack(err)
 		}
 
+		// If this is a request for backup item operations, force update of in-memory operations that
+		// are not yet uploaded
+		if downloadRequest.Spec.Target.Kind == velerov1api.DownloadTargetKindBackupItemOperations &&
+			r.backupItemOperationsMap != nil {
+			// ignore errors here. If we can't upload anything here, process the download as usual
+			_ = r.backupItemOperationsMap.UpdateForBackup(backupStore, backupName)
+		}
 		if downloadRequest.Status.DownloadURL, err = backupStore.GetDownloadURL(downloadRequest.Spec.Target); err != nil {
 			return ctrl.Result{Requeue: true}, errors.WithStack(err)
 		}

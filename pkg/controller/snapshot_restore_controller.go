@@ -30,9 +30,10 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/clock"
+	clocks "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -74,7 +75,7 @@ type SnapshotRestoreReconciler struct {
 	logger              logrus.FieldLogger
 	credentialGetter    *credentials.CredentialGetter
 	fileSystem          filesystem.Interface
-	clock               clock.Clock
+	clock               clocks.WithTickerAndDelayedExecution
 	nodeName            string
 	repositoryEnsurer   *repository.RepositoryEnsurer
 	DataPathTrackerLock sync.Mutex
@@ -515,7 +516,7 @@ func (s *SnapshotRestoreReconciler) waitRestorePVCExposed(ctx context.Context, s
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	pollInterval := 2 * time.Second
-	if err := wait.PollImmediate(pollInterval, ssr.Spec.TargetVolume.OperationTimeout.Duration, func() (done bool, err error) {
+	if err := wait.PollImmediate(pollInterval, ssr.Spec.OperationTimeout.Duration, func() (done bool, err error) {
 		if err := s.Client.Get(ctx, types.NamespacedName{
 			Namespace: ssr.Namespace,
 			Name:      restorePVCName,
@@ -557,7 +558,7 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
-	_, restorePV, err := kube.WaitPVCBound(ctx, s.kubeClient.CoreV1(), s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.TargetVolume.OperationTimeout.Duration)
+	_, restorePV, err := kube.WaitPVCBound(ctx, s.kubeClient.CoreV1(), s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrapf(err, fmt.Sprintf("Failed to get PV from restore PVC %s", restorePVCName))
 	}
@@ -578,19 +579,19 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 		}
 	}()
 
-	err = kube.EnsureDeletePod(ctx, s.kubeClient.CoreV1(), restorePodName, ssr.Namespace, ssr.Spec.TargetVolume.OperationTimeout.Duration)
+	err = kube.EnsureDeletePod(ctx, s.kubeClient.CoreV1(), restorePodName, ssr.Namespace, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrapf(err, fmt.Sprintf("Failed to delete restore pod %s", restorePodName))
 	}
 
-	err = kube.EnsureDeletePVC(ctx, s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.TargetVolume.OperationTimeout.Duration)
+	err = kube.EnsureDeletePVC(ctx, s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrapf(err, fmt.Sprintf("Failed to delete restore PVC %s", restorePVCName))
 	}
 
 	log.WithField("restore PVC", restorePVCName).Info("Restore PVC is deleted")
 
-	err = kube.EnsureDeletePV(ctx, s.kubeClient.CoreV1(), restorePV.Name, ssr.Spec.TargetVolume.OperationTimeout.Duration)
+	err = kube.EnsureDeletePV(ctx, s.kubeClient.CoreV1(), restorePV.Name, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrapf(err, fmt.Sprintf("Failed to delete restore PV %s", restorePV.Name))
 	}

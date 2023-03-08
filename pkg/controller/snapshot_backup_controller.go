@@ -30,9 +30,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	clocks "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -44,7 +44,6 @@ import (
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
@@ -66,7 +65,7 @@ type SnapshotBackupReconciler struct {
 	Client              client.Client
 	kubeClient          kubernetes.Interface
 	csiSnapshotClient   *snapshotterClientSet.Clientset
-	Clock               clock.Clock
+	Clock               clocks.WithTickerAndDelayedExecution
 	Metrics             *metrics.ServerMetrics
 	CredentialGetter    *credentials.CredentialGetter
 	NodeName            string
@@ -96,7 +95,7 @@ type cSISnapshotExposeResult struct {
 	path string
 }
 
-func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient *snapshotterClientSet.Clientset, clock clock.Clock, metrics *metrics.ServerMetrics, cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, log logrus.FieldLogger) *SnapshotBackupReconciler {
+func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient *snapshotterClientSet.Clientset, clock clocks.WithTickerAndDelayedExecution, metrics *metrics.ServerMetrics, cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, log logrus.FieldLogger) *SnapshotBackupReconciler {
 	return &SnapshotBackupReconciler{
 		Scheme:            scheme,
 		Client:            client,
@@ -272,7 +271,7 @@ func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ss
 			}
 		}()
 
-		snapshotID, emptySnapshot, err := uploaderProv.RunBackup(cancelCtx, sser.csiExpose.path, ssb.Spec.Tags, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(ssb, log, ctx))
+		snapshotID, emptySnapshot, err := uploaderProv.RunBackup(cancelCtx, sser.csiExpose.path, nil, parentSnapshotID, s.NewSnapshotBackupProgressUpdater(ssb, log, ctx))
 		if err != nil && err != provider.ErrorCanceled {
 			s.errorOut(ctx, ssb, err, fmt.Sprintf("running backup, stderr=%v", err), log)
 			return
@@ -566,7 +565,7 @@ func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, s
 
 	pvc := &corev1.PersistentVolumeClaim{}
 	pollInterval := 2 * time.Second
-	err = wait.PollImmediate(pollInterval, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration, func() (done bool, err error) {
+	err = wait.PollImmediate(pollInterval, ssb.Spec.OperationTimeout.Duration, func() (done bool, err error) {
 		if err := r.Client.Get(ctx, types.NamespacedName{
 			Namespace: ssb.Namespace,
 			Name:      backupPVCName,
@@ -622,7 +621,7 @@ func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *v
 
 	backupVCName := ssb.Name
 
-	volumeSnapshot, err := csi.WaitVolumeSnapshotReady(ctx, r.csiSnapshotClient, ssb.Spec.CSISnapshot.VolumeSnapshot, ssb.Spec.SourceNamespace, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration, log)
+	volumeSnapshot, err := csi.WaitVolumeSnapshotReady(ctx, r.csiSnapshotClient, ssb.Spec.CSISnapshot.VolumeSnapshot, ssb.Spec.SourceNamespace, ssb.Spec.OperationTimeout.Duration, log)
 	if err != nil {
 		return errors.Wrapf(err, "error wait volume snapshot ready")
 	}
@@ -671,14 +670,14 @@ func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *v
 		}
 	}()
 
-	err = csi.EnsureDeleteVS(ctx, r.csiSnapshotClient, volumeSnapshot, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration)
+	err = csi.EnsureDeleteVS(ctx, r.csiSnapshotClient, volumeSnapshot, ssb.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrap(err, "error to delete volume snapshot")
 	}
 
 	curLog.WithField("vs name", volumeSnapshot.Name).Infof("VS is deleted in namespace %s", volumeSnapshot.Namespace)
 
-	err = csi.EnsureDeleteVSC(ctx, r.csiSnapshotClient, vsc, ssb.Spec.CSISnapshot.CSISnapshotTimeout.Duration)
+	err = csi.EnsureDeleteVSC(ctx, r.csiSnapshotClient, vsc, ssb.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrap(err, "error to delete volume snapshot")
 	}
@@ -746,7 +745,7 @@ func (r *SnapshotBackupReconciler) createBackupVS(ctx context.Context, snapshotV
 			Name:      backupVSName,
 			Namespace: ssb.Namespace,
 			Labels: map[string]string{
-				velerov1api.BackupNameLabel: label.GetValidName(ssb.Spec.BackupName),
+				velerov1api.SnapshotBackupLabel: ssb.Name,
 			},
 		},
 		Spec: snapshotv1api.VolumeSnapshotSpec{

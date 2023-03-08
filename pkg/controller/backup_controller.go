@@ -29,25 +29,24 @@ import (
 	"time"
 
 	jsonpatch "github.com/evanphx/json-patch"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	snapshotterClientSet "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
+	snapshotv1listers "github.com/kubernetes-csi/external-snapshotter/client/v4/listers/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sync/errgroup"
+	corev1api "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/clock"
 	kerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
-
-	"github.com/vmware-tanzu/velero/pkg/util/csi"
-
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
-	snapshotterClientSet "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned"
-	snapshotv1listers "github.com/kubernetes-csi/external-snapshotter/client/v4/listers/volumesnapshot/v1"
+	clocks "k8s.io/utils/clock"
+	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	"github.com/vmware-tanzu/velero/internal/storage"
@@ -65,39 +64,38 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/plugin/framework"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/collections"
+	"github.com/vmware-tanzu/velero/pkg/util/csi"
 	"github.com/vmware-tanzu/velero/pkg/util/encode"
 	kubeutil "github.com/vmware-tanzu/velero/pkg/util/kube"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
+	"github.com/vmware-tanzu/velero/pkg/util/results"
 	"github.com/vmware-tanzu/velero/pkg/volume"
-
-	corev1api "k8s.io/api/core/v1"
-	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type backupController struct {
 	*genericController
-	discoveryHelper           discovery.Helper
-	backupper                 pkgbackup.Backupper
-	lister                    velerov1listers.BackupLister
-	client                    velerov1client.BackupsGetter
-	snapshotBackupClient      velerov1client.SnapshotBackupsGetter
-	kbClient                  kbclient.Client
-	clock                     clock.Clock
-	backupLogLevel            logrus.Level
-	newPluginManager          func(logrus.FieldLogger) clientmgmt.Manager
-	backupTracker             BackupTracker
-	defaultBackupLocation     string
-	defaultVolumesToFsBackup  bool
-	defaultBackupTTL          time.Duration
-	defaultCSISnapshotTimeout time.Duration
-	snapshotLocationLister    velerov1listers.VolumeSnapshotLocationLister
-	defaultSnapshotLocations  map[string]string
-	metrics                   *metrics.ServerMetrics
-	backupStoreGetter         persistence.ObjectBackupStoreGetter
-	formatFlag                logging.Format
-	volumeSnapshotLister      snapshotv1listers.VolumeSnapshotLister
-	volumeSnapshotClient      snapshotterClientSet.Interface
-	credentialFileStore       credentials.FileStore
+	discoveryHelper             discovery.Helper
+	backupper                   pkgbackup.Backupper
+	lister                      velerov1listers.BackupLister
+	client                      velerov1client.BackupsGetter
+	kbClient                    kbclient.Client
+	clock                       clocks.WithTickerAndDelayedExecution
+	backupLogLevel              logrus.Level
+	newPluginManager            func(logrus.FieldLogger) clientmgmt.Manager
+	backupTracker               BackupTracker
+	defaultBackupLocation       string
+	defaultVolumesToFsBackup    bool
+	defaultBackupTTL            time.Duration
+	defaultCSISnapshotTimeout   time.Duration
+	defaultItemOperationTimeout time.Duration
+	snapshotLocationLister      velerov1listers.VolumeSnapshotLocationLister
+	defaultSnapshotLocations    map[string]string
+	metrics                     *metrics.ServerMetrics
+	backupStoreGetter           persistence.ObjectBackupStoreGetter
+	formatFlag                  logging.Format
+	volumeSnapshotLister        snapshotv1listers.VolumeSnapshotLister
+	volumeSnapshotClient        snapshotterClientSet.Interface
+	credentialFileStore         credentials.FileStore
 }
 
 func NewBackupController(
@@ -115,6 +113,7 @@ func NewBackupController(
 	defaultVolumesToFsBackup bool,
 	defaultBackupTTL time.Duration,
 	defaultCSISnapshotTimeout time.Duration,
+	defaultItemOperationTimeout time.Duration,
 	volumeSnapshotLocationLister velerov1listers.VolumeSnapshotLocationLister,
 	defaultSnapshotLocations map[string]string,
 	metrics *metrics.ServerMetrics,
@@ -125,29 +124,29 @@ func NewBackupController(
 	credentialStore credentials.FileStore,
 ) Interface {
 	c := &backupController{
-		genericController:         newGenericController(Backup, logger),
-		discoveryHelper:           discoveryHelper,
-		backupper:                 backupper,
-		lister:                    backupInformer.Lister(),
-		client:                    client,
-		clock:                     &clock.RealClock{},
-		backupLogLevel:            backupLogLevel,
-		newPluginManager:          newPluginManager,
-		backupTracker:             backupTracker,
-		kbClient:                  kbClient,
-		defaultBackupLocation:     defaultBackupLocation,
-		defaultVolumesToFsBackup:  defaultVolumesToFsBackup,
-		defaultBackupTTL:          defaultBackupTTL,
-		defaultCSISnapshotTimeout: defaultCSISnapshotTimeout,
-		snapshotLocationLister:    volumeSnapshotLocationLister,
-		defaultSnapshotLocations:  defaultSnapshotLocations,
-		metrics:                   metrics,
-		backupStoreGetter:         backupStoreGetter,
-		formatFlag:                formatFlag,
-		volumeSnapshotLister:      volumeSnapshotLister,
-		volumeSnapshotClient:      volumeSnapshotClient,
-		credentialFileStore:       credentialStore,
-		snapshotBackupClient:      snapshotBackupClient,
+		genericController:           newGenericController(Backup, logger),
+		discoveryHelper:             discoveryHelper,
+		backupper:                   backupper,
+		lister:                      backupInformer.Lister(),
+		client:                      client,
+		clock:                       &clocks.RealClock{},
+		backupLogLevel:              backupLogLevel,
+		newPluginManager:            newPluginManager,
+		backupTracker:               backupTracker,
+		kbClient:                    kbClient,
+		defaultBackupLocation:       defaultBackupLocation,
+		defaultVolumesToFsBackup:    defaultVolumesToFsBackup,
+		defaultBackupTTL:            defaultBackupTTL,
+		defaultCSISnapshotTimeout:   defaultCSISnapshotTimeout,
+		defaultItemOperationTimeout: defaultItemOperationTimeout,
+		snapshotLocationLister:      volumeSnapshotLocationLister,
+		defaultSnapshotLocations:    defaultSnapshotLocations,
+		metrics:                     metrics,
+		backupStoreGetter:           backupStoreGetter,
+		formatFlag:                  formatFlag,
+		volumeSnapshotLister:        volumeSnapshotLister,
+		volumeSnapshotClient:        volumeSnapshotClient,
+		credentialFileStore:         credentialStore,
 	}
 
 	c.syncHandler = c.processBackup
@@ -306,12 +305,16 @@ func (c *backupController) processBackup(key string) error {
 	switch request.Status.Phase {
 	case velerov1api.BackupPhaseCompleted:
 		c.metrics.RegisterBackupSuccess(backupScheduleName)
+		c.metrics.RegisterBackupLastStatus(backupScheduleName, metrics.BackupLastStatusSucc)
 	case velerov1api.BackupPhasePartiallyFailed:
 		c.metrics.RegisterBackupPartialFailure(backupScheduleName)
+		c.metrics.RegisterBackupLastStatus(backupScheduleName, metrics.BackupLastStatusFailure)
 	case velerov1api.BackupPhaseFailed:
 		c.metrics.RegisterBackupFailed(backupScheduleName)
+		c.metrics.RegisterBackupLastStatus(backupScheduleName, metrics.BackupLastStatusFailure)
 	case velerov1api.BackupPhaseFailedValidation:
 		c.metrics.RegisterBackupValidationFailure(backupScheduleName)
+		c.metrics.RegisterBackupLastStatus(backupScheduleName, metrics.BackupLastStatusFailure)
 	}
 
 	log.Debug("Updating backup's final status")
@@ -365,6 +368,11 @@ func (c *backupController) prepareBackupRequest(backup *velerov1api.Backup, logg
 	if request.Spec.CSISnapshotTimeout.Duration == 0 {
 		// set default CSI VolumeSnapshot timeout
 		request.Spec.CSISnapshotTimeout.Duration = c.defaultCSISnapshotTimeout
+	}
+
+	if request.Spec.ItemOperationTimeout.Duration == 0 {
+		// set default item operation timeout
+		request.Spec.ItemOperationTimeout.Duration = c.defaultItemOperationTimeout
 	}
 
 	// calculate expiration
@@ -482,11 +490,12 @@ func (c *backupController) prepareBackupRequest(backup *velerov1api.Backup, logg
 
 // validateAndGetSnapshotLocations gets a collection of VolumeSnapshotLocation objects that
 // this backup will use (returned as a map of provider name -> VSL), and ensures:
-// - each location name in .spec.volumeSnapshotLocations exists as a location
-// - exactly 1 location per provider
-// - a given provider's default location name is added to .spec.volumeSnapshotLocations if one
-//   is not explicitly specified for the provider (if there's only one location for the provider,
-//   it will automatically be used)
+//   - each location name in .spec.volumeSnapshotLocations exists as a location
+//   - exactly 1 location per provider
+//   - a given provider's default location name is added to .spec.volumeSnapshotLocations if one
+//     is not explicitly specified for the provider (if there's only one location for the provider,
+//     it will automatically be used)
+//
 // if backup has snapshotVolume disabled then it returns empty VSL
 func (c *backupController) validateAndGetSnapshotLocations(backup *velerov1api.Backup) (map[string]*velerov1api.VolumeSnapshotLocation, []string) {
 	errors := []string{}
@@ -606,7 +615,7 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 	logger := logging.DefaultLogger(c.backupLogLevel, c.formatFlag)
 	logger.Out = io.MultiWriter(os.Stdout, gzippedLogFile)
 
-	logCounter := logging.NewLogCounterHook()
+	logCounter := logging.NewLogHook()
 	logger.Hooks.Add(logCounter)
 
 	backupLog := logger.WithField(Backup, kubeutil.NamespaceAndName(backup))
@@ -623,7 +632,7 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 	defer pluginManager.CleanupClients()
 
 	backupLog.Info("Getting backup item actions")
-	actions, err := pluginManager.GetBackupItemActions()
+	actions, err := pluginManager.GetBackupItemActionsV2()
 	if err != nil {
 		return err
 	}
@@ -648,7 +657,7 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 		return errors.Errorf("backup already exists in object storage")
 	}
 
-	backupItemActionsResolver := framework.NewBackupItemActionResolver(actions)
+	backupItemActionsResolver := framework.NewBackupItemActionResolverV2(actions)
 	itemSnapshottersResolver := framework.NewItemSnapshotterResolver(itemSnapshotters)
 
 	var fatalErrs []error
@@ -663,21 +672,47 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 	var volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent
 	var volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass
 	if features.IsEnabled(velerov1api.CSIFeatureFlag) {
-		if isMovingSnapshot(backup) {
-			///for now, wait the SnapshotBackup CR, in future, this is replaced by checking BIA V2's Progress interface
-			backupLog.WithField("pid", os.Getpid()).Info("Start to wait snapshotbackups")
-			errs := c.waitSnapshotBackup(backup, backupLog)
-			backupLog.WithField("err num", len(errs)).Info("Finish to wait snapshotbackups")
-		} else {
-			backupLog.Info("Start to wait and handle snapshotcontents")
-			volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses = c.waitAndFinalizeSnapshotContent(backup, backupLog)
-			backupLog.Info("Finish to wait and handle snapshotcontents")
+		selector := label.NewSelectorForBackup(backup.Name)
+		vscList := &snapshotv1api.VolumeSnapshotContentList{}
+
+		volumeSnapshots, err = c.waitVolumeSnapshotReadyToUse(context.Background(), backup.Spec.CSISnapshotTimeout.Duration, backup.Name)
+		if err != nil {
+			backupLog.Errorf("fail to wait VolumeSnapshot change to Ready: %s", err.Error())
+		}
+
+		backup.CSISnapshots = volumeSnapshots
+
+		err = c.kbClient.List(context.Background(), vscList, &kbclient.ListOptions{LabelSelector: selector})
+		if err != nil {
+			backupLog.Error(err)
+		}
+		if len(vscList.Items) >= 0 {
+			volumeSnapshotContents = vscList.Items
+		}
+
+		vsClassSet := sets.NewString()
+		for index := range volumeSnapshotContents {
+			// persist the volumesnapshotclasses referenced by vsc
+			if volumeSnapshotContents[index].Spec.VolumeSnapshotClassName != nil && !vsClassSet.Has(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName) {
+				vsClass := &snapshotv1api.VolumeSnapshotClass{}
+				if err := c.kbClient.Get(context.TODO(), kbclient.ObjectKey{Name: *volumeSnapshotContents[index].Spec.VolumeSnapshotClassName}, vsClass); err != nil {
+					backupLog.Error(err)
+				} else {
+					vsClassSet.Insert(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName)
+					volumeSnapshotClasses = append(volumeSnapshotClasses, *vsClass)
+				}
+			}
+
+			if err := csi.ResetVolumeSnapshotContent(&volumeSnapshotContents[index]); err != nil {
+				backupLog.Error(err)
+			}
+		}
+
+		// Delete the VolumeSnapshots created in the backup, when CSI feature is enabled.
+		if len(volumeSnapshots) > 0 && len(volumeSnapshotContents) > 0 {
+			c.deleteVolumeSnapshot(volumeSnapshots, volumeSnapshotContents, backupLog)
 		}
 	}
-
-	// Mark completion timestamp before serializing and uploading.
-	// Otherwise, the JSON file in object storage has a CompletionTimestamp of 'null'.
-	backup.Status.CompletionTimestamp = &metav1.Time{Time: c.clock.Now()}
 
 	backup.Status.VolumeSnapshotsAttempted = len(backup.VolumeSnapshots)
 	for _, snap := range backup.VolumeSnapshots {
@@ -693,10 +728,30 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 		}
 	}
 
+	// Iterate over backup item operations and update progress.
+	// Any errors on operations at this point should be added to backup errors.
+	// If any operations are still not complete, then back will not be set to
+	// Completed yet.
+	inProgressOperations, _, opsCompleted, opsFailed, errs := getBackupItemOperationProgress(backup.Backup, pluginManager, *backup.GetItemOperationsList())
+	if len(errs) > 0 {
+		for err := range errs {
+			backupLog.Error(err)
+		}
+	}
+
+	backup.Status.AsyncBackupItemOperationsAttempted = len(*backup.GetItemOperationsList())
+	backup.Status.AsyncBackupItemOperationsCompleted = opsCompleted
+	backup.Status.AsyncBackupItemOperationsFailed = opsFailed
+
 	backup.Status.Warnings = logCounter.GetCount(logrus.WarnLevel)
 	backup.Status.Errors = logCounter.GetCount(logrus.ErrorLevel)
 
-	recordBackupMetrics(backupLog, backup.Backup, backupFile, c.metrics)
+	backupWarnings := logCounter.GetEntries(logrus.WarnLevel)
+	backupErrors := logCounter.GetEntries(logrus.ErrorLevel)
+	results := map[string]results.Result{
+		"warnings": backupWarnings,
+		"errors":   backupErrors,
+	}
 
 	if err := gzippedLogFile.Close(); err != nil {
 		c.logger.WithField(Backup, kubeutil.NamespaceAndName(backup)).WithError(err).Error("error closing gzippedLogFile")
@@ -710,10 +765,26 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 	case len(fatalErrs) > 0:
 		backup.Status.Phase = velerov1api.BackupPhaseFailed
 	case logCounter.GetCount(logrus.ErrorLevel) > 0:
-		backup.Status.Phase = velerov1api.BackupPhasePartiallyFailed
+		if inProgressOperations {
+			backup.Status.Phase = velerov1api.BackupPhaseWaitingForPluginOperationsPartiallyFailed
+		} else {
+			backup.Status.Phase = velerov1api.BackupPhaseFinalizingAfterPluginOperationsPartiallyFailed
+		}
 	default:
-		backup.Status.Phase = velerov1api.BackupPhaseCompleted
+		if inProgressOperations {
+			backup.Status.Phase = velerov1api.BackupPhaseWaitingForPluginOperations
+		} else {
+			backup.Status.Phase = velerov1api.BackupPhaseFinalizingAfterPluginOperations
+		}
 	}
+	// Mark completion timestamp before serializing and uploading.
+	// Otherwise, the JSON file in object storage has a CompletionTimestamp of 'null'.
+	if backup.Status.Phase == velerov1api.BackupPhaseFailed ||
+		backup.Status.Phase == velerov1api.BackupPhasePartiallyFailed ||
+		backup.Status.Phase == velerov1api.BackupPhaseCompleted {
+		backup.Status.CompletionTimestamp = &metav1.Time{Time: c.clock.Now()}
+	}
+	recordBackupMetrics(backupLog, backup.Backup, backupFile, c.metrics, false)
 
 	// re-instantiate the backup store because credentials could have changed since the original
 	// instantiation, if this was a long-running backup
@@ -723,7 +794,7 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 		return err
 	}
 
-	if errs := persistBackup(backup, backupFile, logFile, backupStore, volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses); len(errs) > 0 {
+	if errs := persistBackup(backup, backupFile, logFile, backupStore, volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses, results); len(errs) > 0 {
 		fatalErrs = append(fatalErrs, errs...)
 	}
 
@@ -734,153 +805,44 @@ func (c *backupController) runBackup(backup *pkgbackup.Request) error {
 	return kerrors.NewAggregate(fatalErrs)
 }
 
-func isMovingSnapshot(backup *pkgbackup.Request) bool {
-	return *backup.Spec.CSISnapshotMoveData
-}
-
-func (c *backupController) waitSnapshotBackup(backup *pkgbackup.Request, backupLog logrus.FieldLogger) []error {
-	ctx := context.Background()
-
-	eg, _ := errgroup.WithContext(ctx)
-	timeout := 4 * time.Hour
-	interval := 5 * time.Second
-	var errs []error
-
-	listOptions := label.NewListOptionsForBackup(label.GetValidName(backup.Name))
-	snapshotBackupList, err := c.snapshotBackupClient.SnapshotBackups(backup.Namespace).List(ctx, listOptions)
-	if err != nil {
-		backupLog.WithError(err).Errorf("Failed to list snapshotbackups for backup: %s", backup.Name)
-		errs = append(errs, errors.Wrap(err, "error to list snapshotbackups"))
-
-		return errs
-	}
-
-	for i := range snapshotBackupList.Items {
-		snapshotBackup := snapshotBackupList.Items[i]
-
-		var updated *velerov1api.SnapshotBackup
-		var pollErr error
-		eg.Go(func() error {
-			checkFunc := func() (bool, error) {
-				updated, pollErr = c.snapshotBackupClient.SnapshotBackups(snapshotBackup.Namespace).Get(ctx, snapshotBackup.Name, metav1.GetOptions{})
-				if pollErr != nil {
-					return false, errors.Wrapf(pollErr, fmt.Sprintf("failed to get snapshotbackup %s", snapshotBackup.Name))
-				}
-
-				if updated.Status.Phase == velerov1api.SnapshotBackupPhaseFailed {
-					return false, errors.Errorf("snapshot backup failed, %s", updated.Status.Message)
-				}
-
-				if updated.Status.Phase == velerov1api.SnapshotBackupPhaseCanceled {
-					return false, errors.Errorf("snapshot backup is canceled, %s", updated.Status.Message)
-				}
-
-				if updated.Status.Phase == velerov1api.SnapshotBackupPhaseCompleted {
-					return true, nil
-				}
-
-				return false, nil
-			}
-
-			err := wait.PollImmediate(interval, timeout, checkFunc)
-			if err != nil {
-				backupLog.WithField("snapshotBackup", snapshotBackup.Name).WithError(err).Error("SnapshotBackup failed")
-				errs = append(errs, err)
-			} else {
-				backupLog.WithField("snapshotBackup", snapshotBackup.Name).Info("SnapshotBackup completes")
-			}
-
-			if updated != nil {
-				backup.SnapshotBackups = append(backup.SnapshotBackups, updated)
-			}
-
-			return err
-		})
-	}
-
-	eg.Wait()
-
-	return errs
-}
-
-func (c *backupController) waitAndFinalizeSnapshotContent(backup *pkgbackup.Request, backupLog logrus.FieldLogger) (
-	[]snapshotv1api.VolumeSnapshot, []snapshotv1api.VolumeSnapshotContent, []snapshotv1api.VolumeSnapshotClass) {
-	var volumeSnapshots []snapshotv1api.VolumeSnapshot
-	var volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent
-	var volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass
-
-	selector := label.NewSelectorForBackup(backup.Name)
-	vscList := &snapshotv1api.VolumeSnapshotContentList{}
-
-	volumeSnapshots, err := c.waitVolumeSnapshotReadyToUse(context.Background(), backup.Spec.CSISnapshotTimeout.Duration, backup.Name)
-	if err != nil {
-		backupLog.Errorf("fail to wait VolumeSnapshot change to Ready: %s", err.Error())
-	}
-
-	backup.CSISnapshots = volumeSnapshots
-
-	err = c.kbClient.List(context.Background(), vscList, &kbclient.ListOptions{LabelSelector: selector})
-	if err != nil {
-		backupLog.Error(err)
-	}
-	if len(vscList.Items) >= 0 {
-		volumeSnapshotContents = vscList.Items
-	}
-
-	vsClassSet := sets.NewString()
-	for index := range volumeSnapshotContents {
-		// persist the volumesnapshotclasses referenced by vsc
-		if volumeSnapshotContents[index].Spec.VolumeSnapshotClassName != nil && !vsClassSet.Has(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName) {
-			vsClass := &snapshotv1api.VolumeSnapshotClass{}
-			if err := c.kbClient.Get(context.TODO(), kbclient.ObjectKey{Name: *volumeSnapshotContents[index].Spec.VolumeSnapshotClassName}, vsClass); err != nil {
-				backupLog.Error(err)
-			} else {
-				vsClassSet.Insert(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName)
-				volumeSnapshotClasses = append(volumeSnapshotClasses, *vsClass)
-			}
-		}
-
-		if err := csi.ResetVolumeSnapshotContent(&volumeSnapshotContents[index]); err != nil {
-			backupLog.Error(err)
-		}
-	}
-
-	// Delete the VolumeSnapshots created in the backup, when CSI feature is enabled.
-	if len(volumeSnapshots) > 0 && len(volumeSnapshotContents) > 0 {
-		c.deleteVolumeSnapshot(volumeSnapshots, volumeSnapshotContents, backupLog)
-	}
-
-	return volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses
-}
-
-func recordBackupMetrics(log logrus.FieldLogger, backup *velerov1api.Backup, backupFile *os.File, serverMetrics *metrics.ServerMetrics) {
+func recordBackupMetrics(log logrus.FieldLogger, backup *velerov1api.Backup, backupFile *os.File, serverMetrics *metrics.ServerMetrics, finalize bool) {
 	backupScheduleName := backup.GetLabels()[velerov1api.ScheduleNameLabel]
 
-	var backupSizeBytes int64
-	if backupFileStat, err := backupFile.Stat(); err != nil {
-		log.WithError(errors.WithStack(err)).Error("Error getting backup file info")
-	} else {
-		backupSizeBytes = backupFileStat.Size()
-	}
-	serverMetrics.SetBackupTarballSizeBytesGauge(backupScheduleName, backupSizeBytes)
-
-	backupDuration := backup.Status.CompletionTimestamp.Time.Sub(backup.Status.StartTimestamp.Time)
-	backupDurationSeconds := float64(backupDuration / time.Second)
-	serverMetrics.RegisterBackupDuration(backupScheduleName, backupDurationSeconds)
-	serverMetrics.RegisterVolumeSnapshotAttempts(backupScheduleName, backup.Status.VolumeSnapshotsAttempted)
-	serverMetrics.RegisterVolumeSnapshotSuccesses(backupScheduleName, backup.Status.VolumeSnapshotsCompleted)
-	serverMetrics.RegisterVolumeSnapshotFailures(backupScheduleName, backup.Status.VolumeSnapshotsAttempted-backup.Status.VolumeSnapshotsCompleted)
-
-	if features.IsEnabled(velerov1api.CSIFeatureFlag) {
-		serverMetrics.RegisterCSISnapshotAttempts(backupScheduleName, backup.Name, backup.Status.CSIVolumeSnapshotsAttempted)
-		serverMetrics.RegisterCSISnapshotSuccesses(backupScheduleName, backup.Name, backup.Status.CSIVolumeSnapshotsCompleted)
-		serverMetrics.RegisterCSISnapshotFailures(backupScheduleName, backup.Name, backup.Status.CSIVolumeSnapshotsAttempted-backup.Status.CSIVolumeSnapshotsCompleted)
+	if backupFile != nil {
+		var backupSizeBytes int64
+		if backupFileStat, err := backupFile.Stat(); err != nil {
+			log.WithError(errors.WithStack(err)).Error("Error getting backup file info")
+		} else {
+			backupSizeBytes = backupFileStat.Size()
+		}
+		serverMetrics.SetBackupTarballSizeBytesGauge(backupScheduleName, backupSizeBytes)
 	}
 
-	if backup.Status.Progress != nil {
-		serverMetrics.RegisterBackupItemsTotalGauge(backupScheduleName, backup.Status.Progress.TotalItems)
+	if backup.Status.CompletionTimestamp != nil {
+		backupDuration := backup.Status.CompletionTimestamp.Time.Sub(backup.Status.StartTimestamp.Time)
+		backupDurationSeconds := float64(backupDuration / time.Second)
+		serverMetrics.RegisterBackupDuration(backupScheduleName, backupDurationSeconds)
 	}
-	serverMetrics.RegisterBackupItemsErrorsGauge(backupScheduleName, backup.Status.Errors)
+	if !finalize {
+		serverMetrics.RegisterVolumeSnapshotAttempts(backupScheduleName, backup.Status.VolumeSnapshotsAttempted)
+		serverMetrics.RegisterVolumeSnapshotSuccesses(backupScheduleName, backup.Status.VolumeSnapshotsCompleted)
+		serverMetrics.RegisterVolumeSnapshotFailures(backupScheduleName, backup.Status.VolumeSnapshotsAttempted-backup.Status.VolumeSnapshotsCompleted)
+
+		if features.IsEnabled(velerov1api.CSIFeatureFlag) {
+			serverMetrics.RegisterCSISnapshotAttempts(backupScheduleName, backup.Name, backup.Status.CSIVolumeSnapshotsAttempted)
+			serverMetrics.RegisterCSISnapshotSuccesses(backupScheduleName, backup.Name, backup.Status.CSIVolumeSnapshotsCompleted)
+			serverMetrics.RegisterCSISnapshotFailures(backupScheduleName, backup.Name, backup.Status.CSIVolumeSnapshotsAttempted-backup.Status.CSIVolumeSnapshotsCompleted)
+		}
+
+		if backup.Status.Progress != nil {
+			serverMetrics.RegisterBackupItemsTotalGauge(backupScheduleName, backup.Status.Progress.TotalItems)
+		}
+		serverMetrics.RegisterBackupItemsErrorsGauge(backupScheduleName, backup.Status.Errors)
+
+		if backup.Status.Warnings > 0 {
+			serverMetrics.RegisterBackupWarning(backupScheduleName)
+		}
+	}
 }
 
 func persistBackup(backup *pkgbackup.Request,
@@ -889,6 +851,7 @@ func persistBackup(backup *pkgbackup.Request,
 	csiVolumeSnapshots []snapshotv1api.VolumeSnapshot,
 	csiVolumeSnapshotContents []snapshotv1api.VolumeSnapshotContent,
 	csiVolumesnapshotClasses []snapshotv1api.VolumeSnapshotClass,
+	results map[string]results.Result,
 ) []error {
 	persistErrs := []error{}
 	backupJSON := new(bytes.Buffer)
@@ -899,6 +862,12 @@ func persistBackup(backup *pkgbackup.Request,
 
 	// Velero-native volume snapshots (as opposed to CSI ones)
 	nativeVolumeSnapshots, errs := encodeToJSONGzip(backup.VolumeSnapshots, "native volumesnapshots list")
+	if errs != nil {
+		persistErrs = append(persistErrs, errs...)
+	}
+
+	var backupItemOperations *bytes.Buffer
+	backupItemOperations, errs = encodeToJSONGzip(backup.GetItemOperationsList(), "backup item operations list")
 	if errs != nil {
 		persistErrs = append(persistErrs, errs...)
 	}
@@ -932,15 +901,22 @@ func persistBackup(backup *pkgbackup.Request,
 		persistErrs = append(persistErrs, errs...)
 	}
 
+	backupResult, errs := encodeToJSONGzip(results, "backup results")
+	if errs != nil {
+		persistErrs = append(persistErrs, errs...)
+	}
+
 	if len(persistErrs) > 0 {
 		// Don't upload the JSON files or backup tarball if encoding to json fails.
 		backupJSON = nil
 		backupContents = nil
 		nativeVolumeSnapshots = nil
+		backupItemOperations = nil
 		backupResourceList = nil
 		csiSnapshotJSON = nil
 		csiSnapshotContentsJSON = nil
 		csiSnapshotClassesJSON = nil
+		backupResult = nil
 	}
 
 	backupInfo := persistence.BackupInfo{
@@ -948,9 +924,11 @@ func persistBackup(backup *pkgbackup.Request,
 		Metadata:                  backupJSON,
 		Contents:                  backupContents,
 		Log:                       backupLog,
+		BackupResults:             backupResult,
 		PodVolumeBackups:          podVolumeBackups,
 		SnapshotBackups:           snapshotBackups,
 		VolumeSnapshots:           nativeVolumeSnapshots,
+		BackupItemOperations:      backupItemOperations,
 		BackupResourceList:        backupResourceList,
 		CSIVolumeSnapshots:        csiSnapshotJSON,
 		CSIVolumeSnapshotContents: csiSnapshotContentsJSON,

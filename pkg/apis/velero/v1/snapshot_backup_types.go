@@ -30,9 +30,6 @@ type SnapshotBackupSpec struct {
 	// +nullable
 	CSISnapshot *CSISnapshotSpec `json:"csiSnapshot"`
 
-	// BackupName is the name of the backup which owns this snapshot backup.
-	BackupName string `json:"backupName"`
-
 	// SourcePVC is the name of the PVC which the snapshot is taken for.
 	SourcePVC string `json:"sourcePVC"`
 
@@ -53,14 +50,13 @@ type SnapshotBackupSpec struct {
 	// +optional
 	DataMoverConfig map[string]string `json:"dataMoverConfig,omitempty"`
 
-	// Tags are a map of key-value pairs that should be applied to the
-	// snapshot backup as tags.
-	// +optional
-	Tags map[string]string `json:"tags,omitempty"`
-
 	// Cancel indicates request to cancel the ongoing snapshot backup. It can be set
 	// when the snapshot backup is in InProgress phase
 	Cancel bool `json:"cancel,omitempty"`
+
+	// OperationTimeout specifies the time used to wait internal operations,
+	// before returning error as timeout.
+	OperationTimeout metav1.Duration `json:"operationTimeout"`
 }
 
 type SnapshotType string
@@ -76,10 +72,6 @@ type CSISnapshotSpec struct {
 
 	// StorageClass is the name of the storage class of the PVC that the volume snapshot is created from
 	StorageClass string `json:"storageClass"`
-
-	// CSISnapshotTimeout specifies the time used to wait for CSI VolumeSnapshot status turns to
-	// ReadyToUse during creation, before returning error as timeout.
-	CSISnapshotTimeout metav1.Duration `json:"csiSnapshotTimeout"`
 }
 
 // SnapshotBackupPhase represents the lifecycle phase of a SnapshotBackup.

@@ -81,7 +81,7 @@ type RestoreSpec struct {
 	OrLabelSelectors []*metav1.LabelSelector `json:"orLabelSelectors,omitempty"`
 
 	// RestorePVs specifies whether to restore all included
-	// PVs from snapshot (via the cloudprovider).
+	// PVs from snapshot
 	// +optional
 	// +nullable
 	RestorePVs *bool `json:"restorePVs,omitempty"`
@@ -230,7 +230,7 @@ type InitRestoreHook struct {
 
 // RestorePhase is a string representation of the lifecycle phase
 // of a Velero restore
-// +kubebuilder:validation:Enum=New;FailedValidation;InProgress;Completed;PartiallyFailed;Failed
+// +kubebuilder:validation:Enum=New;FailedValidation;InProgress;WaitingForPluginOperations;WaitingForPluginOperationsPartiallyFailed;Completed;PartiallyFailed;Failed
 type RestorePhase string
 
 const (
@@ -244,6 +244,19 @@ const (
 
 	// RestorePhaseInProgress means the restore is currently executing.
 	RestorePhaseInProgress RestorePhase = "InProgress"
+
+	// RestorePhaseWaitingForPluginOperations means the restore of
+	// Kubernetes resources and other async plugin operations was
+	// successful and plugin operations are still ongoing.  The
+	// restore is not complete yet.
+	RestorePhaseWaitingForPluginOperations RestorePhase = "WaitingForPluginOperations"
+
+	// RestorePhaseWaitingForPluginOperationsPartiallyFailed means
+	// the restore of Kubernetes resources and other async plugin
+	// operations partially failed (final phase will be
+	// PartiallyFailed) and other plugin operations are still
+	// ongoing.  The restore is not complete yet.
+	RestorePhaseWaitingForPluginOperationsPartiallyFailed RestorePhase = "WaitingForPluginOperationsPartiallyFailed"
 
 	// RestorePhaseCompleted means the restore has run successfully
 	// without errors.

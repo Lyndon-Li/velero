@@ -26,12 +26,6 @@ type SnapshotRestoreSpec struct {
 	// TargetVolume is the information of the target PVC and PV.
 	TargetVolume TargetVolumeSpec `json:"targetVolume"`
 
-	// RestoreName is the name of the restore which owns this snapshot restore.
-	RestoreName string `json:"restoreName"`
-
-	// BackupName is the name of the backup for this snapshot restore.
-	BackupName string `json:"backupName"`
-
 	// BackupStorageLocation is the name of the backup storage location
 	// where the backup repository is stored.
 	BackupStorageLocation string `json:"backupStorageLocation"`
@@ -55,6 +49,10 @@ type SnapshotRestoreSpec struct {
 	// Cancel indicates request to cancel the ongoing snapshot restore. It can be set
 	// when the snapshot restore is in InProgress phase
 	Cancel bool `json:"cancel,omitempty"`
+
+	// OperationTimeout specifies the time used to wait internal operations,
+	// before returning error as timeout.
+	OperationTimeout metav1.Duration `json:"operationTimeout"`
 }
 
 // TargetPVCSpec is the specification for a target PVC.
@@ -74,10 +72,6 @@ type TargetVolumeSpec struct {
 
 	// Resources specify the resource requirements of the target PVC
 	Resources corev1.ResourceRequirements `json:"resources"`
-
-	// PVOperationTimeout specifies the time used to wait for PVC/PV operations,
-	// before returning error as timeout.
-	OperationTimeout metav1.Duration `json:"operationTimeout"`
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.

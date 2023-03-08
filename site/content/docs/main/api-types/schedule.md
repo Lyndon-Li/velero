@@ -74,8 +74,7 @@ spec:
       matchLabels:
         app: velero
         component: server
-    # Whether to snapshot volumes. This only applies to PersistentVolumes for Azure, GCE, and
-    # AWS. Valid values are true, false, and null/unset. If unset, Velero performs snapshots as long as
+    # Whether to snapshot volumes. Valid values are true, false, and null/unset. If unset, Velero performs snapshots as long as
     # a persistent volume provider is configured for Velero.
     snapshotVolumes: null
     # Where to store the tarball and logs.
@@ -143,7 +142,8 @@ spec:
           post:
             # Same content as pre above.
 status:
-  # The current phase of the latest scheduled backup. Valid values are New, FailedValidation, InProgress, Completed, PartiallyFailed, Failed.
+  # The current phase.
+  # Valid values are New, Enabled, FailedValidation.
   phase: ""
   # Date/time of the last backup for a given schedule
   lastBackup:
