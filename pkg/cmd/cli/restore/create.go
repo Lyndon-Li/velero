@@ -92,7 +92,6 @@ type CreateOptions struct {
 	IncludeClusterResources flag.OptionalBool
 	Wait                    bool
 	AllowPartiallyFailed    flag.OptionalBool
-	CSISnapshotMoveData     flag.OptionalBool
 
 	client veleroclient.Interface
 }
@@ -135,9 +134,6 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	f.NoOptDefVal = "true"
 
 	f = flags.VarPF(&o.AllowPartiallyFailed, "allow-partially-failed", "", "If using --from-schedule, whether to consider PartiallyFailed backups when looking for the most recent one. This flag has no effect if not using --from-schedule.")
-	f.NoOptDefVal = "true"
-
-	f = flags.VarPF(&o.CSISnapshotMoveData, "csi-move-data", "", "CSI snasphot data will be moved if set to true.")
 	f.NoOptDefVal = "true"
 
 	flags.BoolVarP(&o.Wait, "wait", "w", o.Wait, "Wait for the operation to complete.")
@@ -294,8 +290,10 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 		}
 	}
 
-	if o.CSISnapshotMoveData.Value != nil {
-		restore.Spec.CSISnapshotMoveData = o.CSISnapshotMoveData.Value
+	if backup, err := o.client.VeleroV1().Backups(f.Namespace()).Get(context.TODO(), o.BackupName, metav1.GetOptions{}); err != nil {
+		return err
+	} else {
+		restore.Spec.SnapshotMoveData = backup.Spec.SnapshotMoveData
 	}
 
 	if printed, err := output.PrintWithFormat(c, restore); printed || err != nil {

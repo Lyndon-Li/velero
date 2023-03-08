@@ -41,11 +41,6 @@ spec:
                 description: BackupName is the unique name of the Velero backup to
                   restore from.
                 type: string
-              csiSnapshotMoveData:
-                description: CSISnapshotMoveData specifies whether CSI snapshot data
-                  should be moved
-                nullable: true
-                type: boolean
               datamover:
                 description: DataMover specifies the data mover to be used by the
                   backup. If DataMover is "" or "velero", the built-in data mover
@@ -394,6 +389,11 @@ spec:
                   restore from the most recent successful backup created from this
                   schedule.
                 type: string
+              snapshotMoveData:
+                description: SnapshotMoveData specifies whether snapshot data should
+                  be moved
+                nullable: true
+                type: boolean
             required:
             - backupName
             type: object

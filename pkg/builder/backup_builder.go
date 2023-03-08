@@ -252,8 +252,8 @@ func (b *BackupBuilder) ItemOperationTimeout(timeout time.Duration) *BackupBuild
 	return b
 }
 
-// CSISnapshotMoveData sets the Backup's CSISnapshotMoveData
-func (b *BackupBuilder) CSISnapshotMoveData(val bool) *BackupBuilder {
-	b.object.Spec.CSISnapshotMoveData = &val
+// SnapshotMoveData sets the Backup's SnapshotMoveData
+func (b *BackupBuilder) SnapshotMoveData(val bool) *BackupBuilder {
+	b.object.Spec.SnapshotMoveData = &val
 	return b
 }

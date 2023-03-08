@@ -113,10 +113,10 @@ type RestoreSpec struct {
 	// +nullable
 	ExistingResourcePolicy PolicyType `json:"existingResourcePolicy,omitempty"`
 
-	// CSISnapshotMoveData specifies whether CSI snapshot data should be moved
+	// SnapshotMoveData specifies whether snapshot data should be moved
 	// +optional
 	// +nullable
-	CSISnapshotMoveData *bool `json:"csiSnapshotMoveData,omitempty"`
+	SnapshotMoveData *bool `json:"snapshotMoveData,omitempty"`
 
 	// DataMover specifies the data mover to be used by the backup.
 	// If DataMover is "" or "velero", the built-in data mover will be used.

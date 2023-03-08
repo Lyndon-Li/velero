@@ -67,11 +67,6 @@ spec:
                 description: Template is the definition of the Backup to be run on
                   the provided schedule
                 properties:
-                  csiSnapshotMoveData:
-                    description: CSISnapshotMoveData specifies whether CSI snapshot
-                      data should be moved
-                    nullable: true
-                    type: boolean
                   csiSnapshotTimeout:
                     description: CSISnapshotTimeout specifies the time used to wait
                       for CSI VolumeSnapshot status turns to ReadyToUse during creation,
@@ -442,6 +437,11 @@ spec:
                       simply use "objectname".
                     nullable: true
                     type: object
+                  snapshotMoveData:
+                    description: SnapshotMoveData specifies whether snapshot data
+                      should be moved
+                    nullable: true
+                    type: boolean
                   snapshotVolumes:
                     description: SnapshotVolumes specifies whether to take snapshots
                       of any PV's referenced in the set of objects included in the

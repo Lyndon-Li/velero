@@ -351,8 +351,8 @@ func (in *BackupSpec) DeepCopyInto(out *BackupSpec) {
 	}
 	out.CSISnapshotTimeout = in.CSISnapshotTimeout
 	out.ItemOperationTimeout = in.ItemOperationTimeout
-	if in.CSISnapshotMoveData != nil {
-		in, out := &in.CSISnapshotMoveData, &out.CSISnapshotMoveData
+	if in.SnapshotMoveData != nil {
+		in, out := &in.SnapshotMoveData, &out.SnapshotMoveData
 		*out = new(bool)
 		**out = **in
 	}
@@ -1321,8 +1321,8 @@ func (in *RestoreSpec) DeepCopyInto(out *RestoreSpec) {
 		**out = **in
 	}
 	in.Hooks.DeepCopyInto(&out.Hooks)
-	if in.CSISnapshotMoveData != nil {
-		in, out := &in.CSISnapshotMoveData, &out.CSISnapshotMoveData
+	if in.SnapshotMoveData != nil {
+		in, out := &in.SnapshotMoveData, &out.SnapshotMoveData
 		*out = new(bool)
 		**out = **in
 	}
