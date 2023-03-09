@@ -45,7 +45,6 @@ type BackupInfo struct {
 	Log,
 	BackupResults,
 	PodVolumeBackups,
-	SnapshotBackups,
 	VolumeSnapshots,
 	BackupItemOperations,
 	BackupResourceList,
@@ -264,7 +263,6 @@ func (s *objectBackupStore) PutBackup(info BackupInfo) error {
 	// use a map literal to iterate through them and write them to the bucket.
 	var backupObjs = map[string]io.Reader{
 		s.layout.getPodVolumeBackupsKey(info.Name):          info.PodVolumeBackups,
-		s.layout.getSnapshotBackupKey(info.Name):            info.SnapshotBackups,
 		s.layout.getBackupVolumeSnapshotsKey(info.Name):     info.VolumeSnapshots,
 		s.layout.getBackupItemOperationsKey(info.Name):      info.BackupItemOperations,
 		s.layout.getBackupResourceListKey(info.Name):        info.BackupResourceList,

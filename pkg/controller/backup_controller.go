@@ -830,11 +830,6 @@ func persistBackup(backup *pkgbackup.Request,
 		persistErrs = append(persistErrs, errs...)
 	}
 
-	snapshotBackups, errs := encodeToJSONGzip(backup.SnapshotBackups, "snapshot backups list")
-	if errs != nil {
-		persistErrs = append(persistErrs, errs...)
-	}
-
 	csiSnapshotJSON, errs := encodeToJSONGzip(csiVolumeSnapshots, "csi volume snapshots list")
 	if errs != nil {
 		persistErrs = append(persistErrs, errs...)
@@ -879,7 +874,6 @@ func persistBackup(backup *pkgbackup.Request,
 		Log:                       backupLog,
 		BackupResults:             backupResult,
 		PodVolumeBackups:          podVolumeBackups,
-		SnapshotBackups:           snapshotBackups,
 		VolumeSnapshots:           nativeVolumeSnapshots,
 		BackupItemOperations:      backupItemOperations,
 		BackupResourceList:        backupResourceList,
