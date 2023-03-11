@@ -101,6 +101,7 @@ type CreateOptions struct {
 	CSISnapshotTimeout       time.Duration
 	ItemOperationTimeout     time.Duration
 	SnapshotMoveData         flag.OptionalBool
+	DataMover                string
 
 	client veleroclient.Interface
 }
@@ -140,6 +141,8 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 
 	f = flags.VarPF(&o.SnapshotMoveData, "snapshot-move-data", "", "Snasphot data will be moved if set to true.")
 	f.NoOptDefVal = "true"
+
+	flags.StringVar(&o.DataMover, "data-mover", "", "The data mover name that is used to move snapshot data.  Optional.")
 }
 
 // BindWait binds the wait flag separately so it is not called by other create
@@ -343,7 +346,8 @@ func (o *CreateOptions) BuildBackup(namespace string) (*velerov1api.Backup, erro
 			StorageLocation(o.StorageLocation).
 			VolumeSnapshotLocations(o.SnapshotLocations...).
 			CSISnapshotTimeout(o.CSISnapshotTimeout).
-			ItemOperationTimeout(o.ItemOperationTimeout)
+			ItemOperationTimeout(o.ItemOperationTimeout).
+			DataMover(o.DataMover)
 		if len(o.OrderedResources) > 0 {
 			orders, err := ParseOrderedResources(o.OrderedResources)
 			if err != nil {

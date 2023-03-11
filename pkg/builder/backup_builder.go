@@ -257,3 +257,9 @@ func (b *BackupBuilder) SnapshotMoveData(val bool) *BackupBuilder {
 	b.object.Spec.SnapshotMoveData = &val
 	return b
 }
+
+// DataMover sets the Backup's data mover.
+func (b *BackupBuilder) DataMover(mover string) *BackupBuilder {
+	b.object.Spec.DataMover = mover
+	return b
+}

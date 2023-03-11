@@ -41,11 +41,6 @@ spec:
                 description: BackupName is the unique name of the Velero backup to
                   restore from.
                 type: string
-              datamover:
-                description: DataMover specifies the data mover to be used by the
-                  backup. If DataMover is "" or "velero", the built-in data mover
-                  will be used.
-                type: string
               excludedNamespaces:
                 description: ExcludedNamespaces contains a list of namespaces that
                   are not included in the restore.
