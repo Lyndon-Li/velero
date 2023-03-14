@@ -65,6 +65,7 @@ type SnapshotBackupReconciler struct {
 	Client              client.Client
 	kubeClient          kubernetes.Interface
 	csiSnapshotClient   *snapshotterClientSet.Clientset
+	RepoEnsurer         *repository.RepositoryEnsurer
 	Clock               clocks.WithTickerAndDelayedExecution
 	Metrics             *metrics.ServerMetrics
 	CredentialGetter    *credentials.CredentialGetter
@@ -95,7 +96,9 @@ type cSISnapshotExposeResult struct {
 	path string
 }
 
-func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient *snapshotterClientSet.Clientset, clock clocks.WithTickerAndDelayedExecution, metrics *metrics.ServerMetrics, cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, log logrus.FieldLogger) *SnapshotBackupReconciler {
+func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, kubeClient kubernetes.Interface,
+	csiSnapshotClient *snapshotterClientSet.Clientset, repoEnsurer *repository.RepositoryEnsurer, clock clocks.WithTickerAndDelayedExecution,
+	metrics *metrics.ServerMetrics, cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, log logrus.FieldLogger) *SnapshotBackupReconciler {
 	return &SnapshotBackupReconciler{
 		Scheme:            scheme,
 		Client:            client,
@@ -107,7 +110,7 @@ func NewSnapshotBackupReconciler(scheme *runtime.Scheme, client client.Client, k
 		NodeName:          nodeName,
 		FileSystem:        fs,
 		Log:               log,
-		RepositoryEnsurer: repository.NewRepositoryEnsurer(client, log),
+		RepositoryEnsurer: repoEnsurer,
 		DataPathTracker:   make(map[string]DataPathContext),
 	}
 }

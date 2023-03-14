@@ -34,14 +34,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	kubeerrs "k8s.io/apimachinery/pkg/util/errors"
 
 	"github.com/vmware-tanzu/velero/internal/hook"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/client"
+
+	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
+
 	"github.com/vmware-tanzu/velero/pkg/discovery"
-	velerov1client "github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned/typed/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/itemoperation"
 	"github.com/vmware-tanzu/velero/pkg/kuberesource"
 	"github.com/vmware-tanzu/velero/pkg/plugin/framework"
@@ -52,6 +53,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/podvolume"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/collections"
+	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
 // BackupVersion is the current backup major version for Velero.
@@ -76,7 +78,7 @@ type Backupper interface {
 
 // kubernetesBackupper implements Backupper.
 type kubernetesBackupper struct {
-	backupClient              velerov1client.BackupsGetter
+	kbClient                  kbclient.Client
 	dynamicFactory            client.DynamicFactory
 	discoveryHelper           discovery.Helper
 	podCommandExecutor        podexec.PodCommandExecutor
@@ -103,7 +105,7 @@ func cohabitatingResources() map[string]*cohabitatingResource {
 
 // NewKubernetesBackupper creates a new kubernetesBackupper.
 func NewKubernetesBackupper(
-	backupClient velerov1client.BackupsGetter,
+	kbClient kbclient.Client,
 	discoveryHelper discovery.Helper,
 	dynamicFactory client.DynamicFactory,
 	podCommandExecutor podexec.PodCommandExecutor,
@@ -114,7 +116,7 @@ func NewKubernetesBackupper(
 	uploaderType string,
 ) (Backupper, error) {
 	return &kubernetesBackupper{
-		backupClient:              backupClient,
+		kbClient:                  kbClient,
 		discoveryHelper:           discoveryHelper,
 		dynamicFactory:            dynamicFactory,
 		podCommandExecutor:        podCommandExecutor,
@@ -277,8 +279,9 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 	log.WithField("progress", "").Infof("Collected %d items matching the backup spec from the Kubernetes API (actual number of items backed up may be more or less depending on velero.io/exclude-from-backup annotation, plugins returning additional related items to back up, etc.)", len(items))
 
 	backupRequest.Status.Progress = &velerov1api.BackupProgress{TotalItems: len(items)}
-	patch := fmt.Sprintf(`{"status":{"progress":{"totalItems":%d}}}`, len(items))
-	if _, err := kb.backupClient.Backups(backupRequest.Namespace).Patch(context.TODO(), backupRequest.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+	original := backupRequest.Backup.DeepCopy()
+	backupRequest.Backup.Status.Progress.TotalItems = len(items)
+	if err := kube.PatchResource(original, backupRequest.Backup, kb.kbClient); err != nil {
 		log.WithError(errors.WithStack((err))).Warn("Got error trying to update backup's status.progress.totalItems")
 	}
 
@@ -328,11 +331,10 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 				lastUpdate = &val
 			case <-ticker.C:
 				if lastUpdate != nil {
-					backupRequest.Status.Progress.TotalItems = lastUpdate.totalItems
-					backupRequest.Status.Progress.ItemsBackedUp = lastUpdate.itemsBackedUp
-
-					patch := fmt.Sprintf(`{"status":{"progress":{"totalItems":%d,"itemsBackedUp":%d}}}`, lastUpdate.totalItems, lastUpdate.itemsBackedUp)
-					if _, err := kb.backupClient.Backups(backupRequest.Namespace).Patch(context.TODO(), backupRequest.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+					backupRequest.Status.Progress = &velerov1api.BackupProgress{TotalItems: lastUpdate.totalItems, ItemsBackedUp: lastUpdate.itemsBackedUp}
+					original := backupRequest.Backup.DeepCopy()
+					backupRequest.Backup.Status.Progress = &velerov1api.BackupProgress{TotalItems: lastUpdate.totalItems, ItemsBackedUp: lastUpdate.itemsBackedUp}
+					if err := kube.PatchResource(original, backupRequest.Backup, kb.kbClient); err != nil {
 						log.WithError(errors.WithStack((err))).Warn("Got error trying to update backup's status.progress")
 					}
 					lastUpdate = nil
@@ -407,11 +409,10 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 
 	// do a final update on progress since we may have just added some CRDs and may not have updated
 	// for the last few processed items.
-	backupRequest.Status.Progress.TotalItems = len(backupRequest.BackedUpItems)
-	backupRequest.Status.Progress.ItemsBackedUp = len(backupRequest.BackedUpItems)
-
-	patch = fmt.Sprintf(`{"status":{"progress":{"totalItems":%d,"itemsBackedUp":%d}}}`, len(backupRequest.BackedUpItems), len(backupRequest.BackedUpItems))
-	if _, err := kb.backupClient.Backups(backupRequest.Namespace).Patch(context.TODO(), backupRequest.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+	backupRequest.Status.Progress = &velerov1api.BackupProgress{TotalItems: len(backupRequest.BackedUpItems), ItemsBackedUp: len(backupRequest.BackedUpItems)}
+	original = backupRequest.Backup.DeepCopy()
+	backupRequest.Backup.Status.Progress = &velerov1api.BackupProgress{TotalItems: len(backupRequest.BackedUpItems), ItemsBackedUp: len(backupRequest.BackedUpItems)}
+	if err := kube.PatchResource(original, backupRequest.Backup, kb.kbClient); err != nil {
 		log.WithError(errors.WithStack((err))).Warn("Got error trying to update backup's status.progress")
 	}
 
@@ -421,7 +422,7 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 }
 
 func (kb *kubernetesBackupper) backupItem(log logrus.FieldLogger, gr schema.GroupResource, itemBackupper *itemBackupper, unstructured *unstructured.Unstructured, preferredGVR schema.GroupVersionResource) bool {
-	backedUpItem, err := itemBackupper.backupItem(log, unstructured, gr, preferredGVR, false)
+	backedUpItem, _, err := itemBackupper.backupItem(log, unstructured, gr, preferredGVR, false, false)
 	if aggregate, ok := err.(kubeerrs.Aggregate); ok {
 		log.WithField("name", unstructured.GetName()).Infof("%d errors encountered backup up item", len(aggregate.Errors()))
 		// log each error separately so we get error location info in the log, and an
@@ -440,7 +441,7 @@ func (kb *kubernetesBackupper) backupItem(log logrus.FieldLogger, gr schema.Grou
 }
 
 func (kb *kubernetesBackupper) finalizeItem(log logrus.FieldLogger, gr schema.GroupResource, itemBackupper *itemBackupper, unstructured *unstructured.Unstructured, preferredGVR schema.GroupVersionResource) (bool, []FileForArchive) {
-	backedUpItem, updateFiles, err := itemBackupper.finalizeItem(log, unstructured, gr, preferredGVR)
+	backedUpItem, updateFiles, err := itemBackupper.backupItem(log, unstructured, gr, preferredGVR, true, true)
 	if aggregate, ok := err.(kubeerrs.Aggregate); ok {
 		log.WithField("name", unstructured.GetName()).Infof("%d errors encountered backup up item", len(aggregate.Errors()))
 		// log each error separately so we get error location info in the log, and an
@@ -562,15 +563,15 @@ func (kb *kubernetesBackupper) FinalizeBackup(log logrus.FieldLogger,
 		pageSize:              kb.clientPageSize,
 	}
 
-	// Get item list from itemoperation.BackupOperation.Spec.ItemsToUpdate
+	// Get item list from itemoperation.BackupOperation.Spec.PostOperationItems
 	var resourceIDs []velero.ResourceIdentifier
 	for _, operation := range asyncBIAOperations {
-		if len(operation.Spec.ItemsToUpdate) != 0 {
-			resourceIDs = append(resourceIDs, operation.Spec.ItemsToUpdate...)
+		if len(operation.Spec.PostOperationItems) != 0 {
+			resourceIDs = append(resourceIDs, operation.Spec.PostOperationItems...)
 		}
 	}
 	items := collector.getItemsFromResourceIdentifiers(resourceIDs)
-	log.WithField("progress", "").Infof("Collected %d items from the async BIA operations ItemsToUpdate list", len(items))
+	log.WithField("progress", "").Infof("Collected %d items from the async BIA operations PostOperationItems list", len(items))
 
 	itemBackupper := &itemBackupper{
 		backupRequest:   backupRequest,

@@ -54,6 +54,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/controller"
 	"github.com/vmware-tanzu/velero/pkg/features"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
+	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 )
@@ -69,11 +70,22 @@ const (
 	// defaultCredentialsDirectory is the path on disk where credential
 	// files will be written to
 	defaultCredentialsDirectory = "/tmp/credentials"
+
+	defaultResourceTimeout = 10 * time.Minute
 )
+
+type nodeAgentServerConfig struct {
+	metricsAddress  string
+	resourceTimeout time.Duration
+}
 
 func NewServerCommand(f client.Factory) *cobra.Command {
 	logLevelFlag := logging.LogLevelFlag(logrus.InfoLevel)
 	formatFlag := logging.NewFormatFlag()
+	config := nodeAgentServerConfig{
+		metricsAddress:  defaultMetricsAddress,
+		resourceTimeout: defaultResourceTimeout,
+	}
 
 	command := &cobra.Command{
 		Use:    "server",
@@ -88,7 +100,7 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 			logger.Infof("Starting Velero node-agent server %s (%s)", buildinfo.Version, buildinfo.FormattedGitSHA())
 
 			f.SetBasename(fmt.Sprintf("%s-%s", c.Parent().Name(), c.Name()))
-			s, err := newNodeAgentServer(logger, f, defaultMetricsAddress)
+			s, err := newNodeAgentServer(logger, f, config)
 			cmd.CheckError(err)
 
 			s.run()
@@ -97,12 +109,14 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 
 	command.Flags().Var(logLevelFlag, "log-level", fmt.Sprintf("The level at which to log. Valid values are %s.", strings.Join(logLevelFlag.AllowedValues(), ", ")))
 	command.Flags().Var(formatFlag, "log-format", fmt.Sprintf("The format for log output. Valid values are %s.", strings.Join(formatFlag.AllowedValues(), ", ")))
+	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 
 	return command
 }
 
 type nodeAgentServer struct {
 	logger            logrus.FieldLogger
+	config            nodeAgentServerConfig
 	ctx               context.Context
 	cancelFunc        context.CancelFunc
 	fileSystem        filesystem.Interface
@@ -110,12 +124,12 @@ type nodeAgentServer struct {
 	metrics           *metrics.ServerMetrics
 	kubeClient        kubernetes.Interface
 	csiSnapshotClient *snapshotv1client.Clientset
-	metricsAddress    string
 	namespace         string
 	nodeName          string
+	repoEnsurer       *repository.RepositoryEnsurer
 }
 
-func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, metricAddress string) (*nodeAgentServer, error) {
+func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, config nodeAgentServerConfig) (*nodeAgentServer, error) {
 	ctx, cancelFunc := context.WithCancel(context.Background())
 
 	clientConfig, err := factory.ClientConfig()
@@ -148,14 +162,14 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, metri
 	}
 
 	s := &nodeAgentServer{
-		logger:         logger,
-		ctx:            ctx,
-		cancelFunc:     cancelFunc,
-		fileSystem:     filesystem.NewFileSystem(),
-		mgr:            mgr,
-		metricsAddress: metricAddress,
-		namespace:      factory.Namespace(),
-		nodeName:       nodeName,
+		logger:     logger,
+		ctx:        ctx,
+		cancelFunc: cancelFunc,
+		fileSystem: filesystem.NewFileSystem(),
+		mgr:        mgr,
+		config:     config,
+		namespace:  factory.Namespace(),
+		nodeName:   nodeName,
 	}
 
 	// the cache isn't initialized yet when "validatePodVolumesHostPath" is called, the client returned by the manager cannot
@@ -179,15 +193,21 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, metri
 	return s, nil
 }
 
+func (s *nodeAgentServer) initRepoManager() error {
+	s.repoEnsurer = repository.NewRepositoryEnsurer(s.mgr.GetClient(), s.logger, s.config.resourceTimeout)
+
+	return nil
+}
+
 func (s *nodeAgentServer) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
 
 	go func() {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.Handler())
-		s.logger.Infof("Starting metric server for node agent at address [%s]", s.metricsAddress)
-		if err := http.ListenAndServe(s.metricsAddress, metricsMux); err != nil {
-			s.logger.Fatalf("Failed to start metric server for node agent at [%s]: %v", s.metricsAddress, err)
+		s.logger.Infof("Starting metric server for node agent at address [%s]", s.config.metricsAddress)
+		if err := http.ListenAndServe(s.config.metricsAddress, metricsMux); err != nil {
+			s.logger.Fatalf("Failed to start metric server for node agent at [%s]: %v", s.config.metricsAddress, err)
 		}
 	}()
 	s.metrics = metrics.NewPodVolumeMetrics()
@@ -224,6 +244,11 @@ func (s *nodeAgentServer) run() {
 		FileSystem:       filesystem.NewFileSystem(),
 		Log:              s.logger,
 	}
+
+	if err := s.initRepoManager(); err != nil {
+		s.logger.Fatal("Problem init repo manager", err)
+	}
+
 	if err := pvbReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.Fatal(err, "unable to create controller", "controller", controller.PodVolumeBackup)
 	}
@@ -232,11 +257,11 @@ func (s *nodeAgentServer) run() {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
 
-	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, s.csiSnapshotClient, clocks.RealClock{}, s.metrics, credentialGetter,
+	if err = controller.NewSnapshotBackupReconciler(s.mgr.GetScheme(), s.mgr.GetClient(), s.kubeClient, s.csiSnapshotClient, s.repoEnsurer, clocks.RealClock{}, s.metrics, credentialGetter,
 		s.nodeName, filesystem.NewFileSystem(), s.logger).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the snapshot backup controller")
 	}
-	if err = controller.NewSnapshotRestoreReconciler(s.logger, s.mgr.GetClient(), s.kubeClient, credentialGetter, s.nodeName).SetupWithManager(s.mgr); err != nil {
+	if err = controller.NewSnapshotRestoreReconciler(s.logger, s.mgr.GetClient(), s.kubeClient, s.repoEnsurer, credentialGetter, s.nodeName).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the snapshot restore controller")
 	}
 

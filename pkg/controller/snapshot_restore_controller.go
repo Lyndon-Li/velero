@@ -55,7 +55,8 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
-func NewSnapshotRestoreReconciler(logger logrus.FieldLogger, client client.Client, kubeClient kubernetes.Interface, credentialGetter *credentials.CredentialGetter, nodeName string) *SnapshotRestoreReconciler {
+func NewSnapshotRestoreReconciler(logger logrus.FieldLogger, client client.Client, kubeClient kubernetes.Interface,
+	repoEnsurer *repository.RepositoryEnsurer, credentialGetter *credentials.CredentialGetter, nodeName string) *SnapshotRestoreReconciler {
 	return &SnapshotRestoreReconciler{
 		Client:            client,
 		kubeClient:        kubeClient,
@@ -64,7 +65,7 @@ func NewSnapshotRestoreReconciler(logger logrus.FieldLogger, client client.Clien
 		fileSystem:        filesystem.NewFileSystem(),
 		clock:             &clock.RealClock{},
 		nodeName:          nodeName,
-		repositoryEnsurer: repository.NewRepositoryEnsurer(client, logger),
+		repositoryEnsurer: repoEnsurer,
 		DataPathTracker:   make(map[string]DataPathContext),
 	}
 }
