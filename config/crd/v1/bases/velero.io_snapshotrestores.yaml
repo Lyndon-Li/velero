@@ -17,24 +17,24 @@ spec:
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - description: The type of the uploader to handle data transfer
-      jsonPath: .spec.uploaderType
-      name: Uploader Type
-      type: string
-    - description: Name of the volume to be restored
-      jsonPath: .spec.volume
-      name: Volume
-      type: string
-    - description: Snapshot Restore status such as New/InProgress
+    - description: SnapshotRestore status such as New/InProgress
       jsonPath: .status.phase
       name: Status
       type: string
-    - description: Snapshot Restore status such as New/InProgress
+    - description: Time when this SnapshotRestore was started
+      jsonPath: .status.startTimestamp
+      name: Created
+      type: date
+    - description: Name of the data mover
+      jsonPath: .spec.dataMover
+      name: Data Mover
+      type: string
+    - description: Total bytes
       format: int64
       jsonPath: .status.progress.totalBytes
       name: TotalBytes
       type: integer
-    - description: Snapshot Restore status such as New/InProgress
+    - description: Completed bytes
       format: int64
       jsonPath: .status.progress.bytesDone
       name: BytesDone

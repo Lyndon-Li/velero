@@ -134,11 +134,11 @@ type SnapshotBackupStatus struct {
 // the genclient and k8s:deepcopy markers will no longer be needed and should be removed.
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="Snapshot Backup status such as New/InProgress"
-// +kubebuilder:printcolumn:name="Created",type="date",JSONPath=".status.startTimestamp",description="Time when this backup was started"
-// +kubebuilder:printcolumn:name="Volume",type="string",JSONPath=".spec.volume",description="Name of the volume to be backed up"
-// +kubebuilder:printcolumn:name="Repository ID",type="string",JSONPath=".spec.repoIdentifier",description="Backup repository identifier for this backup"
-// +kubebuilder:printcolumn:name="Uploader Type",type="string",JSONPath=".spec.uploaderType",description="The type of the uploader to handle data transfer"
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="SnapshotBackup status such as New/InProgress"
+// +kubebuilder:printcolumn:name="Created",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotBackup was started"
+// +kubebuilder:printcolumn:name="Data Mover",type="string",JSONPath=".spec.dataMover",description="Name of the data mover"
+// +kubebuilder:printcolumn:name="Bytes Done",type="integer",format="int64",JSONPath=".status.progress.bytesDone",description="Completed bytes"
+// +kubebuilder:printcolumn:name="Bytes Total",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="Storage Location",type="string",JSONPath=".spec.backupStorageLocation",description="Name of the Backup Storage Location where this backup should be stored"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:object:root=true
