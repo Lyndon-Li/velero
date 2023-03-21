@@ -410,7 +410,7 @@ func (r *backupDeletionReconciler) volumeSnapshottersForVSL(
 	}
 
 	// add credential to config
-	err := volume.UpdateVolumeSnapshotLocationWithCredentialConfig(vsl, r.credentialStore, r.logger)
+	err := volume.UpdateVolumeSnapshotLocationWithCredentialConfig(vsl, r.credentialStore)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}

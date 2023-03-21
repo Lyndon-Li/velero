@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"time"
@@ -68,9 +67,7 @@ type Backupper interface {
 	// Backup takes a backup using the specification in the velerov1api.Backup and writes backup and log data
 	// to the given writers.
 	Backup(logger logrus.FieldLogger, backup *Request, backupFile io.Writer, actions []biav2.BackupItemAction, volumeSnapshotterGetter VolumeSnapshotterGetter) error
-	BackupWithResolvers(log logrus.FieldLogger, backupRequest *Request, backupFile io.Writer,
-		backupItemActionResolver framework.BackupItemActionResolverV2, itemSnapshotterResolver framework.ItemSnapshotterResolver,
-		volumeSnapshotterGetter VolumeSnapshotterGetter) error
+	BackupWithResolvers(log logrus.FieldLogger, backupRequest *Request, backupFile io.Writer, backupItemActionResolver framework.BackupItemActionResolverV2, volumeSnapshotterGetter VolumeSnapshotterGetter) error
 	FinalizeBackup(log logrus.FieldLogger, backupRequest *Request, inBackupFile io.Reader, outBackupFile io.Writer,
 		backupItemActionResolver framework.BackupItemActionResolverV2,
 		asyncBIAOperations []*itemoperation.BackupOperation) error
@@ -183,16 +180,13 @@ type VolumeSnapshotterGetter interface {
 func (kb *kubernetesBackupper) Backup(log logrus.FieldLogger, backupRequest *Request, backupFile io.Writer,
 	actions []biav2.BackupItemAction, volumeSnapshotterGetter VolumeSnapshotterGetter) error {
 	backupItemActions := framework.NewBackupItemActionResolverV2(actions)
-	itemSnapshotters := framework.NewItemSnapshotterResolver(nil)
-	return kb.BackupWithResolvers(log, backupRequest, backupFile, backupItemActions, itemSnapshotters,
-		volumeSnapshotterGetter)
+	return kb.BackupWithResolvers(log, backupRequest, backupFile, backupItemActions, volumeSnapshotterGetter)
 }
 
 func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 	backupRequest *Request,
 	backupFile io.Writer,
 	backupItemActionResolver framework.BackupItemActionResolverV2,
-	itemSnapshotterResolver framework.ItemSnapshotterResolver,
 	volumeSnapshotterGetter VolumeSnapshotterGetter) error {
 	gzippedData := gzip.NewWriter(backupFile)
 	defer gzippedData.Close()
@@ -209,9 +203,22 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 	log.Infof("Including namespaces: %s", backupRequest.NamespaceIncludesExcludes.IncludesString())
 	log.Infof("Excluding namespaces: %s", backupRequest.NamespaceIncludesExcludes.ExcludesString())
 
-	backupRequest.ResourceIncludesExcludes = collections.GetResourceIncludesExcludes(kb.discoveryHelper, backupRequest.Spec.IncludedResources, backupRequest.Spec.ExcludedResources)
-	log.Infof("Including resources: %s", backupRequest.ResourceIncludesExcludes.IncludesString())
-	log.Infof("Excluding resources: %s", backupRequest.ResourceIncludesExcludes.ExcludesString())
+	if collections.UseOldResourceFilters(backupRequest.Spec) {
+		backupRequest.ResourceIncludesExcludes = collections.GetGlobalResourceIncludesExcludes(kb.discoveryHelper, log,
+			backupRequest.Spec.IncludedResources,
+			backupRequest.Spec.ExcludedResources,
+			backupRequest.Spec.IncludeClusterResources,
+			*backupRequest.NamespaceIncludesExcludes)
+	} else {
+		backupRequest.ResourceIncludesExcludes = collections.GetScopeResourceIncludesExcludes(kb.discoveryHelper, log,
+			backupRequest.Spec.IncludedNamespacedResources,
+			backupRequest.Spec.ExcludedNamespacedResources,
+			backupRequest.Spec.IncludedClusterScopeResources,
+			backupRequest.Spec.ExcludedClusterScopeResources,
+			*backupRequest.NamespaceIncludesExcludes,
+		)
+	}
+
 	log.Infof("Backing up all volumes using pod volume backup: %t", boolptr.IsSetToTrue(backupRequest.Backup.Spec.DefaultVolumesToFsBackup))
 
 	var err error
@@ -224,12 +231,6 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 	backupRequest.ResolvedActions, err = backupItemActionResolver.ResolveActions(kb.discoveryHelper, log)
 	if err != nil {
 		log.WithError(errors.WithStack(err)).Debugf("Error from backupItemActionResolver.ResolveActions")
-		return err
-	}
-
-	backupRequest.ResolvedItemSnapshotters, err = itemSnapshotterResolver.ResolveActions(kb.discoveryHelper, log)
-	if err != nil {
-		log.WithError(errors.WithStack(err)).Debugf("Error from itemSnapshotterResolver.ResolveActions")
 		return err
 	}
 
@@ -259,7 +260,7 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 
 	// set up a temp dir for the itemCollector to use to temporarily
 	// store items as they're scraped from the API.
-	tempDir, err := ioutil.TempDir("", "")
+	tempDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return errors.Wrap(err, "error creating temp dir for backup")
 	}
@@ -398,10 +399,12 @@ func (kb *kubernetesBackupper) BackupWithResolvers(log logrus.FieldLogger,
 	// no more progress updates will be sent on the 'update' channel
 	quit <- struct{}{}
 
-	// back up CRD for resource if found. We should only need to do this if we've backed up at least
-	// one item for the resource and IncludeClusterResources is nil. If IncludeClusterResources is false
-	// we don't want to back it up, and if it's true it will already be included.
-	if backupRequest.Spec.IncludeClusterResources == nil {
+	// back up CRD(this is a CRD definition of the resource, it's a CRD instance) for resource if found.
+	// We should only need to do this if we've backed up at least one item for the resource
+	// and the CRD type(this is the CRD type itself) is neither included or excluded.
+	// When it's included, the resource's CRD is already handled. When it's excluded, no need to check.
+	if !backupRequest.ResourceIncludesExcludes.ShouldExclude(kuberesource.CustomResourceDefinitions.String()) &&
+		!backupRequest.ResourceIncludesExcludes.ShouldInclude(kuberesource.CustomResourceDefinitions.String()) {
 		for gr := range backedUpGroupResources {
 			kb.backupCRD(log, gr, itemBackupper)
 		}
@@ -492,6 +495,7 @@ func (kb *kubernetesBackupper) backupCRD(log logrus.FieldLogger, gr schema.Group
 		log.WithError(errors.WithStack(err)).Errorf("Error getting CRD %s", gr.String())
 		return
 	}
+
 	log.Infof("Found associated CRD %s to add to backup", gr.String())
 
 	kb.backupItem(log, gvr.GroupResource(), itemBackupper, unstructured, gvr)
@@ -547,7 +551,7 @@ func (kb *kubernetesBackupper) FinalizeBackup(log logrus.FieldLogger,
 
 	// set up a temp dir for the itemCollector to use to temporarily
 	// store items as they're scraped from the API.
-	tempDir, err := ioutil.TempDir("", "")
+	tempDir, err := os.MkdirTemp("", "")
 	if err != nil {
 		return errors.Wrap(err, "error creating temp dir for backup")
 	}

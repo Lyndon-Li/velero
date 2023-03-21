@@ -87,7 +87,6 @@ func (c *backupOperationsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return (backup.Status.Phase == velerov1api.BackupPhaseWaitingForPluginOperations ||
 			backup.Status.Phase == velerov1api.BackupPhaseWaitingForPluginOperationsPartiallyFailed)
 	})
-
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.Backup{}, builder.WithPredicates(kube.FalsePredicate{})).
 		Watches(s, nil, builder.WithPredicates(gp)).
@@ -100,8 +99,7 @@ func (c *backupOperationsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func (c *backupOperationsReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := c.logger.WithField("backup operations for backup", req.String())
-	// FIXME: make this log.Debug
-	log.Info("backupOperationsReconciler getting backup")
+	log.Debug("backupOperationsReconciler getting backup")
 
 	original := &velerov1api.Backup{}
 	if err := c.Get(ctx, req.NamespacedName, original); err != nil {

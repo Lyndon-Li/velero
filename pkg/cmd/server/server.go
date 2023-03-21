@@ -645,6 +645,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 		controller.DownloadRequest:     {},
 		controller.GarbageCollection:   {},
 		controller.Restore:             {},
+		controller.RestoreOperations:   {},
 		controller.Schedule:            {},
 		controller.ServerStatusRequest: {},
 	}
@@ -825,6 +826,23 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 		}
 	}
 
+	restoreOpsMap := itemoperationmap.NewRestoreItemOperationsMap()
+	if _, ok := enabledRuntimeControllers[controller.RestoreOperations]; ok {
+		r := controller.NewRestoreOperationsReconciler(
+			s.logger,
+			s.namespace,
+			s.mgr.GetClient(),
+			s.config.itemOperationSyncFrequency,
+			newPluginManager,
+			backupStoreGetter,
+			s.metrics,
+			restoreOpsMap,
+		)
+		if err := r.SetupWithManager(s.mgr); err != nil {
+			s.logger.Fatal(err, "unable to create controller", "controller", controller.BackupOperations)
+		}
+	}
+
 	if _, ok := enabledRuntimeControllers[controller.DownloadRequest]; ok {
 		r := controller.NewDownloadRequestReconciler(
 			s.mgr.GetClient(),
@@ -833,6 +851,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			backupStoreGetter,
 			s.logger,
 			backupOpsMap,
+			restoreOpsMap,
 		)
 		if err := r.SetupWithManager(s.mgr); err != nil {
 			s.logger.Fatal(err, "unable to create controller", "controller", controller.DownloadRequest)
@@ -884,6 +903,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			backupStoreGetter,
 			s.metrics,
 			s.config.formatFlag.Parse(),
+			s.config.defaultItemOperationTimeout,
 		)
 
 		if err = r.SetupWithManager(s.mgr); err != nil {

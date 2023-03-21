@@ -36,6 +36,9 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/features"
 	clientset "github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned"
 	"github.com/vmware-tanzu/velero/pkg/itemoperation"
+
+	"github.com/vmware-tanzu/velero/pkg/util/collections"
+	"github.com/vmware-tanzu/velero/pkg/util/results"
 	"github.com/vmware-tanzu/velero/pkg/volume"
 )
 
@@ -90,8 +93,7 @@ func DescribeBackup(
 		}
 
 		d.Println()
-		d.Printf("Errors:\t%d\n", status.Errors)
-		d.Printf("Warnings:\t%d\n", status.Warnings)
+		DescribeBackupResults(ctx, kbClient, d, backup, insecureSkipTLSVerify, caCertFile)
 
 		d.Println()
 		DescribeBackupSpec(d, backup.Spec)
@@ -135,21 +137,48 @@ func DescribeBackupSpec(d *Describer, spec velerov1api.BackupSpec) {
 	d.Printf("\tExcluded:\t%s\n", s)
 
 	d.Println()
-	d.Printf("Resources:\n")
-	if len(spec.IncludedResources) == 0 {
-		s = "*"
+	if collections.UseOldResourceFilters(spec) {
+		d.Printf("Resources:\n")
+		if len(spec.IncludedResources) == 0 {
+			s = "*"
+		} else {
+			s = strings.Join(spec.IncludedResources, ", ")
+		}
+		d.Printf("\tIncluded:\t%s\n", s)
+		if len(spec.ExcludedResources) == 0 {
+			s = emptyDisplay
+		} else {
+			s = strings.Join(spec.ExcludedResources, ", ")
+		}
+		d.Printf("\tExcluded:\t%s\n", s)
+		d.Printf("\tCluster-scoped:\t%s\n", BoolPointerString(spec.IncludeClusterResources, "excluded", "included", "auto"))
 	} else {
-		s = strings.Join(spec.IncludedResources, ", ")
-	}
-	d.Printf("\tIncluded:\t%s\n", s)
-	if len(spec.ExcludedResources) == 0 {
-		s = emptyDisplay
-	} else {
-		s = strings.Join(spec.ExcludedResources, ", ")
-	}
-	d.Printf("\tExcluded:\t%s\n", s)
+		if len(spec.IncludedClusterScopeResources) == 0 {
+			s = emptyDisplay
+		} else {
+			s = strings.Join(spec.IncludedClusterScopeResources, ", ")
+		}
+		d.Printf("\tIncluded cluster-scoped:\t%s\n", s)
+		if len(spec.ExcludedClusterScopeResources) == 0 {
+			s = emptyDisplay
+		} else {
+			s = strings.Join(spec.ExcludedClusterScopeResources, ", ")
+		}
+		d.Printf("\tExcluded cluster-scoped:\t%s\n", s)
 
-	d.Printf("\tCluster-scoped:\t%s\n", BoolPointerString(spec.IncludeClusterResources, "excluded", "included", "auto"))
+		if len(spec.IncludedNamespacedResources) == 0 {
+			s = "*"
+		} else {
+			s = strings.Join(spec.IncludedNamespacedResources, ", ")
+		}
+		d.Printf("\tIncluded namespaced:\t%s\n", s)
+		if len(spec.ExcludedNamespacedResources) == 0 {
+			s = emptyDisplay
+		} else {
+			s = strings.Join(spec.ExcludedNamespacedResources, ", ")
+		}
+		d.Printf("\tExcluded namespaced:\t%s\n", s)
+	}
 
 	d.Println()
 	s = emptyDisplay
@@ -630,5 +659,41 @@ func DescribeVSC(d *Describer, details bool, vsc snapshotv1api.VolumeSnapshotCon
 
 	if vsc.Status.ReadyToUse != nil {
 		d.Printf("\tReady to use: %t\n", *vsc.Status.ReadyToUse)
+	}
+}
+
+// DescribeBackupResults describes errors and warnings in human-readable format.
+func DescribeBackupResults(ctx context.Context, kbClient kbclient.Client, d *Describer, backup *velerov1api.Backup, insecureSkipTLSVerify bool, caCertPath string) {
+	if backup.Status.Warnings == 0 && backup.Status.Errors == 0 {
+		return
+	}
+
+	var buf bytes.Buffer
+	var resultMap map[string]results.Result
+
+	// If err 'ErrNotFound' occurs, it means the backup bundle in the bucket has already been there before the backup-result file is introduced.
+	// We only display the count of errors and warnings in this case.
+	err := downloadrequest.Stream(ctx, kbClient, backup.Namespace, backup.Name, velerov1api.DownloadTargetKindBackupResults, &buf, downloadRequestTimeout, insecureSkipTLSVerify, caCertPath)
+	if err == downloadrequest.ErrNotFound {
+		d.Printf("Errors:\t%d\n", backup.Status.Errors)
+		d.Printf("Warnings:\t%d\n", backup.Status.Warnings)
+		return
+	} else if err != nil {
+		d.Printf("Warnings:\t<error getting warnings: %v>\n\nErrors:\t<error getting errors: %v>\n", err, err)
+		return
+	}
+
+	if err := json.NewDecoder(&buf).Decode(&resultMap); err != nil {
+		d.Printf("Warnings:\t<error decoding warnings: %v>\n\nErrors:\t<error decoding errors: %v>\n", err, err)
+		return
+	}
+
+	if backup.Status.Warnings > 0 {
+		d.Println()
+		describeResult(d, "Warnings", resultMap["warnings"])
+	}
+	if backup.Status.Errors > 0 {
+		d.Println()
+		describeResult(d, "Errors", resultMap["errors"])
 	}
 }

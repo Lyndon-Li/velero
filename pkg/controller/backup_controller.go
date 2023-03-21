@@ -18,9 +18,9 @@ package controller
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sync"
 	"time"
@@ -426,9 +426,28 @@ func (b *backupReconciler) prepareBackupRequest(backup *velerov1api.Backup, logg
 		request.Status.ValidationErrors = append(request.Status.ValidationErrors, fmt.Sprintf("error getting namespace list: %v", err))
 	}
 
+	// validate whether Included/Excluded resources and IncludedClusterResource are mixed with
+	// Included/Excluded cluster-scoped/namespaced resources.
+	if oldAndNewFilterParametersUsedTogether(request.Spec) {
+		validatedError := fmt.Sprintf("include-resources, exclude-resources and include-cluster-resources are old filter parameters.\n" +
+			"include-cluster-scope-resources, exclude-cluster-scope-resources, include-namespaced-resources and exclude-namespaced-resources are new filter parameters.\n" +
+			"They cannot be used together")
+		request.Status.ValidationErrors = append(request.Status.ValidationErrors, validatedError)
+	}
+
 	// validate the included/excluded resources
 	for _, err := range collections.ValidateIncludesExcludes(request.Spec.IncludedResources, request.Spec.ExcludedResources) {
 		request.Status.ValidationErrors = append(request.Status.ValidationErrors, fmt.Sprintf("Invalid included/excluded resource lists: %v", err))
+	}
+
+	// validate the cluster-scoped included/excluded resources
+	for _, err := range collections.ValidateScopedIncludesExcludes(request.Spec.IncludedClusterScopeResources, request.Spec.ExcludedClusterScopeResources) {
+		request.Status.ValidationErrors = append(request.Status.ValidationErrors, fmt.Sprintf("Invalid cluster-scoped included/excluded resource lists: %s", err))
+	}
+
+	// validate the namespaced included/excluded resources
+	for _, err := range collections.ValidateScopedIncludesExcludes(request.Spec.IncludedNamespacedResources, request.Spec.ExcludedNamespacedResources) {
+		request.Status.ValidationErrors = append(request.Status.ValidationErrors, fmt.Sprintf("Invalid namespaced included/excluded resource lists: %s", err))
 	}
 
 	// validate the included/excluded namespaces
@@ -541,7 +560,7 @@ func (b *backupReconciler) validateAndGetSnapshotLocations(backup *velerov1api.B
 
 	// add credential to config for each location
 	for _, location := range providerLocations {
-		err = volume.UpdateVolumeSnapshotLocationWithCredentialConfig(location, b.credentialFileStore, b.logger)
+		err = volume.UpdateVolumeSnapshotLocationWithCredentialConfig(location, b.credentialFileStore)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("error adding credentials to volume snapshot location named %s: %v", location.Name, err))
 			continue
@@ -554,8 +573,18 @@ func (b *backupReconciler) validateAndGetSnapshotLocations(backup *velerov1api.B
 // runBackup runs and uploads a validated backup. Any error returned from this function
 // causes the backup to be Failed; if no error is returned, the backup's status's Errors
 // field is checked to see if the backup was a partial failure.
+
 func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	b.logger.WithField(Backup, kubeutil.NamespaceAndName(backup)).Info("Setting up backup log")
+	logFile, err := os.CreateTemp("", "")
+	if err != nil {
+		return errors.Wrap(err, "error creating temp file for backup log")
+	}
+	gzippedLogFile := gzip.NewWriter(logFile)
+	// Assuming we successfully uploaded the log file, this will have already been closed below. It is safe to call
+	// close multiple times. If we get an error closing this, there's not really anything we can do about it.
+	defer gzippedLogFile.Close()
+	defer closeAndRemoveFile(logFile, b.logger.WithField(Backup, kubeutil.NamespaceAndName(backup)))
 
 	// Log the backup to both a backup log file and to stdout. This will help see what happened if the upload of the
 	// backup log failed for whatever reason.
@@ -567,7 +596,7 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	defer backupLog.Dispose(b.logger.WithField(Backup, kubeutil.NamespaceAndName(backup)))
 
 	backupLog.Info("Setting up backup temp file")
-	backupFile, err := ioutil.TempFile("", "")
+	backupFile, err := os.CreateTemp("", "")
 	if err != nil {
 		return errors.Wrap(err, "error creating temp file for backup")
 	}
@@ -582,11 +611,6 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	if err != nil {
 		return err
 	}
-	itemSnapshotters, err := pluginManager.GetItemSnapshotters()
-	if err != nil {
-		return err
-	}
-
 	backupLog.Info("Setting up backup store to check for backup existence")
 	backupStore, err := b.backupStoreGetter.Get(backup.StorageLocation, pluginManager, backupLog)
 	if err != nil {
@@ -604,11 +628,9 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	}
 
 	backupItemActionsResolver := framework.NewBackupItemActionResolverV2(actions)
-	itemSnapshottersResolver := framework.NewItemSnapshotterResolver(itemSnapshotters)
 
 	var fatalErrs []error
-	if err := b.backupper.BackupWithResolvers(backupLog, backup, backupFile, backupItemActionsResolver,
-		itemSnapshottersResolver, pluginManager); err != nil {
+	if err := b.backupper.BackupWithResolvers(backupLog, backup, backupFile, backupItemActionsResolver, pluginManager); err != nil {
 		fatalErrs = append(fatalErrs, err)
 	}
 
@@ -1094,4 +1116,16 @@ func (b *backupReconciler) waitAndFinalizeSnapshotContent(backup *pkgbackup.Requ
 	}
 
 	return volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses
+}
+
+func oldAndNewFilterParametersUsedTogether(backupSpec velerov1api.BackupSpec) bool {
+	haveOldResourceFilterParameters := len(backupSpec.IncludedResources) > 0 ||
+		(len(backupSpec.ExcludedResources) > 0) ||
+		(backupSpec.IncludeClusterResources != nil)
+	haveNewResourceFilterParameters := len(backupSpec.IncludedClusterScopeResources) > 0 ||
+		(len(backupSpec.ExcludedClusterScopeResources) > 0) ||
+		(len(backupSpec.IncludedNamespacedResources) > 0) ||
+		(len(backupSpec.ExcludedNamespacedResources) > 0)
+
+	return haveOldResourceFilterParameters && haveNewResourceFilterParameters
 }
