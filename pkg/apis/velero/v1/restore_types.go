@@ -113,15 +113,15 @@ type RestoreSpec struct {
 	// +nullable
 	ExistingResourcePolicy PolicyType `json:"existingResourcePolicy,omitempty"`
 
-	// SnapshotMoveData specifies whether snapshot data should be moved
-	// +optional
-	// +nullable
-	SnapshotMoveData *bool `json:"snapshotMoveData,omitempty"`
-
 	// ItemOperationTimeout specifies the time used to wait for RestoreItemAction operations
 	// The default value is 1 hour.
 	// +optional
 	ItemOperationTimeout metav1.Duration `json:"itemOperationTimeout,omitempty"`
+
+	// SnapshotMoveData specifies whether snapshot data should be moved
+	// +optional
+	// +nullable
+	SnapshotMoveData *bool `json:"snapshotMoveData,omitempty"`
 }
 
 // RestoreHooks contains custom behaviors that should be executed during or post restore.
