@@ -48,7 +48,8 @@ type SnapshotBackupSpec struct {
 
 	// DataMoverConfig is for data-mover-specific configuration fields.
 	// +optional
-	DataMoverConfig map[string]string `json:"dataMoverConfig,omitempty"`
+	// +nullable
+	DataMoverConfig *map[string]string `json:"dataMoverConfig,omitempty"`
 
 	// Cancel indicates request to cancel the ongoing snapshot backup. It can be set
 	// when the snapshot backup is in InProgress phase
@@ -102,6 +103,11 @@ type SnapshotBackupStatus struct {
 	// SnapshotID is the identifier for the snapshot in the backup repository.
 	// +optional
 	SnapshotID string `json:"snapshotID,omitempty"`
+
+	// DataMoverResult stores data-mover-specific information as a result of the SnapshotBackup.
+	// +optional
+	// +nullable
+	DataMoverResult *map[string]string `json:"dataMoverResult,omitempty"`
 
 	// Message is a message about the snapshot backup's status.
 	// +optional
@@ -172,4 +178,26 @@ type SnapshotBackupList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 
 	Items []SnapshotBackup `json:"items"`
+}
+
+// SnapshotBackupResult represents the SnasphotBackup result to be used by SnapshotRestore.
+type SnapshotBackupResult struct {
+	// BackupStorageLocation is the name of the backup storage location
+	// where the backup repository is stored.
+	BackupStorageLocation string `json:"backupStorageLocation"`
+
+	// DataMover specifies the data mover used by the SnapshotBackup
+	// +optional
+	DataMover string `json:"datamover,omitempty"`
+
+	// SnapshotID is the identifier for the snapshot in the backup repository.
+	SnapshotID string `json:"snapshotID,omitempty"`
+
+	// SourceNamespace is the original namespace where the volume is backed up from.
+	SourceNamespace string `json:"sourceNamespace"`
+
+	// DataMoverResult stores data-mover-specific information as a result of the SnapshotBackup.
+	// +optional
+	// +nullable
+	DataMoverResult *map[string]string `json:"dataMoverResult,omitempty"`
 }

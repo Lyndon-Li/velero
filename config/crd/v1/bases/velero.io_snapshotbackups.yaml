@@ -97,6 +97,7 @@ spec:
                   type: string
                 description: DataMoverConfig is for data-mover-specific configuration
                   fields.
+                nullable: true
                 type: object
               datamover:
                 description: DataMover specifies the data mover to be used by the
@@ -138,6 +139,13 @@ spec:
                 format: date-time
                 nullable: true
                 type: string
+              dataMoverResult:
+                additionalProperties:
+                  type: string
+                description: DataMoverResult stores data-mover-specific information
+                  as a result of the SnapshotBackup.
+                nullable: true
+                type: object
               message:
                 description: Message is a message about the snapshot backup's status.
                 type: string

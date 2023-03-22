@@ -529,6 +529,7 @@ var defaultRestorePriorities = restore.Priorities{
 		"volumesnapshotclass.snapshot.storage.k8s.io",
 		"volumesnapshotcontents.snapshot.storage.k8s.io",
 		"volumesnapshots.snapshot.storage.k8s.io",
+		"snapshotbackups.velero.io",
 		"persistentvolumes",
 		"persistentvolumeclaims",
 		"serviceaccounts",
