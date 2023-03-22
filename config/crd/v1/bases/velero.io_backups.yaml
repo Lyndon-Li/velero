@@ -435,11 +435,6 @@ spec:
                   "objectname".
                 nullable: true
                 type: object
-              snapshotMoveData:
-                description: SnapshotMoveData specifies whether snapshot data should
-                  be moved
-                nullable: true
-                type: boolean
               resourcePolices:
                 description: ResourcePolicies specifies the referenced resource policies
                   that backup should follow
@@ -460,6 +455,11 @@ spec:
                 - kind
                 - name
                 type: object
+              snapshotMoveData:
+                description: SnapshotMoveData specifies whether snapshot data should
+                  be moved
+                nullable: true
+                type: boolean
               snapshotVolumes:
                 description: SnapshotVolumes specifies whether to take snapshots of
                   any PV's referenced in the set of objects included in the Backup.

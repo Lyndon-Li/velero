@@ -648,7 +648,7 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	var volumeSnapshots []snapshotv1api.VolumeSnapshot
 	var volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent
 	var volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass
-	if features.IsEnabled(velerov1api.CSIFeatureFlag) && boolptr.IsSetToFalse(backup.Spec.SnapshotMoveData {
+	if features.IsEnabled(velerov1api.CSIFeatureFlag) && boolptr.IsSetToFalse(backup.Spec.SnapshotMoveData) {
 		selector := label.NewSelectorForBackup(backup.Name)
 		vscList := &snapshotv1api.VolumeSnapshotContentList{}
 
@@ -1135,56 +1135,6 @@ func (b *backupReconciler) recreateVolumeSnapshotContent(vsc snapshotv1api.Volum
 	}
 
 	return nil
-}
-
-func (b *backupReconciler) waitAndFinalizeSnapshotContent(backup *pkgbackup.Request, backupLog logrus.FieldLogger) (
-	[]snapshotv1api.VolumeSnapshot, []snapshotv1api.VolumeSnapshotContent, []snapshotv1api.VolumeSnapshotClass) {
-	var volumeSnapshots []snapshotv1api.VolumeSnapshot
-	var volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent
-	var volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass
-
-	selector := label.NewSelectorForBackup(backup.Name)
-	vscList := &snapshotv1api.VolumeSnapshotContentList{}
-
-	volumeSnapshots, err := b.waitVolumeSnapshotReadyToUse(context.Background(), backup.Spec.CSISnapshotTimeout.Duration, backup.Name)
-	if err != nil {
-		backupLog.Errorf("fail to wait VolumeSnapshot change to Ready: %s", err.Error())
-	}
-
-	backup.CSISnapshots = volumeSnapshots
-
-	err = b.kbClient.List(context.Background(), vscList, &kbclient.ListOptions{LabelSelector: selector})
-	if err != nil {
-		backupLog.Error(err)
-	}
-	if len(vscList.Items) >= 0 {
-		volumeSnapshotContents = vscList.Items
-	}
-
-	vsClassSet := sets.NewString()
-	for index := range volumeSnapshotContents {
-		// persist the volumesnapshotclasses referenced by vsc
-		if volumeSnapshotContents[index].Spec.VolumeSnapshotClassName != nil && !vsClassSet.Has(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName) {
-			vsClass := &snapshotv1api.VolumeSnapshotClass{}
-			if err := b.kbClient.Get(context.TODO(), kbclient.ObjectKey{Name: *volumeSnapshotContents[index].Spec.VolumeSnapshotClassName}, vsClass); err != nil {
-				backupLog.Error(err)
-			} else {
-				vsClassSet.Insert(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName)
-				volumeSnapshotClasses = append(volumeSnapshotClasses, *vsClass)
-			}
-		}
-
-		if err := csi.ResetVolumeSnapshotContent(&volumeSnapshotContents[index]); err != nil {
-			backupLog.Error(err)
-		}
-	}
-
-	// Delete the VolumeSnapshots created in the backup, when CSI feature is enabled.
-	if len(volumeSnapshots) > 0 && len(volumeSnapshotContents) > 0 {
-		b.deleteVolumeSnapshot(volumeSnapshots, volumeSnapshotContents, backupLog)
-	}
-
-	return volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses
 }
 
 func oldAndNewFilterParametersUsedTogether(backupSpec velerov1api.BackupSpec) bool {
