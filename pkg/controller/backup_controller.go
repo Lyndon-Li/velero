@@ -43,6 +43,7 @@ import (
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
+	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
 	"github.com/vmware-tanzu/velero/internal/storage"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	pkgbackup "github.com/vmware-tanzu/velero/pkg/backup"
@@ -90,6 +91,7 @@ type backupReconciler struct {
 	volumeSnapshotLister        snapshotv1listers.VolumeSnapshotLister
 	volumeSnapshotClient        snapshotterClientSet.Interface
 	credentialFileStore         credentials.FileStore
+	maxConcurrentK8SConnections int
 }
 
 func NewBackupReconciler(
@@ -114,6 +116,7 @@ func NewBackupReconciler(
 	volumeSnapshotLister snapshotv1listers.VolumeSnapshotLister,
 	volumeSnapshotClient snapshotterClientSet.Interface,
 	credentialStore credentials.FileStore,
+	maxConcurrentK8SConnections int,
 ) *backupReconciler {
 
 	b := &backupReconciler{
@@ -139,6 +142,7 @@ func NewBackupReconciler(
 		volumeSnapshotLister:        volumeSnapshotLister,
 		volumeSnapshotClient:        volumeSnapshotClient,
 		credentialFileStore:         credentialStore,
+		maxConcurrentK8SConnections: maxConcurrentK8SConnections,
 	}
 	b.updateTotalBackupMetric()
 	return b
@@ -459,6 +463,21 @@ func (b *backupReconciler) prepareBackupRequest(backup *velerov1api.Backup, logg
 		request.Status.ValidationErrors = append(request.Status.ValidationErrors, fmt.Sprintf("encountered labelSelector as well as orLabelSelectors in backup spec, only one can be specified"))
 	}
 
+	if request.Spec.ResourcePolicies != nil && request.Spec.ResourcePolicies.Kind == resourcepolicies.ConfigmapRefType {
+		policiesConfigmap := &v1.ConfigMap{}
+		err := b.kbClient.Get(context.Background(), kbclient.ObjectKey{Namespace: request.Namespace, Name: request.Spec.ResourcePolicies.Name}, policiesConfigmap)
+		if err != nil {
+			request.Status.ValidationErrors = append(request.Status.ValidationErrors, fmt.Sprintf("failed to get resource policies %s/%s configmap with err %v", request.Namespace, request.Spec.ResourcePolicies.Name, err))
+		}
+		res, err := resourcepolicies.GetResourcePoliciesFromConfig(policiesConfigmap)
+		if err != nil {
+			request.Status.ValidationErrors = append(request.Status.ValidationErrors, errors.Wrapf(err, fmt.Sprintf("resource policies %s/%s", request.Namespace, request.Spec.ResourcePolicies.Name)).Error())
+		} else if err = res.Validate(); err != nil {
+			request.Status.ValidationErrors = append(request.Status.ValidationErrors, errors.Wrapf(err, fmt.Sprintf("resource policies %s/%s", request.Namespace, request.Spec.ResourcePolicies.Name)).Error())
+		}
+		request.ResPolicies = res
+	}
+
 	return request
 }
 
@@ -629,10 +648,47 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	var volumeSnapshots []snapshotv1api.VolumeSnapshot
 	var volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent
 	var volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass
-	if features.IsEnabled(velerov1api.CSIFeatureFlag) && boolptr.IsSetToFalse(backup.Spec.SnapshotMoveData) {
-		backupLog.Info("Start to wait and handle snapshotcontents")
-		volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses = b.waitAndFinalizeSnapshotContent(backup, backupLog)
-		backupLog.Info("Finish to wait and handle snapshotcontents")
+	if features.IsEnabled(velerov1api.CSIFeatureFlag) && boolptr.IsSetToFalse(backup.Spec.SnapshotMoveData {
+		selector := label.NewSelectorForBackup(backup.Name)
+		vscList := &snapshotv1api.VolumeSnapshotContentList{}
+
+		volumeSnapshots, err = b.waitVolumeSnapshotReadyToUse(context.Background(), backup.Spec.CSISnapshotTimeout.Duration, backup.Name)
+		if err != nil {
+			backupLog.Errorf("fail to wait VolumeSnapshot change to Ready: %s", err.Error())
+		}
+
+		backup.CSISnapshots = volumeSnapshots
+
+		err = b.kbClient.List(context.Background(), vscList, &kbclient.ListOptions{LabelSelector: selector})
+		if err != nil {
+			backupLog.Error(err)
+		}
+		if len(vscList.Items) >= 0 {
+			volumeSnapshotContents = vscList.Items
+		}
+
+		vsClassSet := sets.NewString()
+		for index := range volumeSnapshotContents {
+			// persist the volumesnapshotclasses referenced by vsc
+			if volumeSnapshotContents[index].Spec.VolumeSnapshotClassName != nil && !vsClassSet.Has(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName) {
+				vsClass := &snapshotv1api.VolumeSnapshotClass{}
+				if err := b.kbClient.Get(context.TODO(), kbclient.ObjectKey{Name: *volumeSnapshotContents[index].Spec.VolumeSnapshotClassName}, vsClass); err != nil {
+					backupLog.Error(err)
+				} else {
+					vsClassSet.Insert(*volumeSnapshotContents[index].Spec.VolumeSnapshotClassName)
+					volumeSnapshotClasses = append(volumeSnapshotClasses, *vsClass)
+				}
+			}
+
+			if err := csi.ResetVolumeSnapshotContent(&volumeSnapshotContents[index]); err != nil {
+				backupLog.Error(err)
+			}
+		}
+
+		// Delete the VolumeSnapshots created in the backup, when CSI feature is enabled.
+		if len(volumeSnapshots) > 0 && len(volumeSnapshotContents) > 0 {
+			b.deleteVolumeSnapshots(volumeSnapshots, volumeSnapshotContents, backupLog, b.maxConcurrentK8SConnections)
+		}
 	}
 
 	backup.Status.VolumeSnapshotsAttempted = len(backup.VolumeSnapshots)
@@ -933,75 +989,98 @@ func (b *backupReconciler) waitVolumeSnapshotReadyToUse(ctx context.Context,
 	return result, err
 }
 
-// deleteVolumeSnapshot delete VolumeSnapshot created during backup.
+// deleteVolumeSnapshots delete VolumeSnapshot created during backup.
 // This is used to avoid deleting namespace in cluster triggers the VolumeSnapshot deletion,
 // which will cause snapshot deletion on cloud provider, then backup cannot restore the PV.
 // If DeletionPolicy is Retain, just delete it. If DeletionPolicy is Delete, need to
 // change DeletionPolicy to Retain before deleting VS, then change DeletionPolicy back to Delete.
-func (b *backupReconciler) deleteVolumeSnapshot(volumeSnapshots []snapshotv1api.VolumeSnapshot,
+func (b *backupReconciler) deleteVolumeSnapshots(volumeSnapshots []snapshotv1api.VolumeSnapshot,
 	volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent,
-	logger logrus.FieldLogger) {
+	logger logrus.FieldLogger, maxConcurrent int) {
 	var wg sync.WaitGroup
 	vscMap := make(map[string]snapshotv1api.VolumeSnapshotContent)
 	for _, vsc := range volumeSnapshotContents {
 		vscMap[vsc.Name] = vsc
 	}
 
-	for _, vs := range volumeSnapshots {
-		wg.Add(1)
-		go func(vs snapshotv1api.VolumeSnapshot) {
-			defer wg.Done()
-			var vsc snapshotv1api.VolumeSnapshotContent
-			modifyVSCFlag := false
-			if vs.Status != nil &&
-				vs.Status.BoundVolumeSnapshotContentName != nil &&
-				len(*vs.Status.BoundVolumeSnapshotContentName) > 0 {
-				var found bool
-				if vsc, found = vscMap[*vs.Status.BoundVolumeSnapshotContentName]; !found {
-					logger.Errorf("Not find %s from the vscMap", *vs.Status.BoundVolumeSnapshotContentName)
+	ch := make(chan snapshotv1api.VolumeSnapshot, maxConcurrent)
+	defer func() {
+		if _, ok := <-ch; ok {
+			close(ch)
+		}
+	}()
+
+	wg.Add(maxConcurrent)
+	for i := 0; i < maxConcurrent; i++ {
+		go func() {
+			for {
+				vs, ok := <-ch
+				if !ok {
+					wg.Done()
 					return
 				}
-
-				if vsc.Spec.DeletionPolicy == snapshotv1api.VolumeSnapshotContentDelete {
-					modifyVSCFlag = true
-				}
-			} else {
-				logger.Errorf("VolumeSnapshot %s/%s is not ready. This is not expected.", vs.Namespace, vs.Name)
+				b.deleteVolumeSnapshot(vs, vscMap, logger)
 			}
-
-			// Change VolumeSnapshotContent's DeletionPolicy to Retain before deleting VolumeSnapshot,
-			// because VolumeSnapshotContent will be deleted by deleting VolumeSnapshot, when
-			// DeletionPolicy is set to Delete, but Velero needs VSC for cleaning snapshot on cloud
-			// in backup deletion.
-			if modifyVSCFlag {
-				logger.Debugf("Patching VolumeSnapshotContent %s", vsc.Name)
-				original := vsc.DeepCopy()
-				vsc.Spec.DeletionPolicy = snapshotv1api.VolumeSnapshotContentRetain
-				err := kubeutil.PatchResource(original, &vsc, b.kbClient)
-				if err != nil {
-					logger.Errorf("fail to modify VolumeSnapshotContent %s DeletionPolicy to Retain: %s", vsc.Name, err.Error())
-					return
-				}
-
-				defer func() {
-					logger.Debugf("Start to recreate VolumeSnapshotContent %s", vsc.Name)
-					err := b.recreateVolumeSnapshotContent(vsc)
-					if err != nil {
-						logger.Errorf("fail to recreate VolumeSnapshotContent %s: %s", vsc.Name, err.Error())
-					}
-				}()
-			}
-
-			// Delete VolumeSnapshot from cluster
-			logger.Debugf("Deleting VolumeSnapshot %s/%s", vs.Namespace, vs.Name)
-			err := b.volumeSnapshotClient.SnapshotV1().VolumeSnapshots(vs.Namespace).Delete(b.ctx, vs.Name, metav1.DeleteOptions{})
-			if err != nil {
-				logger.Errorf("fail to delete VolumeSnapshot %s/%s: %s", vs.Namespace, vs.Name, err.Error())
-			}
-		}(vs)
+		}()
 	}
 
+	for _, vs := range volumeSnapshots {
+		ch <- vs
+	}
+	close(ch)
+
 	wg.Wait()
+}
+
+// deleteVolumeSnapshot is called by deleteVolumeSnapshots and handles the single VolumeSnapshot
+// instance.
+func (b *backupReconciler) deleteVolumeSnapshot(vs snapshotv1api.VolumeSnapshot, vscMap map[string]snapshotv1api.VolumeSnapshotContent, logger logrus.FieldLogger) {
+	var vsc snapshotv1api.VolumeSnapshotContent
+	modifyVSCFlag := false
+	if vs.Status != nil &&
+		vs.Status.BoundVolumeSnapshotContentName != nil &&
+		len(*vs.Status.BoundVolumeSnapshotContentName) > 0 {
+		var found bool
+		if vsc, found = vscMap[*vs.Status.BoundVolumeSnapshotContentName]; !found {
+			logger.Errorf("Not find %s from the vscMap", *vs.Status.BoundVolumeSnapshotContentName)
+			return
+		}
+
+		if vsc.Spec.DeletionPolicy == snapshotv1api.VolumeSnapshotContentDelete {
+			modifyVSCFlag = true
+		}
+	} else {
+		logger.Errorf("VolumeSnapshot %s/%s is not ready. This is not expected.", vs.Namespace, vs.Name)
+	}
+
+	// Change VolumeSnapshotContent's DeletionPolicy to Retain before deleting VolumeSnapshot,
+	// because VolumeSnapshotContent will be deleted by deleting VolumeSnapshot, when
+	// DeletionPolicy is set to Delete, but Velero needs VSC for cleaning snapshot on cloud
+	// in backup deletion.
+	if modifyVSCFlag {
+		logger.Debugf("Patching VolumeSnapshotContent %s", vsc.Name)
+		original := vsc.DeepCopy()
+		vsc.Spec.DeletionPolicy = snapshotv1api.VolumeSnapshotContentRetain
+		if err := b.kbClient.Patch(context.Background(), &vsc, kbclient.MergeFrom(original)); err != nil {
+			logger.Errorf("fail to modify VolumeSnapshotContent %s DeletionPolicy to Retain: %s", vsc.Name, err.Error())
+			return
+		}
+
+		defer func() {
+			logger.Debugf("Start to recreate VolumeSnapshotContent %s", vsc.Name)
+			err := b.recreateVolumeSnapshotContent(vsc)
+			if err != nil {
+				logger.Errorf("fail to recreate VolumeSnapshotContent %s: %s", vsc.Name, err.Error())
+			}
+		}()
+	}
+
+	// Delete VolumeSnapshot from cluster
+	logger.Debugf("Deleting VolumeSnapshot %s/%s", vs.Namespace, vs.Name)
+	err := b.volumeSnapshotClient.SnapshotV1().VolumeSnapshots(vs.Namespace).Delete(context.TODO(), vs.Name, metav1.DeleteOptions{})
+	if err != nil {
+		logger.Errorf("fail to delete VolumeSnapshot %s/%s: %s", vs.Namespace, vs.Name, err.Error())
+	}
 }
 
 // recreateVolumeSnapshotContent will delete then re-create VolumeSnapshotContent,

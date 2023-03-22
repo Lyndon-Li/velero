@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"time"
 
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 
 	"github.com/sirupsen/logrus"
@@ -121,6 +123,10 @@ func (b *BackupBuilder) FromSchedule(schedule *velerov1api.Schedule) *BackupBuil
 				Controller: boolptr.True(),
 			},
 		})
+	}
+
+	if schedule.Spec.Template.ResourcePolicies != nil {
+		b.ResourcePolicies(schedule.Spec.Template.ResourcePolicies.Name)
 	}
 
 	return b
@@ -285,5 +291,11 @@ func (b *BackupBuilder) SnapshotMoveData(val bool) *BackupBuilder {
 // DataMover sets the Backup's data mover.
 func (b *BackupBuilder) DataMover(mover string) *BackupBuilder {
 	b.object.Spec.DataMover = mover
+	return b
+}
+
+// resourcePolicies sets the Backup's resource polices.
+func (b *BackupBuilder) ResourcePolicies(name string) *BackupBuilder {
+	b.object.Spec.ResourcePolicies = &v1.TypedLocalObjectReference{Kind: resourcepolicies.ConfigmapRefType, Name: name}
 	return b
 }

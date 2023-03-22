@@ -106,6 +106,7 @@ type CreateOptions struct {
 	ItemOperationTimeout         time.Duration
 	SnapshotMoveData             flag.OptionalBool
 	DataMover                    string
+	ResPoliciesConfigmap         string
 	client                       veleroclient.Interface
 }
 
@@ -150,6 +151,8 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	f.NoOptDefVal = "true"
 
 	flags.StringVar(&o.DataMover, "data-mover", "", "The data mover name that is used to move snapshot data.  Optional.")
+
+	flags.StringVar(&o.ResPoliciesConfigmap, "resource-policies-configmap", "", "Reference to the resource policies configmap that backup using")
 }
 
 // BindWait binds the wait flag separately so it is not called by other create
@@ -385,6 +388,9 @@ func (o *CreateOptions) BuildBackup(namespace string) (*velerov1api.Backup, erro
 
 		if o.SnapshotMoveData.Value != nil {
 			backupBuilder.SnapshotMoveData(*o.SnapshotMoveData.Value)
+		}
+		if o.ResPoliciesConfigmap != "" {
+			backupBuilder.ResourcePolicies(o.ResPoliciesConfigmap)
 		}
 	}
 
