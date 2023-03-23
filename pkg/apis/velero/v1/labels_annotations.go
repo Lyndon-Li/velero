@@ -74,4 +74,10 @@ const (
 
 	// AsyncOperationIdLabel is the label key used to identify the async operation ID
 	AsyncOperationIdLabel = "velero.io/async-operation-id"
+
+	// RestoreRootObjectLabel is the label key used to identify restore root object
+	RestoreRootObjectLabel = "velero.io/restore-root-object"
+
+	// DynamicPVRestoreLabel is the label key for dynamic PV restore
+	DynamicPVRestoreLabel = "velero.io/dynamic-pv-restore"
 )

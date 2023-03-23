@@ -101,9 +101,9 @@ spec:
                   namespace:
                     description: Namespace is the namespace of the target PVC
                     type: string
-                  pv:
-                    description: PV is the name of the target PV that PVC binds to.
-                      It is created by this snapshot restore.
+                  pvLabel:
+                    description: PVLabel is the label to apply to the target PV so
+                      as to bind to the target PVC.
                     type: string
                   pvc:
                     description: PVC is the name of the target PVC that is created
@@ -142,7 +142,7 @@ spec:
                     type: string
                 required:
                 - namespace
-                - pv
+                - pvLabel
                 - pvc
                 - resources
                 - storageClass

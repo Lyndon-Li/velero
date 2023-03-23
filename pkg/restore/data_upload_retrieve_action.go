@@ -17,42 +17,53 @@ limitations under the License.
 package restore
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/plugin/velero"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 )
 
 type DataUploadRetrieveAction struct {
-	logger logrus.FieldLogger
+	logger          logrus.FieldLogger
+	configMapClient corev1client.ConfigMapInterface
 }
 
-func NewDataUploadRetrieveAction(logger logrus.FieldLogger) *DataUploadRetrieveAction {
-	return &DataUploadRetrieveAction{logger: logger}
+func NewDataUploadRetrieveAction(logger logrus.FieldLogger, configMapClient corev1client.ConfigMapInterface) *DataUploadRetrieveAction {
+	return &DataUploadRetrieveAction{
+		logger:          logger,
+		configMapClient: configMapClient,
+	}
 }
 
-func (a *DataUploadRetrieveAction) AppliesTo() (velero.ResourceSelector, error) {
+func (d *DataUploadRetrieveAction) AppliesTo() (velero.ResourceSelector, error) {
 	return velero.ResourceSelector{
 		IncludedResources: []string{"snapshotbackups"},
 	}, nil
 }
 
-func (a *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
-	a.logger.Info("Executing DataUploadRetrieveAction")
+func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
+	d.logger.Info("Executing DataUploadRetrieveAction")
 
-	var ssb *velerov1api.SnapshotBackup
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.ItemFromBackup.UnstructuredContent(), ssb); err != nil {
+	ssb := velerov1api.SnapshotBackup{}
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.ItemFromBackup.UnstructuredContent(), &ssb); err != nil {
 		return nil, errors.Wrap(err, "unable to convert unstructured item to SnapshotBackup")
+	}
+
+	rootCM, err := d.configMapClient.Get(context.Background(), input.Restore.Name, metav1.GetOptions{})
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to get root CM for restore %s", input.Restore.Name)
 	}
 
 	backupResult := velerov1api.SnapshotBackupResult{
@@ -79,9 +90,9 @@ func (a *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: velerov1api.SchemeGroupVersion.String(),
-					Kind:       "Restore",
-					Name:       input.Restore.Name,
-					UID:        input.Restore.UID,
+					Kind:       "ConfigMap",
+					Name:       rootCM.Name,
+					UID:        rootCM.UID,
 					Controller: boolptr.True(),
 				},
 			},
@@ -94,12 +105,12 @@ func (a *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 		},
 	}
 
-	res, err := runtime.DefaultUnstructuredConverter.ToUnstructured(cm)
+	_, err = d.configMapClient.Create(context.Background(), &cm, metav1.CreateOptions{})
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "error to create backup result cm")
 	}
 
 	return &velero.RestoreItemActionExecuteOutput{
-		UpdatedItem: &unstructured.Unstructured{Object: res},
+		SkipRestore: true,
 	}, nil
 }

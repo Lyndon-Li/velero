@@ -60,12 +60,11 @@ type TargetVolumeSpec struct {
 	// PVC is the name of the target PVC that is created by Velero restore
 	PVC string `json:"pvc"`
 
-	// PV is the name of the target PV that PVC binds to.
-	// It is created by this snapshot restore.
-	PV string `json:"pv"`
-
 	// Namespace is the namespace of the target PVC
 	Namespace string `json:"namespace"`
+
+	// PVLabel is the label to apply to the target PV so as to bind to the target PVC.
+	PVLabel string `json:"pvLabel"`
 
 	// StorageClass is the name of the storage class used by the target PVC
 	StorageClass string `json:"storageClass"`

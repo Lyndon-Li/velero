@@ -17,6 +17,7 @@ limitations under the License.
 package restore
 
 import (
+	"context"
 	go_context "context"
 	"encoding/json"
 	"fmt"
@@ -395,6 +396,13 @@ func (ctx *restoreContext) execute() (Result, Result) {
 
 	ctx.log.Infof("Starting restore of backup %s", kube.NamespaceAndName(ctx.backup))
 
+	err := ctx.createRootCM()
+	if err != nil {
+		errs.AddVeleroError(errors.Wrap(err, "error create root CM"))
+		return warnings, errs
+	}
+	defer ctx.removeRootCM()
+
 	dir, err := archive.NewExtractor(ctx.log, ctx.fileSystem).UnzipAndExtractBackup(ctx.backupReader)
 	if err != nil {
 		ctx.log.Infof("error unzipping and extracting: %v", err)
@@ -579,6 +587,50 @@ func (ctx *restoreContext) execute() (Result, Result) {
 	ctx.log.Info("Done waiting for all post-restore exec hooks to complete")
 
 	return warnings, errs
+}
+
+func (ctx *restoreContext) createRootCM() error {
+	cm := v1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ConfigMap",
+			APIVersion: v1.SchemeGroupVersion.String(),
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ctx.restore.Name,
+			Namespace: ctx.restore.Namespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					Kind:       "Restore",
+					Name:       ctx.restore.Name,
+					UID:        ctx.restore.UID,
+					Controller: boolptr.True(),
+				},
+			},
+			Labels: map[string]string{
+				velerov1api.RestoreRootObjectLabel: label.GetValidName(ctx.restore.Name),
+			},
+		},
+	}
+
+	return ctx.kbClient.Create(context.Background(), &cm, &crclient.CreateOptions{})
+}
+
+func (ctx *restoreContext) removeRootCM() {
+	cm := v1.ConfigMap{}
+	err := ctx.kbClient.Get(context.Background(), crclient.ObjectKey{
+		Namespace: ctx.restore.Namespace,
+		Name:      ctx.restore.Name,
+	}, &cm)
+	if err != nil {
+		ctx.log.WithField("restore", ctx.restore.Name).Warn("Failed to get restore root CM")
+		return
+	}
+
+	err = ctx.kbClient.Delete(context.Background(), &cm)
+	if err != nil {
+		ctx.log.WithField("restore", ctx.restore.Name).Warn("Failed to delete restore root CM")
+	}
 }
 
 // Process and restore one restoreableResource from the backup and update restore progress

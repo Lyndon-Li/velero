@@ -207,3 +207,79 @@ func EnsureDeletePV(ctx context.Context, pvGetter corev1client.PersistentVolumes
 
 	return nil
 }
+
+func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvcName string, namespace string, pv string) error {
+	pvc, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
+	if err != nil {
+		return errors.Wrap(err, "error get original PVC")
+	}
+
+	origBytes, err := json.Marshal(pvc)
+	if err != nil {
+		return errors.Wrap(err, "error marshalling original PVC")
+	}
+
+	updated := pvc.DeepCopy()
+	updated.Spec.VolumeName = pv
+
+	updatedBytes, err := json.Marshal(updated)
+	if err != nil {
+		return errors.Wrap(err, "error marshalling updated PV")
+	}
+
+	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
+	if err != nil {
+		return errors.Wrap(err, "error creating json merge patch for PV")
+	}
+
+	updated, err = pvcGetter.PersistentVolumeClaims(namespace).Patch(ctx, pvc.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume,
+	labels map[string]string, policy corev1api.PersistentVolumeReclaimPolicy) (*corev1api.PersistentVolume, error) {
+	origBytes, err := json.Marshal(pv)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling original PV")
+	}
+
+	updated := pv.DeepCopy()
+	delete(updated.Annotations, KubeAnnBindCompleted)
+	delete(updated.Annotations, KubeAnnBoundByController)
+	updated.Spec.ClaimRef = nil
+
+	updated.Spec.PersistentVolumeReclaimPolicy = policy
+
+	if labels != nil {
+		if updated.Labels == nil {
+			updated.Labels = make(map[string]string)
+		}
+
+		for k, v := range labels {
+			if _, ok := updated.Labels[k]; !ok {
+				updated.Labels[k] = v
+			}
+		}
+	}
+
+	updatedBytes, err := json.Marshal(updated)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling updated PV")
+	}
+
+	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating json merge patch for PV")
+	}
+
+	updated, err = pvGetter.PersistentVolumes().Patch(ctx, pv.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return updated, nil
+}

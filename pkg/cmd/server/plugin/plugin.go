@@ -60,7 +60,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 				RegisterRestoreItemAction("velero.io/apiservice", newAPIServiceRestoreItemAction).
 				RegisterRestoreItemAction("velero.io/admission-webhook-configuration", newAdmissionWebhookConfigurationAction).
 				RegisterRestoreItemAction("velero.io/secret", newSecretRestoreItemAction(f)).
-				RegisterRestoreItemAction("velero.io/snapshot-backup", newDataUploadRetrieveAction)
+				RegisterRestoreItemAction("velero.io/snapshot-backup", newDataUploadRetrieveAction(f))
 			if !features.IsEnabled(velerov1api.APIGroupVersionsFeatureFlag) {
 				// Do not register crd-remap-version BIA if the API Group feature flag is enabled, so that the v1 CRD can be backed up
 				pluginServer = pluginServer.RegisterBackupItemAction("velero.io/crd-remap-version", newRemapCRDVersionAction(f))
@@ -247,6 +247,13 @@ func newSecretRestoreItemAction(f client.Factory) plugincommon.HandlerInitialize
 	}
 }
 
-func newDataUploadRetrieveAction(logger logrus.FieldLogger) (interface{}, error) {
-	return restore.NewDataUploadRetrieveAction(logger), nil
+func newDataUploadRetrieveAction(f client.Factory) plugincommon.HandlerInitializer {
+	return func(logger logrus.FieldLogger) (interface{}, error) {
+		client, err := f.KubeClient()
+		if err != nil {
+			return nil, err
+		}
+
+		return restore.NewDataUploadRetrieveAction(logger, client.CoreV1().ConfigMaps(f.Namespace())), nil
+	}
 }
