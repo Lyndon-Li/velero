@@ -60,10 +60,14 @@ type TargetVolumeSpec struct {
 	// PVC is the name of the target PVC that is created by Velero restore
 	PVC string `json:"pvc"`
 
-	// Namespace is the namespace of the target PVC
+	// PV is the name of the target PV that is created by Velero restore
+	PV string `json:"pv"`
+
+	// Namespace is the target namespace
 	Namespace string `json:"namespace"`
 
 	// PVLabel is the label to apply to the target PV so as to bind to the target PVC.
+	// +optional
 	PVLabel string `json:"pvLabel"`
 
 	// StorageClass is the name of the storage class used by the target PVC
@@ -127,8 +131,8 @@ type SnapshotRestoreStatus struct {
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="SnapshotRestore status such as New/InProgress"
 // +kubebuilder:printcolumn:name="Created",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotRestore was started"
 // +kubebuilder:printcolumn:name="Data Mover",type="string",JSONPath=".spec.dataMover",description="Name of the data mover"
-// +kubebuilder:printcolumn:name="TotalBytes",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="BytesDone",type="integer",format="int64",JSONPath=".status.progress.bytesDone",description="Completed bytes"
+// +kubebuilder:printcolumn:name="TotalBytes",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 type SnapshotRestore struct {

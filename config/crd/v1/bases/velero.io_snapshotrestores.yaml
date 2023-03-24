@@ -29,15 +29,15 @@ spec:
       jsonPath: .spec.dataMover
       name: Data Mover
       type: string
-    - description: Total bytes
-      format: int64
-      jsonPath: .status.progress.totalBytes
-      name: TotalBytes
-      type: integer
     - description: Completed bytes
       format: int64
       jsonPath: .status.progress.bytesDone
       name: BytesDone
+      type: integer
+    - description: Total bytes
+      format: int64
+      jsonPath: .status.progress.totalBytes
+      name: TotalBytes
       type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
@@ -99,7 +99,11 @@ spec:
                   PV.
                 properties:
                   namespace:
-                    description: Namespace is the namespace of the target PVC
+                    description: Namespace is the target namespace
+                    type: string
+                  pv:
+                    description: PV is the name of the target PV that is created by
+                      Velero restore
                     type: string
                   pvLabel:
                     description: PVLabel is the label to apply to the target PV so
@@ -142,7 +146,7 @@ spec:
                     type: string
                 required:
                 - namespace
-                - pvLabel
+                - pv
                 - pvc
                 - resources
                 - storageClass
