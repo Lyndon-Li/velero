@@ -17,7 +17,6 @@ limitations under the License.
 package v1
 
 import (
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -65,16 +64,6 @@ type TargetVolumeSpec struct {
 
 	// Namespace is the target namespace
 	Namespace string `json:"namespace"`
-
-	// PVLabel is the label to apply to the target PV so as to bind to the target PVC.
-	// +optional
-	PVLabel string `json:"pvLabel"`
-
-	// StorageClass is the name of the storage class used by the target PVC
-	StorageClass string `json:"storageClass"`
-
-	// Resources specify the resource requirements of the target PVC
-	Resources corev1.ResourceRequirements `json:"resources"`
 }
 
 // SnapshotRestorePhase represents the lifecycle phase of a SnapshotRestore.

@@ -118,7 +118,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1api.SnapshotRestorePhaseNew {
 		log.Info("Snapshot backup starting")
 
-		if !s.TargetPVCAvailable(ctx, ssr) {
+		if _, err := s.getTargetPVC(ctx, ssr); err != nil {
 			return ctrl.Result{Requeue: true}, nil
 		}
 
@@ -147,10 +147,6 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		return ctrl.Result{}, nil
 	} else if ssr.Status.Phase == velerov1api.SnapshotRestorePhasePrepared {
-		if !s.TargetPVCAvailable(ctx, ssr) {
-			return s.errorOut(ctx, ssr, errors.New("target PVC is not available"), "target PVC is invalid", log)
-		}
-
 		path, err := s.waitRestorePVCExposed(ctx, ssr, log)
 		if err != nil {
 			return s.errorOut(ctx, ssr, err, "restore PVC is not ready", log)
@@ -469,28 +465,30 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 	return s.Client.Create(ctx, pod, &client.CreateOptions{})
 }
 
-func (s *SnapshotRestoreReconciler) TargetPVCAvailable(ctx context.Context, ssr *velerov1api.SnapshotRestore) bool {
-	_, err := s.kubeClient.CoreV1().PersistentVolumeClaims(ssr.Spec.TargetVolume.Namespace).Get(ctx, ssr.Spec.TargetVolume.PVC, metav1.GetOptions{})
-	return (err == nil)
+func (s *SnapshotRestoreReconciler) getTargetPVC(ctx context.Context, ssr *velerov1api.SnapshotRestore) (*v1.PersistentVolumeClaim, error) {
+	return s.kubeClient.CoreV1().PersistentVolumeClaims(ssr.Spec.TargetVolume.Namespace).Get(ctx, ssr.Spec.TargetVolume.PVC, metav1.GetOptions{})
 }
 
 func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
 	restorePVCName := ssr.Name
 
-	volumeMode := kube.GetVolumeModeFromDataMover(ssr.Spec.DataMover)
+	targetPVC, err := s.getTargetPVC(ctx, ssr)
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("Failed to get target PVC"))
+	}
 
 	pvcObj := &corev1api.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ssr.Namespace,
-			Name:      restorePVCName,
+			Namespace:   ssr.Namespace,
+			Name:        restorePVCName,
+			Labels:      targetPVC.Labels,
+			Annotations: targetPVC.Annotations,
 		},
 		Spec: corev1api.PersistentVolumeClaimSpec{
-			AccessModes: []corev1api.PersistentVolumeAccessMode{
-				corev1api.ReadWriteOnce,
-			},
-			StorageClassName: &ssr.Spec.TargetVolume.StorageClass,
-			VolumeMode:       &volumeMode,
-			Resources:        ssr.Spec.TargetVolume.Resources,
+			AccessModes:      targetPVC.Spec.AccessModes,
+			StorageClassName: targetPVC.Spec.StorageClassName,
+			VolumeMode:       targetPVC.Spec.VolumeMode,
+			Resources:        targetPVC.Spec.Resources,
 		},
 	}
 
@@ -574,6 +572,11 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
+	targetPVC, err := s.getTargetPVC(ctx, ssr)
+	if err != nil {
+		return errors.Wrap(err, fmt.Sprintf("Failed to get target PVC"))
+	}
+
 	_, restorePV, err := kube.WaitPVCBound(ctx, s.kubeClient.CoreV1(), s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
 		return errors.Wrapf(err, fmt.Sprintf("Failed to get PV from restore PVC %s", restorePVCName))
@@ -611,15 +614,16 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 
 	log.WithField("restore PVC", restorePVCName).Info("Restore PVC is deleted")
 
-	err = kube.RebindPVC(ctx, s.kubeClient.CoreV1(), ssr.Spec.TargetVolume.PVC, ssr.Spec.TargetVolume.Namespace, restorePV.Name)
+	_, err = kube.RebindPVC(ctx, s.kubeClient.CoreV1(), targetPVC, restorePV.Name)
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("Failed to rebind target PVC %s/%s to %s", ssr.Spec.TargetVolume.Namespace, ssr.Spec.TargetVolume.PVC, restorePV.Name))
+		return errors.Wrapf(err, fmt.Sprintf("Failed to rebind target PVC %s/%s to %s", targetPVC.Namespace, targetPVC.Name, restorePV.Name))
 	}
 
-	log.WithField("tartet PVC", ssr.Spec.TargetVolume.PVC).WithField("restore PV", restorePV.Name).Info("Target PVC is rebound to restore PV")
+	log.WithField("tartet PVC", fmt.Sprintf("%s/%s", targetPVC.Namespace, targetPVC.Name)).WithField("restore PV", restorePV.Name).Info("Target PVC is rebound to restore PV")
 
-	matchLabel := map[string]string{
-		velerov1api.DynamicPVRestoreLabel: ssr.Spec.TargetVolume.PVLabel,
+	var matchLabel map[string]string
+	if targetPVC.Spec.Selector != nil {
+		matchLabel = targetPVC.Spec.Selector.MatchLabels
 	}
 
 	restorePV, err = kube.RebindPV(ctx, s.kubeClient.CoreV1(), restorePV, matchLabel, orgReclaim)

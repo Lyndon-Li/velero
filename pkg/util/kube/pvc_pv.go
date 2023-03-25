@@ -208,15 +208,11 @@ func EnsureDeletePV(ctx context.Context, pvGetter corev1client.PersistentVolumes
 	return nil
 }
 
-func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvcName string, namespace string, pv string) error {
-	pvc, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvcName, metav1.GetOptions{})
-	if err != nil {
-		return errors.Wrap(err, "error get original PVC")
-	}
-
+func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter,
+	pvc *corev1api.PersistentVolumeClaim, pv string) (*corev1api.PersistentVolumeClaim, error) {
 	origBytes, err := json.Marshal(pvc)
 	if err != nil {
-		return errors.Wrap(err, "error marshalling original PVC")
+		return nil, errors.Wrap(err, "error marshalling original PVC")
 	}
 
 	updated := pvc.DeepCopy()
@@ -224,20 +220,20 @@ func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaim
 
 	updatedBytes, err := json.Marshal(updated)
 	if err != nil {
-		return errors.Wrap(err, "error marshalling updated PV")
+		return nil, errors.Wrap(err, "error marshalling updated PV")
 	}
 
 	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
 	if err != nil {
-		return errors.Wrap(err, "error creating json merge patch for PV")
+		return nil, errors.Wrap(err, "error creating json merge patch for PV")
 	}
 
-	updated, err = pvcGetter.PersistentVolumeClaims(namespace).Patch(ctx, pvc.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	updated, err = pvcGetter.PersistentVolumeClaims(pvc.Namespace).Patch(ctx, pvc.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return updated, nil
 }
 
 func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume,

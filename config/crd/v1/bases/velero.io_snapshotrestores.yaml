@@ -105,51 +105,14 @@ spec:
                     description: PV is the name of the target PV that is created by
                       Velero restore
                     type: string
-                  pvLabel:
-                    description: PVLabel is the label to apply to the target PV so
-                      as to bind to the target PVC.
-                    type: string
                   pvc:
                     description: PVC is the name of the target PVC that is created
                       by Velero restore
-                    type: string
-                  resources:
-                    description: Resources specify the resource requirements of the
-                      target PVC
-                    properties:
-                      limits:
-                        additionalProperties:
-                          anyOf:
-                          - type: integer
-                          - type: string
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
-                        description: 'Limits describes the maximum amount of compute
-                          resources allowed. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
-                        type: object
-                      requests:
-                        additionalProperties:
-                          anyOf:
-                          - type: integer
-                          - type: string
-                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                          x-kubernetes-int-or-string: true
-                        description: 'Requests describes the minimum amount of compute
-                          resources required. If Requests is omitted for a container,
-                          it defaults to Limits if that is explicitly specified, otherwise
-                          to an implementation-defined value. More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/'
-                        type: object
-                    type: object
-                  storageClass:
-                    description: StorageClass is the name of the storage class used
-                      by the target PVC
                     type: string
                 required:
                 - namespace
                 - pv
                 - pvc
-                - resources
-                - storageClass
                 type: object
             required:
             - backupStorageLocation
