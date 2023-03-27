@@ -607,7 +607,9 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 		}
 	}()
 
-	restorePV = retained
+	if retained != nil {
+		restorePV = retained
+	}
 
 	err = kube.EnsureDeletePod(ctx, s.kubeClient.CoreV1(), restorePodName, ssr.Namespace, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
