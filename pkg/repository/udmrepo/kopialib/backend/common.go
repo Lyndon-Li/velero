@@ -72,6 +72,7 @@ func SetupConnectOptions(ctx context.Context, repoOptions udmrepo.RepoOptions) r
 			MaxCacheSizeBytes:         maxDataCacheMB << 20,
 			MaxMetadataCacheSizeBytes: maxMetadataCacheMB << 20,
 			MaxListCacheDuration:      content.DurationSeconds(time.Duration(maxCacheDurationSecond) * time.Second),
+			MinContentSweepAge:        content.DurationSeconds(time.Duration(maxCacheDurationSecond) * time.Second),
 		},
 		ClientOptions: repo.ClientOptions{
 			Hostname:    optionalHaveString(udmrepo.GenOptionOwnerDomain, repoOptions.GeneralOptions),

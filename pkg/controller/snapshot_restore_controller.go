@@ -395,8 +395,6 @@ func (s *SnapshotRestoreProgressUpdater) UpdateProgress(p *uploader.UploaderProg
 	if err := s.Cli.Patch(s.Ctx, s.SnapshotRestore, client.MergeFrom(original)); err != nil {
 		s.Log.Errorf("update restore snapshot %s  progress with %v", restoreVCName, err)
 	}
-
-	s.Log.Info("Restore Progress: total %v, done %v", p.TotalBytes, p.BytesDone)
 }
 
 func (r *SnapshotRestoreReconciler) acceptSnapshotRestore(ctx context.Context, ssr *velerov1api.SnapshotRestore) (bool, error) {
@@ -483,6 +481,15 @@ func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *v
 			Name:        restorePVCName,
 			Labels:      targetPVC.Labels,
 			Annotations: targetPVC.Annotations,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					Kind:       "SnapshotRestore",
+					Name:       ssr.Name,
+					UID:        ssr.UID,
+					Controller: boolptr.True(),
+				},
+			},
 		},
 		Spec: corev1api.PersistentVolumeClaimSpec{
 			AccessModes:      targetPVC.Spec.AccessModes,
