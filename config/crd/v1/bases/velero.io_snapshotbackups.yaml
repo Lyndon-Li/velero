@@ -23,12 +23,8 @@ spec:
       type: string
     - description: Time when this SnapshotBackup was started
       jsonPath: .status.startTimestamp
-      name: Created
+      name: Started
       type: date
-    - description: Name of the data mover
-      jsonPath: .spec.dataMover
-      name: Data Mover
-      type: string
     - description: Completed bytes
       format: int64
       jsonPath: .status.progress.bytesDone

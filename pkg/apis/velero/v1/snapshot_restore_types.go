@@ -118,8 +118,7 @@ type SnapshotRestoreStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="SnapshotRestore status such as New/InProgress"
-// +kubebuilder:printcolumn:name="Created",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotRestore was started"
-// +kubebuilder:printcolumn:name="Data Mover",type="string",JSONPath=".spec.dataMover",description="Name of the data mover"
+// +kubebuilder:printcolumn:name="Started",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotRestore was started"
 // +kubebuilder:printcolumn:name="BytesDone",type="integer",format="int64",JSONPath=".status.progress.bytesDone",description="Completed bytes"
 // +kubebuilder:printcolumn:name="TotalBytes",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"

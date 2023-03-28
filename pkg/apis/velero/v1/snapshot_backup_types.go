@@ -141,8 +141,7 @@ type SnapshotBackupStatus struct {
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="SnapshotBackup status such as New/InProgress"
-// +kubebuilder:printcolumn:name="Created",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotBackup was started"
-// +kubebuilder:printcolumn:name="Data Mover",type="string",JSONPath=".spec.dataMover",description="Name of the data mover"
+// +kubebuilder:printcolumn:name="Started",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotBackup was started"
 // +kubebuilder:printcolumn:name="Bytes Done",type="integer",format="int64",JSONPath=".status.progress.bytesDone",description="Completed bytes"
 // +kubebuilder:printcolumn:name="Bytes Total",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="Storage Location",type="string",JSONPath=".spec.backupStorageLocation",description="Name of the Backup Storage Location where this backup should be stored"
