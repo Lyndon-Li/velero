@@ -73,6 +73,10 @@ type CSISnapshotSpec struct {
 
 	// StorageClass is the name of the storage class of the PVC that the volume snapshot is created from
 	StorageClass string `json:"storageClass"`
+
+	// StorageClass is the name of the snapshot class that the volume snapshot is created with
+	// +optional
+	SnapshotClass string `json:"snapshotClass"`
 }
 
 // SnapshotBackupPhase represents the lifecycle phase of a SnapshotBackup.
@@ -141,11 +145,11 @@ type SnapshotBackupStatus struct {
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 // +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="SnapshotBackup status such as New/InProgress"
-// +kubebuilder:printcolumn:name="Started",type="date",JSONPath=".status.startTimestamp",description="Time when this SnapshotBackup was started"
+// +kubebuilder:printcolumn:name="Started",type="date",JSONPath=".status.startTimestamp",description="Time duration since this SnapshotBackup was started"
 // +kubebuilder:printcolumn:name="Bytes Done",type="integer",format="int64",JSONPath=".status.progress.bytesDone",description="Completed bytes"
-// +kubebuilder:printcolumn:name="Bytes Total",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
+// +kubebuilder:printcolumn:name="Total Bytes",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="Storage Location",type="string",JSONPath=".spec.backupStorageLocation",description="Name of the Backup Storage Location where this backup should be stored"
-// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time duration since this SnapshotBackup was created"
 // +kubebuilder:object:root=true
 // +kubebuilder:object:generate=true
 

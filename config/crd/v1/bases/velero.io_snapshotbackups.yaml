@@ -21,7 +21,7 @@ spec:
       jsonPath: .status.phase
       name: Status
       type: string
-    - description: Time when this SnapshotBackup was started
+    - description: Time duration since this SnapshotBackup was started
       jsonPath: .status.startTimestamp
       name: Started
       type: date
@@ -33,14 +33,15 @@ spec:
     - description: Total bytes
       format: int64
       jsonPath: .status.progress.totalBytes
-      name: Bytes Total
+      name: Total Bytes
       type: integer
     - description: Name of the Backup Storage Location where this backup should be
         stored
       jsonPath: .spec.backupStorageLocation
       name: Storage Location
       type: string
-    - jsonPath: .metadata.creationTimestamp
+    - description: Time duration since this SnapshotBackup was created
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
@@ -76,6 +77,10 @@ spec:
                   of the CSI snapshot.
                 nullable: true
                 properties:
+                  snapshotClass:
+                    description: StorageClass is the name of the snapshot class that
+                      the volume snapshot is created with
+                    type: string
                   storageClass:
                     description: StorageClass is the name of the storage class of
                       the PVC that the volume snapshot is created from

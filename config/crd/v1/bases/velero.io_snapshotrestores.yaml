@@ -21,21 +21,22 @@ spec:
       jsonPath: .status.phase
       name: Status
       type: string
-    - description: Time when this SnapshotRestore was started
+    - description: Time duration since this SnapshotRestore was started
       jsonPath: .status.startTimestamp
       name: Started
       type: date
     - description: Completed bytes
       format: int64
       jsonPath: .status.progress.bytesDone
-      name: BytesDone
+      name: Bytes Done
       type: integer
     - description: Total bytes
       format: int64
       jsonPath: .status.progress.totalBytes
-      name: TotalBytes
+      name: Total Bytes
       type: integer
-    - jsonPath: .metadata.creationTimestamp
+    - description: Time duration since this SnapshotRestore was created
+      jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
     name: v1
