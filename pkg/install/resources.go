@@ -40,7 +40,7 @@ var (
 	DefaultNodeAgentPodCPURequest = "500m"
 	DefaultNodeAgentPodMemRequest = "512Mi"
 	DefaultNodeAgentPodCPULimit   = "1000m"
-	DefaultNodeAgentPodMemLimit   = "1Gi"
+	DefaultNodeAgentPodMemLimit   = "2Gi"
 	DefaultVeleroNamespace        = "velero"
 )
 

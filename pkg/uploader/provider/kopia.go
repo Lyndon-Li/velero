@@ -123,10 +123,7 @@ func (kp *kopiaProvider) RunBackup(
 	})
 	repoWriter := kopia.NewShimRepo(kp.bkRepo)
 	kpUploader := snapshotfs.NewUploader(repoWriter)
-	progress := new(kopia.KopiaProgress)
-	progress.InitThrottle(backupProgressCheckInterval)
-	progress.Updater = updater
-	progress.Log = log
+	progress := kopia.NewKopiProgress(backupProgressCheckInterval, updater, log)
 	kpUploader.Progress = progress
 	quit := make(chan struct{})
 	log.Info("Starting backup")
@@ -150,6 +147,8 @@ func (kp *kopiaProvider) RunBackup(
 	} else if snapshotInfo == nil {
 		return "", false, fmt.Errorf("failed to get kopia backup snapshot info for path %v", path)
 	}
+
+	progress.Stop()
 
 	// which ensure that the statistic data of TotalBytes equal to BytesDone when finished
 	updater.UpdateProgress(
@@ -186,9 +185,7 @@ func (kp *kopiaProvider) RunRestore(
 		"volumePath": volumePath,
 	})
 	repoWriter := kopia.NewShimRepo(kp.bkRepo)
-	prorgess := new(kopia.KopiaProgress)
-	prorgess.InitThrottle(restoreProgressCheckInterval)
-	prorgess.Updater = updater
+	progrgess := kopia.NewKopiProgress(restoreProgressCheckInterval, updater, log)
 	restoreCancel := make(chan struct{})
 	quit := make(chan struct{})
 
@@ -202,7 +199,7 @@ func (kp *kopiaProvider) RunRestore(
 	// We use the cancel channel to control the restore cancel, so don't pass a context with cancel to Kopia restore.
 	// Otherwise, Kopia restore will not response to the cancel control but return an arbitrary error.
 	// Kopia restore cancel is not designed as well as Kopia backup which uses the context to control backup cancel all the way.
-	size, fileCount, err := RestoreFunc(context.Background(), repoWriter, prorgess, snapshotID, volumePath, log, restoreCancel)
+	size, fileCount, err := RestoreFunc(context.Background(), repoWriter, progrgess, snapshotID, volumePath, log, restoreCancel)
 
 	if err != nil {
 		return errors.Wrapf(err, "Failed to run kopia restore")
@@ -212,6 +209,8 @@ func (kp *kopiaProvider) RunRestore(
 		log.Error("Kopia restore is canceled")
 		return ErrorCanceled
 	}
+
+	progrgess.Stop()
 
 	// which ensure that the statistic data of TotalBytes equal to BytesDone when finished
 	updater.UpdateProgress(&uploader.UploaderProgress{

@@ -637,6 +637,15 @@ func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *v
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: volumeSnapshot.Namespace,
 			Name:      backupVCName,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					Kind:       "SnapshotBackup",
+					Name:       ssb.Name,
+					UID:        ssb.UID,
+					Controller: boolptr.True(),
+				},
+			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{
@@ -749,6 +758,15 @@ func (r *SnapshotBackupReconciler) createBackupVS(ctx context.Context, snapshotV
 			Namespace: ssb.Namespace,
 			Labels: map[string]string{
 				velerov1api.SnapshotBackupLabel: ssb.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					Kind:       "SnapshotBackup",
+					Name:       ssb.Name,
+					UID:        ssb.UID,
+					Controller: boolptr.True(),
+				},
 			},
 		},
 		Spec: snapshotv1api.VolumeSnapshotSpec{
