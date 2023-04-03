@@ -55,7 +55,7 @@ func NewShimRepo(repo udmrepo.BackupRepo) repo.RepositoryWriter {
 
 // OpenObject open specific object
 func (sr *shimRepository) OpenObject(ctx context.Context, id object.ID) (object.Reader, error) {
-	reader, err := sr.udmRepo.OpenObject(ctx, udmrepo.ID(id))
+	reader, err := sr.udmRepo.OpenObject(ctx, udmrepo.ID(id.String()))
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to open object with id %v", id)
 	}
@@ -213,6 +213,10 @@ func (sr *shimRepository) Flush(ctx context.Context) error {
 	return sr.udmRepo.Flush(ctx)
 }
 
+func (sr *shimRepository) ConcatenateObjects(ctx context.Context, objectIDs []object.ID) (object.ID, error) {
+	return object.ID{}, errors.New("not supported")
+}
+
 // Flush all the unifited repository data
 func (sr *shimObjectReader) Read(p []byte) (n int, err error) {
 	return sr.repoReader.Read(p)
@@ -240,13 +244,31 @@ func (sr *shimObjectWriter) Write(p []byte) (n int, err error) {
 // Periodically called to preserve the state of data written to the repo so far.
 func (sr *shimObjectWriter) Checkpoint() (object.ID, error) {
 	id, err := sr.repoWriter.Checkpoint()
-	return object.ID(id), err
+	if err != nil {
+		return object.ID{}, err
+	}
+
+	objID, err := object.ParseID(string(id))
+	if err != nil {
+		return object.ID{}, errors.Wrapf(err, "error to parse object ID from %v", id)
+	}
+
+	return objID, err
 }
 
 // Result returns the object's unified identifier after the write completes.
 func (sr *shimObjectWriter) Result() (object.ID, error) {
 	id, err := sr.repoWriter.Result()
-	return object.ID(id), err
+	if err != nil {
+		return object.ID{}, err
+	}
+
+	objID, err := object.ParseID(string(id))
+	if err != nil {
+		return object.ID{}, errors.Wrapf(err, "error to parse object ID from %v", id)
+	}
+
+	return objID, err
 }
 
 // Close closes the repository and releases all resources.

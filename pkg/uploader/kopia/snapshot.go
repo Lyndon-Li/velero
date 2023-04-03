@@ -247,7 +247,7 @@ func reportSnapshotStatus(manifest *snapshot.Manifest, policyTree *policy.Tree) 
 
 // findPreviousSnapshotManifest returns the list of previous snapshots for a given source, including
 // last complete snapshot following it.
-func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sourceInfo snapshot.SourceInfo, noLaterThan *time.Time) ([]*snapshot.Manifest, error) {
+func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sourceInfo snapshot.SourceInfo, noLaterThan *fs.UTCTimestamp) ([]*snapshot.Manifest, error) {
 	man, err := snapshot.ListSnapshots(ctx, rep, sourceInfo)
 	if err != nil {
 		return nil, err
@@ -295,6 +295,11 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *KopiaProg
 		OverwriteFiles:         true,
 		OverwriteSymlinks:      true,
 		IgnorePermissionErrors: true,
+	}
+
+	err = output.Init()
+	if err != nil {
+		return 0, 0, errors.Wrap(err, "error to init output")
 	}
 
 	stat, err := restore.Entry(kopiaCtx, rep, output, rootEntry, restore.Options{

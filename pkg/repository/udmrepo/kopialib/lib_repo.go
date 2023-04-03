@@ -19,7 +19,6 @@ package kopialib
 import (
 	"context"
 	"os"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -235,7 +234,12 @@ func (kr *kopiaRepository) OpenObject(ctx context.Context, id udmrepo.ID) (udmre
 		return nil, errors.New("repo is closed or not open")
 	}
 
-	reader, err := kr.rawRepo.OpenObject(logging.SetupKopiaLog(ctx, kr.logger), object.ID(id))
+	objID, err := object.ParseID(string(id))
+	if err != nil {
+		return nil, errors.Wrapf(err, "error to parse object ID from %v", id)
+	}
+
+	reader, err := kr.rawRepo.OpenObject(logging.SetupKopiaLog(ctx, kr.logger), objID)
 	if err != nil {
 		return nil, errors.Wrap(err, "error to open object")
 	}
@@ -310,8 +314,8 @@ func (kr *kopiaRepository) NewObjectWriter(ctx context.Context, opt udmrepo.Obje
 
 	writer := kr.rawWriter.NewObjectWriter(logging.SetupKopiaLog(ctx, kr.logger), object.WriterOptions{
 		Description: opt.Description,
-		Prefix:      index.ID(opt.Prefix),
-		AsyncWrites: getAsyncWrites(),
+		Prefix:      index.IDPrefix(opt.Prefix),
+		AsyncWrites: opt.AsyncWrites,
 		Compressor:  getCompressorForObject(opt),
 	})
 
@@ -439,7 +443,7 @@ func (kow *kopiaObjectWriter) Checkpoint() (udmrepo.ID, error) {
 		return udmrepo.ID(""), errors.Wrap(err, "error to checkpoint object")
 	}
 
-	return udmrepo.ID(id), nil
+	return udmrepo.ID(id.String()), nil
 }
 
 func (kow *kopiaObjectWriter) Result() (udmrepo.ID, error) {
@@ -452,7 +456,7 @@ func (kow *kopiaObjectWriter) Result() (udmrepo.ID, error) {
 		return udmrepo.ID(""), errors.Wrap(err, "error to wait object")
 	}
 
-	return udmrepo.ID(id), nil
+	return udmrepo.ID(id.String()), nil
 }
 
 func (kow *kopiaObjectWriter) Close() error {
@@ -468,11 +472,6 @@ func (kow *kopiaObjectWriter) Close() error {
 	kow.rawWriter = nil
 
 	return nil
-}
-
-// getAsyncWrites returns the number of concurrent async writes
-func getAsyncWrites() int {
-	return runtime.NumCPU()
 }
 
 // getCompressorForObject returns the compressor for an object, at present, we don't support compression
