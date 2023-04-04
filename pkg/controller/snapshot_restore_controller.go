@@ -526,7 +526,7 @@ func (s *SnapshotRestoreReconciler) waitRestorePVCExposed(ctx context.Context, s
 	}, pod)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			log.WithField("restore pod", restorePodName).Errorf("Restore pod is not running in the current node %s", s.nodeName)
+			log.WithField("restore pod", restorePodName).Infof("Restore pod is not running in the current node %s", s.nodeName)
 			return "", nil
 		} else {
 			return "", errors.Wrapf(err, "error to get restore pod %s", restorePodName)
@@ -635,14 +635,28 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 		matchLabel = targetPVC.Spec.Selector.MatchLabels
 	}
 
-	restorePV, err = kube.RebindPV(ctx, s.kubeClient.CoreV1(), restorePV, matchLabel, orgReclaim)
+	restorePV, err = kube.RebindPV(ctx, s.kubeClient.CoreV1(), restorePV, matchLabel)
 	if err != nil {
 		return errors.Wrapf(err, fmt.Sprintf("Failed to rebind restore PV %s", restorePV.Name))
 	}
 
 	log.WithField("restore PV", restorePV.Name).Info("Restore PV is rebound")
 
+	_, _, err = kube.WaitPVCBound(ctx, s.kubeClient.CoreV1(), s.kubeClient.CoreV1(), targetPVC.Name, targetPVC.Namespace, ssr.Spec.OperationTimeout.Duration)
+	if err != nil {
+		return errors.Wrapf(err, fmt.Sprintf("Failed to wait target PVC bound, targetPVC %s/%s", targetPVC.Namespace, targetPVC.Name))
+	}
+
+	log.WithField("target PVC", fmt.Sprintf("%s/%s", targetPVC.Namespace, targetPVC.Name)).Info("Target PVC is ready")
+
 	retained = nil
+
+	err = kube.SetPVReclaimPolicy(ctx, s.kubeClient.CoreV1(), restorePV, orgReclaim)
+	if err != nil {
+		log.WithField("restore PV", restorePV.Name).WithError(err).Warn("Restore PV's reclaim policy is not restored")
+	} else {
+		log.WithField("restore PV", restorePV.Name).Info("Restore PV's reclaim policy is restored")
+	}
 
 	return nil
 }

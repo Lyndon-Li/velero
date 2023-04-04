@@ -510,7 +510,7 @@ func (r *SnapshotBackupReconciler) acceptSnapshotBackup(ctx context.Context, ssb
 	if err == nil {
 		return true, nil
 	} else if apierrors.IsConflict(err) {
-		r.Log.WithField("SnapshotBackup", ssb.Name).Error("This snapshot backup has been accepted by others")
+		r.Log.WithField("SnapshotBackup", ssb.Name).Info("This snapshot backup has been accepted by others")
 		return false, nil
 	} else {
 		return false, err
@@ -759,15 +759,9 @@ func (r *SnapshotBackupReconciler) createBackupVS(ctx context.Context, snapshotV
 			Labels: map[string]string{
 				velerov1api.SnapshotBackupLabel: ssb.Name,
 			},
-			OwnerReferences: []metav1.OwnerReference{
-				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
-					Kind:       "SnapshotBackup",
-					Name:       ssb.Name,
-					UID:        ssb.UID,
-					Controller: boolptr.True(),
-				},
-			},
+			// Don't add ownerReference to SnapshotBackup.
+			// The backupPVC should be deleted before backupVS, otherwise, the deletion of backupVS will fail since
+			// backupPVC has its dataSource referring to it
 		},
 		Spec: snapshotv1api.VolumeSnapshotSpec{
 			Source: snapshotv1api.VolumeSnapshotSource{

@@ -236,8 +236,7 @@ func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaim
 	return updated, nil
 }
 
-func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume,
-	labels map[string]string, policy corev1api.PersistentVolumeReclaimPolicy) (*corev1api.PersistentVolume, error) {
+func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume, labels map[string]string) (*corev1api.PersistentVolume, error) {
 	origBytes, err := json.Marshal(pv)
 	if err != nil {
 		return nil, errors.Wrap(err, "error marshalling original PV")
@@ -247,8 +246,6 @@ func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter
 	delete(updated.Annotations, KubeAnnBindCompleted)
 	delete(updated.Annotations, KubeAnnBoundByController)
 	updated.Spec.ClaimRef = nil
-
-	updated.Spec.PersistentVolumeReclaimPolicy = policy
 
 	if labels != nil {
 		if updated.Labels == nil {
@@ -278,4 +275,32 @@ func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter
 	}
 
 	return updated, nil
+}
+
+func SetPVReclaimPolicy(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume,
+	policy corev1api.PersistentVolumeReclaimPolicy) error {
+	origBytes, err := json.Marshal(pv)
+	if err != nil {
+		return errors.Wrap(err, "error marshalling original PV")
+	}
+
+	updated := pv.DeepCopy()
+	updated.Spec.PersistentVolumeReclaimPolicy = policy
+
+	updatedBytes, err := json.Marshal(updated)
+	if err != nil {
+		return errors.Wrap(err, "error marshalling updated PV")
+	}
+
+	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
+	if err != nil {
+		return errors.Wrap(err, "error creating json merge patch for PV")
+	}
+
+	updated, err = pvGetter.PersistentVolumes().Patch(ctx, pv.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
