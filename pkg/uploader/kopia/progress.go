@@ -110,11 +110,12 @@ func (p *KopiaProgress) UpdateProgress(lastUpdate progressData) progressData {
 		processedBytes:      atomic.LoadInt64(&p.data.processedBytes),
 	}
 
-	if newData.estimatedTotalBytes != lastUpdate.estimatedTotalBytes || newData.processedBytes != lastUpdate.processedBytes {
+	if newData.estimatedTotalBytes > lastUpdate.estimatedTotalBytes || newData.processedBytes > lastUpdate.processedBytes {
 		p.updater.UpdateProgress(&uploader.UploaderProgress{TotalBytes: newData.estimatedTotalBytes, BytesDone: newData.processedBytes})
+		return newData
+	} else {
+		return lastUpdate
 	}
-
-	return newData
 }
 
 //UploadStarted statistic the total Error has occurred

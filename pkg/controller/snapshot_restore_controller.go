@@ -116,7 +116,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1api.SnapshotRestorePhaseNew {
-		log.Info("Snapshot backup starting")
+		log.Info("Snapshot restore starting")
 
 		if _, err := s.getTargetPVC(ctx, ssr); err != nil {
 			return ctrl.Result{Requeue: true}, nil
