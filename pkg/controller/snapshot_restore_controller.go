@@ -38,7 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -147,6 +146,14 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		return ctrl.Result{}, nil
 	} else if ssr.Status.Phase == velerov1api.SnapshotRestorePhasePrepared {
+		s.DataPathTrackerLock.Lock()
+		_, found := s.DataPathTracker[ssr.Name]
+		s.DataPathTrackerLock.Unlock()
+		if found {
+			log.Info("Cancellable data path is already started")
+			return ctrl.Result{}, nil
+		}
+
 		path, err := s.waitRestorePVCExposed(ctx, ssr, log)
 		if err != nil {
 			return s.errorOut(ctx, ssr, err, "restore PVC is not ready", log)
@@ -279,7 +286,7 @@ func (s *SnapshotRestoreReconciler) runCancelableDataPath(ctx context.Context, s
 func (s *SnapshotRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.SnapshotRestore{}).
-		Watches(&source.Kind{Type: &corev1.Pod{}}, handler.EnqueueRequestsFromMapFunc(s.findSnapshotRestoreForPod),
+		Watches(&source.Kind{Type: &corev1.Pod{}}, kube.EnqueueRequestsFromMapUpdateFunc(s.findSnapshotRestoreForPod),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(ue event.UpdateEvent) bool {
 					newObj := ue.ObjectNew.(*corev1.Pod)
@@ -383,7 +390,7 @@ func (s *SnapshotRestoreReconciler) NewSnapshotBackupProgressUpdater(ssr *velero
 	return &SnapshotRestoreProgressUpdater{ssr, log, ctx, s.Client}
 }
 
-//UpdateProgress which implement ProgressUpdater interface to update pvr progress status
+// UpdateProgress which implement ProgressUpdater interface to update pvr progress status
 func (s *SnapshotRestoreProgressUpdater) UpdateProgress(p *uploader.UploaderProgress) {
 	restoreVCName := s.SnapshotRestore.Name
 	original := s.SnapshotRestore.DeepCopy()

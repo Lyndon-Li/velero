@@ -37,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -163,6 +162,14 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhasePrepared {
 		log.Info("Snapshot backup is prepared")
+
+		s.DataPathTrackerLock.Lock()
+		_, found := s.DataPathTracker[ssb.Name]
+		s.DataPathTrackerLock.Unlock()
+		if found {
+			log.Info("Cancellable data path is already started")
+			return ctrl.Result{}, nil
+		}
 
 		sser, err := s.waitSnapshotExposed(ctx, &ssb, log)
 		if err != nil {
@@ -318,7 +325,7 @@ func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ss
 func (r *SnapshotBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.SnapshotBackup{}).
-		Watches(&source.Kind{Type: &corev1.Pod{}}, handler.EnqueueRequestsFromMapFunc(r.findSnapshotBackupForPod),
+		Watches(&source.Kind{Type: &corev1.Pod{}}, kube.EnqueueRequestsFromMapUpdateFunc(r.findSnapshotBackupForPod),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(ue event.UpdateEvent) bool {
 					newObj := ue.ObjectNew.(*corev1.Pod)
@@ -484,7 +491,7 @@ func (s *SnapshotBackupReconciler) NewSnapshotBackupProgressUpdater(ssb *velerov
 	return &SnapshotBackupProgressUpdater{ssb, log, ctx, s.Client}
 }
 
-//UpdateProgress which implement ProgressUpdater interface to update snapshot backup progress status
+// UpdateProgress which implement ProgressUpdater interface to update snapshot backup progress status
 func (s *SnapshotBackupProgressUpdater) UpdateProgress(p *uploader.UploaderProgress) {
 	original := s.SnapshotBackup.DeepCopy()
 	backupPVCName := s.SnapshotBackup.Name
