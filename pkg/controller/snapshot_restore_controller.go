@@ -427,6 +427,8 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
+	var gracePeriod int64 = 0
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      restorePodName,
@@ -448,7 +450,7 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 			Containers: []corev1.Container{
 				{
 					Name:    restorePodName,
-					Image:   "gcr.io/velero-gcp/busybox",
+					Image:   "alpine:latest",
 					Command: []string{"sleep", "infinity"},
 					VolumeMounts: []corev1.VolumeMount{{
 						Name:      restorePVCName,
@@ -456,6 +458,7 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 					}},
 				},
 			},
+			TerminationGracePeriodSeconds: &gracePeriod,
 			Volumes: []corev1.Volume{{
 				Name: restorePVCName,
 				VolumeSource: corev1.VolumeSource{
