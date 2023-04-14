@@ -833,6 +833,8 @@ func (r *SnapshotBackupReconciler) createBackupPVC(ctx context.Context, ssb *vel
 func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *velerov1api.SnapshotBackup, backupPVC *corev1.PersistentVolumeClaim) (*corev1.Pod, error) {
 	podName := ssb.Name
 
+	var gracePeriod int64 = 0
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -854,7 +856,7 @@ func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *vel
 			Containers: []corev1.Container{
 				{
 					Name:    podName,
-					Image:   "gcr.io/velero-gcp/busybox",
+					Image:   "alpine:latest",
 					Command: []string{"sleep", "infinity"},
 					VolumeMounts: []corev1.VolumeMount{{
 						Name:      backupPVC.Name,
@@ -862,6 +864,7 @@ func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *vel
 					}},
 				},
 			},
+			TerminationGracePeriodSeconds: &gracePeriod,
 			Volumes: []corev1.Volume{{
 				Name: backupPVC.Name,
 				VolumeSource: corev1.VolumeSource{
