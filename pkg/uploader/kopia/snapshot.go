@@ -289,7 +289,7 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *KopiaProg
 		IgnorePermissionErrors: true,
 	}
 
-	err = output.Init()
+	err = output.Init(ctx)
 	if err != nil {
 		return 0, 0, errors.Wrap(err, "error to init output")
 	}

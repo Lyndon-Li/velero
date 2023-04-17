@@ -208,6 +208,10 @@ func (sr *shimRepository) DeleteManifest(ctx context.Context, id manifest.ID) er
 	return sr.udmRepo.DeleteManifest(ctx, udmrepo.ID(id))
 }
 
+func (sr *shimRepository) ReplaceManifests(ctx context.Context, labels map[string]string, payload interface{}) (manifest.ID, error) {
+	return manifest.ID(""), nil
+}
+
 // Flush all the unifited repository data
 func (sr *shimRepository) Flush(ctx context.Context) error {
 	return sr.udmRepo.Flush(ctx)
@@ -215,6 +219,9 @@ func (sr *shimRepository) Flush(ctx context.Context) error {
 
 func (sr *shimRepository) ConcatenateObjects(ctx context.Context, objectIDs []object.ID) (object.ID, error) {
 	return object.ID{}, errors.New("ConcatenateObjects is not supported")
+}
+
+func (sr *shimRepository) OnSuccessfulFlush(callback repo.RepositoryWriterCallback) {
 }
 
 // Flush all the unifited repository data
