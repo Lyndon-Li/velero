@@ -33,6 +33,7 @@ import (
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	velerov1alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1alpha1"
 )
 
 type DataUploadRetrieveAction struct {
@@ -56,7 +57,7 @@ func (d *DataUploadRetrieveAction) AppliesTo() (velero.ResourceSelector, error) 
 func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecuteInput) (*velero.RestoreItemActionExecuteOutput, error) {
 	d.logger.Info("Executing DataUploadRetrieveAction")
 
-	ssb := velerov1api.SnapshotBackup{}
+	ssb := velerov1alpha1api.SnapshotBackup{}
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(input.ItemFromBackup.UnstructuredContent(), &ssb); err != nil {
 		return nil, errors.Wrap(err, "unable to convert unstructured item to SnapshotBackup")
 	}
@@ -66,7 +67,7 @@ func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 		return nil, errors.Wrapf(err, "unable to get root CM for restore %s", input.Restore.Name)
 	}
 
-	backupResult := velerov1api.SnapshotBackupResult{
+	backupResult := velerov1alpha1api.SnapshotBackupResult{
 		BackupStorageLocation: ssb.Spec.BackupStorageLocation,
 		DataMover:             ssb.Spec.DataMover,
 		SnapshotID:            ssb.Status.SnapshotID,

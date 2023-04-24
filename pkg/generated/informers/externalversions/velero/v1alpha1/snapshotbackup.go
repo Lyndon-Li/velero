@@ -32,59 +32,59 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// DataUploadInformer provides access to a shared informer and lister for
-// DataUploads.
-type DataUploadInformer interface {
+// SnapshotBackupInformer provides access to a shared informer and lister for
+// SnapshotBackups.
+type SnapshotBackupInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1alpha1.DataUploadLister
+	Lister() v1alpha1.SnapshotBackupLister
 }
 
-type dataUploadInformer struct {
+type snapshotBackupInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	namespace        string
 }
 
-// NewDataUploadInformer constructs a new informer for DataUpload type.
+// NewSnapshotBackupInformer constructs a new informer for SnapshotBackup type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewDataUploadInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredDataUploadInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewSnapshotBackupInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredSnapshotBackupInformer(client, namespace, resyncPeriod, indexers, nil)
 }
 
-// NewFilteredDataUploadInformer constructs a new informer for DataUpload type.
+// NewFilteredSnapshotBackupInformer constructs a new informer for SnapshotBackup type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredDataUploadInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredSnapshotBackupInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.VeleroV1alpha1().DataUploads(namespace).List(context.TODO(), options)
+				return client.VeleroV1alpha1().SnapshotBackups(namespace).List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.VeleroV1alpha1().DataUploads(namespace).Watch(context.TODO(), options)
+				return client.VeleroV1alpha1().SnapshotBackups(namespace).Watch(context.TODO(), options)
 			},
 		},
-		&velerov1alpha1.DataUpload{},
+		&velerov1alpha1.SnapshotBackup{},
 		resyncPeriod,
 		indexers,
 	)
 }
 
-func (f *dataUploadInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredDataUploadInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+func (f *snapshotBackupInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewFilteredSnapshotBackupInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
-func (f *dataUploadInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&velerov1alpha1.DataUpload{}, f.defaultInformer)
+func (f *snapshotBackupInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&velerov1alpha1.SnapshotBackup{}, f.defaultInformer)
 }
 
-func (f *dataUploadInformer) Lister() v1alpha1.DataUploadLister {
-	return v1alpha1.NewDataUploadLister(f.Informer().GetIndexer())
+func (f *snapshotBackupInformer) Lister() v1alpha1.SnapshotBackupLister {
+	return v1alpha1.NewSnapshotBackupLister(f.Informer().GetIndexer())
 }

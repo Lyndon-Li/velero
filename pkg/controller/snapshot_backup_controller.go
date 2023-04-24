@@ -42,7 +42,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
+	sharedapi "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	velerov1alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1alpha1"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
@@ -81,7 +83,7 @@ type DataPathContext struct {
 }
 
 type SnapshotBackupProgressUpdater struct {
-	SnapshotBackup *velerov1api.SnapshotBackup
+	SnapshotBackup *velerov1alpha1api.SnapshotBackup
 	Log            logrus.FieldLogger
 	Ctx            context.Context
 	Cli            client.Client
@@ -125,7 +127,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		"snapshotbackup": req.NamespacedName,
 	})
 
-	var ssb velerov1api.SnapshotBackup
+	var ssb velerov1alpha1api.SnapshotBackup
 	if err := s.Client.Get(ctx, req.NamespacedName, &ssb); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Debug("Unable to find SnapshotBackup")
@@ -139,7 +141,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	if ssb.Status.Phase == "" || ssb.Status.Phase == velerov1api.SnapshotBackupPhaseNew {
+	if ssb.Status.Phase == "" || ssb.Status.Phase == velerov1alpha1api.SnapshotBackupPhaseNew {
 		log.Info("Snapshot backup starting")
 
 		accepted, err := s.acceptSnapshotBackup(ctx, &ssb)
@@ -160,7 +162,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		log.Info("Snapshot is exposed")
 
 		return ctrl.Result{}, nil
-	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhasePrepared {
+	} else if ssb.Status.Phase == velerov1alpha1api.SnapshotBackupPhasePrepared {
 		log.Info("Snapshot backup is prepared")
 
 		s.DataPathTrackerLock.Lock()
@@ -182,7 +184,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		// Update status to InProgress.
 		original := ssb.DeepCopy()
-		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseInProgress
+		ssb.Status.Phase = velerov1alpha1api.SnapshotBackupPhaseInProgress
 		ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
 		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Error("error updating SnapshotBackup status")
@@ -194,7 +196,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		s.runCancelableDataPath(ctx, &ssb, sser, log)
 
 		return ctrl.Result{}, nil
-	} else if ssb.Status.Phase == velerov1api.SnapshotBackupPhaseInProgress && ssb.Spec.Cancel {
+	} else if ssb.Status.Phase == velerov1alpha1api.SnapshotBackupPhaseInProgress && ssb.Spec.Cancel {
 		s.DataPathTrackerLock.Lock()
 		dataPathContext, found := s.DataPathTracker[ssb.Name]
 		s.DataPathTrackerLock.Unlock()
@@ -206,7 +208,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 		// Update status to Canceling.
 		original := ssb.DeepCopy()
-		ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCanceling
+		ssb.Status.Phase = velerov1alpha1api.SnapshotBackupPhaseCanceling
 		if err := s.Client.Patch(ctx, &ssb, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Error("error updating SnapshotBackup status")
 			return ctrl.Result{}, err
@@ -221,7 +223,7 @@ func (s *SnapshotBackupReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 }
 
-func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ssb *velerov1api.SnapshotBackup, sser *snapshotExposeResult, log logrus.FieldLogger) {
+func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, sser *snapshotExposeResult, log logrus.FieldLogger) {
 	cancelCtx, cancel := context.WithCancel(ctx)
 
 	log.Info("Creating data path routine")
@@ -295,12 +297,12 @@ func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ss
 		original := ssb.DeepCopy()
 
 		if err == provider.ErrorCanceled {
-			ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCanceled
+			ssb.Status.Phase = velerov1alpha1api.SnapshotBackupPhaseCanceled
 			ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
 		} else {
 			// Update status to Completed with path & snapshot ID.
 			ssb.Status.Path = sser.csiExpose.path
-			ssb.Status.Phase = velerov1api.SnapshotBackupPhaseCompleted
+			ssb.Status.Phase = velerov1alpha1api.SnapshotBackupPhaseCompleted
 			ssb.Status.SnapshotID = snapshotID
 			ssb.Status.CompletionTimestamp = &metav1.Time{Time: s.Clock.Now()}
 
@@ -324,7 +326,7 @@ func (s *SnapshotBackupReconciler) runCancelableDataPath(ctx context.Context, ss
 // SetupWithManager registers the SnapshotBackup controller.
 func (r *SnapshotBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&velerov1api.SnapshotBackup{}).
+		For(&velerov1alpha1api.SnapshotBackup{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, kube.EnqueueRequestsFromMapUpdateFunc(r.findSnapshotBackupForPod),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(ue event.UpdateEvent) bool {
@@ -360,7 +362,7 @@ func (r *SnapshotBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (r *SnapshotBackupReconciler) findSnapshotBackupForPod(podObj client.Object) []reconcile.Request {
 	pod := podObj.(*corev1.Pod)
 
-	ssb := &velerov1api.SnapshotBackup{}
+	ssb := &velerov1alpha1api.SnapshotBackup{}
 	err := r.Client.Get(context.Background(), types.NamespacedName{
 		Namespace: pod.Namespace,
 		Name:      pod.Labels[velerov1api.SnapshotBackupLabel],
@@ -371,7 +373,7 @@ func (r *SnapshotBackupReconciler) findSnapshotBackupForPod(podObj client.Object
 		return []reconcile.Request{}
 	}
 
-	if ssb.Status.Phase != velerov1api.SnapshotBackupPhaseAccepted {
+	if ssb.Status.Phase != velerov1alpha1api.SnapshotBackupPhaseAccepted {
 		return []reconcile.Request{}
 	}
 
@@ -390,7 +392,7 @@ func (r *SnapshotBackupReconciler) findSnapshotBackupForPod(podObj client.Object
 	return requests
 }
 
-func (r *SnapshotBackupReconciler) patchSnapshotBackup(ctx context.Context, req *velerov1api.SnapshotBackup, mutate func(*velerov1api.SnapshotBackup)) error {
+func (r *SnapshotBackupReconciler) patchSnapshotBackup(ctx context.Context, req *velerov1alpha1api.SnapshotBackup, mutate func(*velerov1alpha1api.SnapshotBackup)) error {
 	original := req.DeepCopy()
 	mutate(req)
 	if err := r.Client.Patch(ctx, req, client.MergeFrom(original)); err != nil {
@@ -400,14 +402,14 @@ func (r *SnapshotBackupReconciler) patchSnapshotBackup(ctx context.Context, req 
 	return nil
 }
 
-func prepareSnapshotBackup(ssb *velerov1api.SnapshotBackup) {
-	ssb.Status.Phase = velerov1api.SnapshotBackupPhasePrepared
+func prepareSnapshotBackup(ssb *velerov1alpha1api.SnapshotBackup) {
+	ssb.Status.Phase = velerov1alpha1api.SnapshotBackupPhasePrepared
 }
 
 // getParentSnapshot finds the most recent completed PodVolumeBackup for the
 // specified PVC and returns its snapshot ID. Any errors encountered are
 // logged but not returned since they do not prevent a backup from proceeding.
-func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log logrus.FieldLogger, pvcUID string, ssb *velerov1api.SnapshotBackup) string {
+func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log logrus.FieldLogger, pvcUID string, ssb *velerov1alpha1api.SnapshotBackup) string {
 	log = log.WithField("pvcUID", pvcUID)
 	log.Infof("Looking for most recent completed SnapshotBackup for this PVC")
 
@@ -417,19 +419,19 @@ func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log lo
 	matchingLabels := client.MatchingLabels(map[string]string{velerov1api.PVCUIDLabel: pvcUID})
 	matchingLabels.ApplyToList(listOpts)
 
-	var ssbList velerov1api.SnapshotBackupList
+	var ssbList velerov1alpha1api.SnapshotBackupList
 	if err := r.Client.List(ctx, &ssbList, listOpts); err != nil {
 		log.WithError(errors.WithStack(err)).Error("getting list of SnapshotBackups for this PVC")
 	}
 
 	// Go through all the podvolumebackups for the PVC and look for the most
 	// recent completed one to use as the parent.
-	var mostRecentSSB velerov1api.SnapshotBackup
+	var mostRecentSSB velerov1alpha1api.SnapshotBackup
 	for _, ssbItem := range ssbList.Items {
 		if datamover.GetUploaderType(ssbItem.Spec.DataMover) != datamover.GetUploaderType(ssb.Spec.DataMover) {
 			continue
 		}
-		if ssbItem.Status.Phase != velerov1api.SnapshotBackupPhaseCompleted {
+		if ssbItem.Status.Phase != velerov1alpha1api.SnapshotBackupPhaseCompleted {
 			continue
 		}
 
@@ -444,12 +446,12 @@ func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log lo
 			continue
 		}
 
-		if mostRecentSSB.Status == (velerov1api.SnapshotBackupStatus{}) || ssb.Status.StartTimestamp.After(mostRecentSSB.Status.StartTimestamp.Time) {
+		if mostRecentSSB.Status == (velerov1alpha1api.SnapshotBackupStatus{}) || ssb.Status.StartTimestamp.After(mostRecentSSB.Status.StartTimestamp.Time) {
 			mostRecentSSB = ssbItem
 		}
 	}
 
-	if mostRecentSSB.Status == (velerov1api.SnapshotBackupStatus{}) {
+	if mostRecentSSB.Status == (velerov1alpha1api.SnapshotBackupStatus{}) {
 		log.Info("No completed SnapshotBackup found for PVC")
 		return ""
 	}
@@ -462,7 +464,7 @@ func (r *SnapshotBackupReconciler) getParentSnapshot(ctx context.Context, log lo
 	return mostRecentSSB.Status.SnapshotID
 }
 
-func (s *SnapshotBackupReconciler) errorOut(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
+func (s *SnapshotBackupReconciler) errorOut(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
 	if delErr := s.cleanUpSnapshot(ctx, ssb, log); delErr != nil {
 		log.WithError(delErr).Error("Failed to clean up exposed snapshot")
 	}
@@ -470,9 +472,9 @@ func (s *SnapshotBackupReconciler) errorOut(ctx context.Context, ssb *velerov1ap
 	return ctrl.Result{}, s.updateStatusToFailed(ctx, ssb, err, msg, log)
 }
 
-func (s *SnapshotBackupReconciler) updateStatusToFailed(ctx context.Context, ssb *velerov1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) error {
+func (s *SnapshotBackupReconciler) updateStatusToFailed(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, err error, msg string, log logrus.FieldLogger) error {
 	original := ssb.DeepCopy()
-	ssb.Status.Phase = velerov1api.SnapshotBackupPhaseFailed
+	ssb.Status.Phase = velerov1alpha1api.SnapshotBackupPhaseFailed
 	ssb.Status.Message = errors.WithMessage(err, msg).Error()
 	if ssb.Status.StartTimestamp.IsZero() {
 		ssb.Status.StartTimestamp = &metav1.Time{Time: s.Clock.Now()}
@@ -487,7 +489,7 @@ func (s *SnapshotBackupReconciler) updateStatusToFailed(ctx context.Context, ssb
 	return nil
 }
 
-func (s *SnapshotBackupReconciler) NewSnapshotBackupProgressUpdater(ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger, ctx context.Context) *SnapshotBackupProgressUpdater {
+func (s *SnapshotBackupReconciler) NewSnapshotBackupProgressUpdater(ssb *velerov1alpha1api.SnapshotBackup, log logrus.FieldLogger, ctx context.Context) *SnapshotBackupProgressUpdater {
 	return &SnapshotBackupProgressUpdater{ssb, log, ctx, s.Client}
 }
 
@@ -495,7 +497,7 @@ func (s *SnapshotBackupReconciler) NewSnapshotBackupProgressUpdater(ssb *velerov
 func (s *SnapshotBackupProgressUpdater) UpdateProgress(p *uploader.UploaderProgress) {
 	original := s.SnapshotBackup.DeepCopy()
 	backupPVCName := s.SnapshotBackup.Name
-	s.SnapshotBackup.Status.Progress = velerov1api.DataMoveOperationProgress{TotalBytes: p.TotalBytes, BytesDone: p.BytesDone}
+	s.SnapshotBackup.Status.Progress = sharedapi.DataMoveOperationProgress{TotalBytes: p.TotalBytes, BytesDone: p.BytesDone}
 	if s.Cli == nil {
 		s.Log.Errorf("failed to update snapshot %s backup progress with uninitailize client", backupPVCName)
 		return
@@ -505,9 +507,9 @@ func (s *SnapshotBackupProgressUpdater) UpdateProgress(p *uploader.UploaderProgr
 	}
 }
 
-func (r *SnapshotBackupReconciler) acceptSnapshotBackup(ctx context.Context, ssb *velerov1api.SnapshotBackup) (bool, error) {
+func (r *SnapshotBackupReconciler) acceptSnapshotBackup(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup) (bool, error) {
 	updated := ssb.DeepCopy()
-	updated.Status.Phase = velerov1api.SnapshotBackupPhaseAccepted
+	updated.Status.Phase = velerov1alpha1api.SnapshotBackupPhaseAccepted
 
 	r.Log.Infof("Accepting snapshot backup %s", ssb.Name)
 
@@ -524,35 +526,35 @@ func (r *SnapshotBackupReconciler) acceptSnapshotBackup(ctx context.Context, ssb
 	}
 }
 
-func (r *SnapshotBackupReconciler) exposeSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+func (r *SnapshotBackupReconciler) exposeSnapshot(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, log logrus.FieldLogger) error {
 	switch ssb.Spec.SnapshotType {
-	case velerov1api.SnapshotTypeCSI:
+	case velerov1alpha1api.SnapshotTypeCSI:
 		return r.exposeCSISnapshot(ctx, ssb, log)
 	default:
 		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
 	}
 }
 
-func (r *SnapshotBackupReconciler) waitSnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup,
+func (r *SnapshotBackupReconciler) waitSnapshotExposed(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup,
 	log logrus.FieldLogger) (*snapshotExposeResult, error) {
 	switch ssb.Spec.SnapshotType {
-	case velerov1api.SnapshotTypeCSI:
+	case velerov1alpha1api.SnapshotTypeCSI:
 		return r.waitCSISnapshotExposed(ctx, ssb, log)
 	default:
 		return nil, errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
 	}
 }
 
-func (r *SnapshotBackupReconciler) cleanUpSnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+func (r *SnapshotBackupReconciler) cleanUpSnapshot(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, log logrus.FieldLogger) error {
 	switch ssb.Spec.SnapshotType {
-	case velerov1api.SnapshotTypeCSI:
+	case velerov1alpha1api.SnapshotTypeCSI:
 		return r.cleanUpCSISnapshot(ctx, ssb, log)
 	default:
 		return errors.Errorf("unsupported snapshot type %s", ssb.Spec.SnapshotType)
 	}
 }
 
-func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, ssb *velerov1api.SnapshotBackup,
+func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup,
 	log logrus.FieldLogger) (*snapshotExposeResult, error) {
 	backupPodName := ssb.Name
 	backupPVCName := ssb.Name
@@ -609,7 +611,7 @@ func (r *SnapshotBackupReconciler) waitCSISnapshotExposed(ctx context.Context, s
 	return &sser, nil
 }
 
-func (r *SnapshotBackupReconciler) cleanUpCSISnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+func (r *SnapshotBackupReconciler) cleanUpCSISnapshot(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, log logrus.FieldLogger) error {
 	backupPodName := ssb.Name
 	backupPVCName := ssb.Name
 	backupVSName := ssb.Name
@@ -622,7 +624,7 @@ func (r *SnapshotBackupReconciler) cleanUpCSISnapshot(ctx context.Context, ssb *
 	return nil
 }
 
-func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *velerov1api.SnapshotBackup, log logrus.FieldLogger) error {
+func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, log logrus.FieldLogger) error {
 	curLog := log.WithFields(logrus.Fields{
 		"snapshot backup": ssb.Name,
 	})
@@ -646,7 +648,7 @@ func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *v
 			Name:      backupVCName,
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					APIVersion: velerov1alpha1api.SchemeGroupVersion.String(),
 					Kind:       "SnapshotBackup",
 					Name:       ssb.Name,
 					UID:        ssb.UID,
@@ -755,7 +757,7 @@ func (r *SnapshotBackupReconciler) exposeCSISnapshot(ctx context.Context, ssb *v
 	return nil
 }
 
-func (r *SnapshotBackupReconciler) createBackupVS(ctx context.Context, snapshotVS *snapshotv1api.VolumeSnapshot, ssb *velerov1api.SnapshotBackup, vscName string) (*snapshotv1api.VolumeSnapshot, error) {
+func (r *SnapshotBackupReconciler) createBackupVS(ctx context.Context, snapshotVS *snapshotv1api.VolumeSnapshot, ssb *velerov1alpha1api.SnapshotBackup, vscName string) (*snapshotv1api.VolumeSnapshot, error) {
 	backupVSName := ssb.Name
 	backupVSCName := ssb.Name
 
@@ -786,7 +788,7 @@ func (r *SnapshotBackupReconciler) createBackupVS(ctx context.Context, snapshotV
 	return created, nil
 }
 
-func (r *SnapshotBackupReconciler) createBackupVSC(ctx context.Context, ssb *velerov1api.SnapshotBackup,
+func (r *SnapshotBackupReconciler) createBackupVSC(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup,
 	snapshotVSC *snapshotv1api.VolumeSnapshotContent, vs *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshotContent, error) {
 	backupVSCName := ssb.Name
 
@@ -818,7 +820,7 @@ func (r *SnapshotBackupReconciler) createBackupVSC(ctx context.Context, ssb *vel
 	return created, nil
 }
 
-func (r *SnapshotBackupReconciler) createBackupPVC(ctx context.Context, ssb *velerov1api.SnapshotBackup, pvcTemplate *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
+func (r *SnapshotBackupReconciler) createBackupPVC(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, pvcTemplate *corev1.PersistentVolumeClaim) (*corev1.PersistentVolumeClaim, error) {
 	copied := pvcTemplate.DeepCopy()
 	copied.Namespace = ssb.Namespace
 
@@ -830,7 +832,7 @@ func (r *SnapshotBackupReconciler) createBackupPVC(ctx context.Context, ssb *vel
 	return pvc, err
 }
 
-func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *velerov1api.SnapshotBackup, backupPVC *corev1.PersistentVolumeClaim) (*corev1.Pod, error) {
+func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *velerov1alpha1api.SnapshotBackup, backupPVC *corev1.PersistentVolumeClaim) (*corev1.Pod, error) {
 	podName := ssb.Name
 
 	var gracePeriod int64 = 0
@@ -841,7 +843,7 @@ func (r *SnapshotBackupReconciler) createBackupPod(ctx context.Context, ssb *vel
 			Namespace: ssb.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					APIVersion: velerov1alpha1api.SchemeGroupVersion.String(),
 					Kind:       "SnapshotBackup",
 					Name:       ssb.Name,
 					UID:        ssb.UID,

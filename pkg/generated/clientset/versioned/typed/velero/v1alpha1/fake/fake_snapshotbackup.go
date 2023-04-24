@@ -21,7 +21,7 @@ package fake
 import (
 	"context"
 
-	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	v1alpha1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	labels "k8s.io/apimachinery/pkg/labels"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"
@@ -32,29 +32,29 @@ import (
 
 // FakeSnapshotBackups implements SnapshotBackupInterface
 type FakeSnapshotBackups struct {
-	Fake *FakeVeleroV1
+	Fake *FakeVeleroV1alpha1
 	ns   string
 }
 
-var snapshotbackupsResource = schema.GroupVersionResource{Group: "velero.io", Version: "v1", Resource: "snapshotbackups"}
+var snapshotbackupsResource = schema.GroupVersionResource{Group: "velero.io", Version: "v1alpha1", Resource: "snapshotbackups"}
 
-var snapshotbackupsKind = schema.GroupVersionKind{Group: "velero.io", Version: "v1", Kind: "SnapshotBackup"}
+var snapshotbackupsKind = schema.GroupVersionKind{Group: "velero.io", Version: "v1alpha1", Kind: "SnapshotBackup"}
 
 // Get takes name of the snapshotBackup, and returns the corresponding snapshotBackup object, and an error if there is any.
-func (c *FakeSnapshotBackups) Get(ctx context.Context, name string, options v1.GetOptions) (result *velerov1.SnapshotBackup, err error) {
+func (c *FakeSnapshotBackups) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1alpha1.SnapshotBackup, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewGetAction(snapshotbackupsResource, c.ns, name), &velerov1.SnapshotBackup{})
+		Invokes(testing.NewGetAction(snapshotbackupsResource, c.ns, name), &v1alpha1.SnapshotBackup{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*velerov1.SnapshotBackup), err
+	return obj.(*v1alpha1.SnapshotBackup), err
 }
 
 // List takes label and field selectors, and returns the list of SnapshotBackups that match those selectors.
-func (c *FakeSnapshotBackups) List(ctx context.Context, opts v1.ListOptions) (result *velerov1.SnapshotBackupList, err error) {
+func (c *FakeSnapshotBackups) List(ctx context.Context, opts v1.ListOptions) (result *v1alpha1.SnapshotBackupList, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewListAction(snapshotbackupsResource, snapshotbackupsKind, c.ns, opts), &velerov1.SnapshotBackupList{})
+		Invokes(testing.NewListAction(snapshotbackupsResource, snapshotbackupsKind, c.ns, opts), &v1alpha1.SnapshotBackupList{})
 
 	if obj == nil {
 		return nil, err
@@ -64,8 +64,8 @@ func (c *FakeSnapshotBackups) List(ctx context.Context, opts v1.ListOptions) (re
 	if label == nil {
 		label = labels.Everything()
 	}
-	list := &velerov1.SnapshotBackupList{ListMeta: obj.(*velerov1.SnapshotBackupList).ListMeta}
-	for _, item := range obj.(*velerov1.SnapshotBackupList).Items {
+	list := &v1alpha1.SnapshotBackupList{ListMeta: obj.(*v1alpha1.SnapshotBackupList).ListMeta}
+	for _, item := range obj.(*v1alpha1.SnapshotBackupList).Items {
 		if label.Matches(labels.Set(item.Labels)) {
 			list.Items = append(list.Items, item)
 		}
@@ -81,43 +81,43 @@ func (c *FakeSnapshotBackups) Watch(ctx context.Context, opts v1.ListOptions) (w
 }
 
 // Create takes the representation of a snapshotBackup and creates it.  Returns the server's representation of the snapshotBackup, and an error, if there is any.
-func (c *FakeSnapshotBackups) Create(ctx context.Context, snapshotBackup *velerov1.SnapshotBackup, opts v1.CreateOptions) (result *velerov1.SnapshotBackup, err error) {
+func (c *FakeSnapshotBackups) Create(ctx context.Context, snapshotBackup *v1alpha1.SnapshotBackup, opts v1.CreateOptions) (result *v1alpha1.SnapshotBackup, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewCreateAction(snapshotbackupsResource, c.ns, snapshotBackup), &velerov1.SnapshotBackup{})
+		Invokes(testing.NewCreateAction(snapshotbackupsResource, c.ns, snapshotBackup), &v1alpha1.SnapshotBackup{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*velerov1.SnapshotBackup), err
+	return obj.(*v1alpha1.SnapshotBackup), err
 }
 
 // Update takes the representation of a snapshotBackup and updates it. Returns the server's representation of the snapshotBackup, and an error, if there is any.
-func (c *FakeSnapshotBackups) Update(ctx context.Context, snapshotBackup *velerov1.SnapshotBackup, opts v1.UpdateOptions) (result *velerov1.SnapshotBackup, err error) {
+func (c *FakeSnapshotBackups) Update(ctx context.Context, snapshotBackup *v1alpha1.SnapshotBackup, opts v1.UpdateOptions) (result *v1alpha1.SnapshotBackup, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewUpdateAction(snapshotbackupsResource, c.ns, snapshotBackup), &velerov1.SnapshotBackup{})
+		Invokes(testing.NewUpdateAction(snapshotbackupsResource, c.ns, snapshotBackup), &v1alpha1.SnapshotBackup{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*velerov1.SnapshotBackup), err
+	return obj.(*v1alpha1.SnapshotBackup), err
 }
 
 // UpdateStatus was generated because the type contains a Status member.
 // Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeSnapshotBackups) UpdateStatus(ctx context.Context, snapshotBackup *velerov1.SnapshotBackup, opts v1.UpdateOptions) (*velerov1.SnapshotBackup, error) {
+func (c *FakeSnapshotBackups) UpdateStatus(ctx context.Context, snapshotBackup *v1alpha1.SnapshotBackup, opts v1.UpdateOptions) (*v1alpha1.SnapshotBackup, error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewUpdateSubresourceAction(snapshotbackupsResource, "status", c.ns, snapshotBackup), &velerov1.SnapshotBackup{})
+		Invokes(testing.NewUpdateSubresourceAction(snapshotbackupsResource, "status", c.ns, snapshotBackup), &v1alpha1.SnapshotBackup{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*velerov1.SnapshotBackup), err
+	return obj.(*v1alpha1.SnapshotBackup), err
 }
 
 // Delete takes name of the snapshotBackup and deletes it. Returns an error if one occurs.
 func (c *FakeSnapshotBackups) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
 	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(snapshotbackupsResource, c.ns, name), &velerov1.SnapshotBackup{})
+		Invokes(testing.NewDeleteAction(snapshotbackupsResource, c.ns, name), &v1alpha1.SnapshotBackup{})
 
 	return err
 }
@@ -126,17 +126,17 @@ func (c *FakeSnapshotBackups) Delete(ctx context.Context, name string, opts v1.D
 func (c *FakeSnapshotBackups) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
 	action := testing.NewDeleteCollectionAction(snapshotbackupsResource, c.ns, listOpts)
 
-	_, err := c.Fake.Invokes(action, &velerov1.SnapshotBackupList{})
+	_, err := c.Fake.Invokes(action, &v1alpha1.SnapshotBackupList{})
 	return err
 }
 
 // Patch applies the patch and returns the patched snapshotBackup.
-func (c *FakeSnapshotBackups) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *velerov1.SnapshotBackup, err error) {
+func (c *FakeSnapshotBackups) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1alpha1.SnapshotBackup, err error) {
 	obj, err := c.Fake.
-		Invokes(testing.NewPatchSubresourceAction(snapshotbackupsResource, c.ns, name, pt, data, subresources...), &velerov1.SnapshotBackup{})
+		Invokes(testing.NewPatchSubresourceAction(snapshotbackupsResource, c.ns, name, pt, data, subresources...), &v1alpha1.SnapshotBackup{})
 
 	if obj == nil {
 		return nil, err
 	}
-	return obj.(*velerov1.SnapshotBackup), err
+	return obj.(*v1alpha1.SnapshotBackup), err
 }

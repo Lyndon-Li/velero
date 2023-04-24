@@ -32,59 +32,59 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
-// DataDownloadInformer provides access to a shared informer and lister for
-// DataDownloads.
-type DataDownloadInformer interface {
+// SnapshotRestoreInformer provides access to a shared informer and lister for
+// SnapshotRestores.
+type SnapshotRestoreInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1alpha1.DataDownloadLister
+	Lister() v1alpha1.SnapshotRestoreLister
 }
 
-type dataDownloadInformer struct {
+type snapshotRestoreInformer struct {
 	factory          internalinterfaces.SharedInformerFactory
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	namespace        string
 }
 
-// NewDataDownloadInformer constructs a new informer for DataDownload type.
+// NewSnapshotRestoreInformer constructs a new informer for SnapshotRestore type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewDataDownloadInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
-	return NewFilteredDataDownloadInformer(client, namespace, resyncPeriod, indexers, nil)
+func NewSnapshotRestoreInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers) cache.SharedIndexInformer {
+	return NewFilteredSnapshotRestoreInformer(client, namespace, resyncPeriod, indexers, nil)
 }
 
-// NewFilteredDataDownloadInformer constructs a new informer for DataDownload type.
+// NewFilteredSnapshotRestoreInformer constructs a new informer for SnapshotRestore type.
 // Always prefer using an informer factory to get a shared informer instead of getting an independent
 // one. This reduces memory footprint and number of connections to the server.
-func NewFilteredDataDownloadInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
+func NewFilteredSnapshotRestoreInformer(client versioned.Interface, namespace string, resyncPeriod time.Duration, indexers cache.Indexers, tweakListOptions internalinterfaces.TweakListOptionsFunc) cache.SharedIndexInformer {
 	return cache.NewSharedIndexInformer(
 		&cache.ListWatch{
 			ListFunc: func(options v1.ListOptions) (runtime.Object, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.VeleroV1alpha1().DataDownloads(namespace).List(context.TODO(), options)
+				return client.VeleroV1alpha1().SnapshotRestores(namespace).List(context.TODO(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.VeleroV1alpha1().DataDownloads(namespace).Watch(context.TODO(), options)
+				return client.VeleroV1alpha1().SnapshotRestores(namespace).Watch(context.TODO(), options)
 			},
 		},
-		&velerov1alpha1.DataDownload{},
+		&velerov1alpha1.SnapshotRestore{},
 		resyncPeriod,
 		indexers,
 	)
 }
 
-func (f *dataDownloadInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
-	return NewFilteredDataDownloadInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
+func (f *snapshotRestoreInformer) defaultInformer(client versioned.Interface, resyncPeriod time.Duration) cache.SharedIndexInformer {
+	return NewFilteredSnapshotRestoreInformer(client, f.namespace, resyncPeriod, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc}, f.tweakListOptions)
 }
 
-func (f *dataDownloadInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&velerov1alpha1.DataDownload{}, f.defaultInformer)
+func (f *snapshotRestoreInformer) Informer() cache.SharedIndexInformer {
+	return f.factory.InformerFor(&velerov1alpha1.SnapshotRestore{}, f.defaultInformer)
 }
 
-func (f *dataDownloadInformer) Lister() v1alpha1.DataDownloadLister {
-	return v1alpha1.NewDataDownloadLister(f.Informer().GetIndexer())
+func (f *snapshotRestoreInformer) Lister() v1alpha1.SnapshotRestoreLister {
+	return v1alpha1.NewSnapshotRestoreLister(f.Informer().GetIndexer())
 }

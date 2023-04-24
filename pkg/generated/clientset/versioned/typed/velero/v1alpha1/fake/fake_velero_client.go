@@ -28,12 +28,12 @@ type FakeVeleroV1alpha1 struct {
 	*testing.Fake
 }
 
-func (c *FakeVeleroV1alpha1) DataDownloads(namespace string) v1alpha1.DataDownloadInterface {
-	return &FakeDataDownloads{c, namespace}
+func (c *FakeVeleroV1alpha1) SnapshotBackups(namespace string) v1alpha1.SnapshotBackupInterface {
+	return &FakeSnapshotBackups{c, namespace}
 }
 
-func (c *FakeVeleroV1alpha1) DataUploads(namespace string) v1alpha1.DataUploadInterface {
-	return &FakeDataUploads{c, namespace}
+func (c *FakeVeleroV1alpha1) SnapshotRestores(namespace string) v1alpha1.SnapshotRestoreInterface {
+	return &FakeSnapshotRestores{c, namespace}
 }
 
 // RESTClient returns a RESTClient that is used to communicate

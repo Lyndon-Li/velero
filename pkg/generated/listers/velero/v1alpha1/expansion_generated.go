@@ -18,18 +18,18 @@ limitations under the License.
 
 package v1alpha1
 
-// DataDownloadListerExpansion allows custom methods to be added to
-// DataDownloadLister.
-type DataDownloadListerExpansion interface{}
+// SnapshotBackupListerExpansion allows custom methods to be added to
+// SnapshotBackupLister.
+type SnapshotBackupListerExpansion interface{}
 
-// DataDownloadNamespaceListerExpansion allows custom methods to be added to
-// DataDownloadNamespaceLister.
-type DataDownloadNamespaceListerExpansion interface{}
+// SnapshotBackupNamespaceListerExpansion allows custom methods to be added to
+// SnapshotBackupNamespaceLister.
+type SnapshotBackupNamespaceListerExpansion interface{}
 
-// DataUploadListerExpansion allows custom methods to be added to
-// DataUploadLister.
-type DataUploadListerExpansion interface{}
+// SnapshotRestoreListerExpansion allows custom methods to be added to
+// SnapshotRestoreLister.
+type SnapshotRestoreListerExpansion interface{}
 
-// DataUploadNamespaceListerExpansion allows custom methods to be added to
-// DataUploadNamespaceLister.
-type DataUploadNamespaceListerExpansion interface{}
+// SnapshotRestoreNamespaceListerExpansion allows custom methods to be added to
+// SnapshotRestoreNamespaceLister.
+type SnapshotRestoreNamespaceListerExpansion interface{}

@@ -98,22 +98,6 @@ type ServerStatusRequestListerExpansion interface{}
 // ServerStatusRequestNamespaceLister.
 type ServerStatusRequestNamespaceListerExpansion interface{}
 
-// SnapshotBackupListerExpansion allows custom methods to be added to
-// SnapshotBackupLister.
-type SnapshotBackupListerExpansion interface{}
-
-// SnapshotBackupNamespaceListerExpansion allows custom methods to be added to
-// SnapshotBackupNamespaceLister.
-type SnapshotBackupNamespaceListerExpansion interface{}
-
-// SnapshotRestoreListerExpansion allows custom methods to be added to
-// SnapshotRestoreLister.
-type SnapshotRestoreListerExpansion interface{}
-
-// SnapshotRestoreNamespaceListerExpansion allows custom methods to be added to
-// SnapshotRestoreNamespaceLister.
-type SnapshotRestoreNamespaceListerExpansion interface{}
-
 // VolumeSnapshotLocationListerExpansion allows custom methods to be added to
 // VolumeSnapshotLocationLister.
 type VolumeSnapshotLocationListerExpansion interface{}

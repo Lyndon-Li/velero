@@ -38,8 +38,4 @@ type ScheduleExpansion interface{}
 
 type ServerStatusRequestExpansion interface{}
 
-type SnapshotBackupExpansion interface{}
-
-type SnapshotRestoreExpansion interface{}
-
 type VolumeSnapshotLocationExpansion interface{}

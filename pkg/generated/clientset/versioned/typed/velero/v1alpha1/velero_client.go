@@ -26,8 +26,8 @@ import (
 
 type VeleroV1alpha1Interface interface {
 	RESTClient() rest.Interface
-	DataDownloadsGetter
-	DataUploadsGetter
+	SnapshotBackupsGetter
+	SnapshotRestoresGetter
 }
 
 // VeleroV1alpha1Client is used to interact with features provided by the velero.io group.
@@ -35,12 +35,12 @@ type VeleroV1alpha1Client struct {
 	restClient rest.Interface
 }
 
-func (c *VeleroV1alpha1Client) DataDownloads(namespace string) DataDownloadInterface {
-	return newDataDownloads(c, namespace)
+func (c *VeleroV1alpha1Client) SnapshotBackups(namespace string) SnapshotBackupInterface {
+	return newSnapshotBackups(c, namespace)
 }
 
-func (c *VeleroV1alpha1Client) DataUploads(namespace string) DataUploadInterface {
-	return newDataUploads(c, namespace)
+func (c *VeleroV1alpha1Client) SnapshotRestores(namespace string) SnapshotRestoreInterface {
+	return newSnapshotRestores(c, namespace)
 }
 
 // NewForConfig creates a new VeleroV1alpha1Client for the given config.

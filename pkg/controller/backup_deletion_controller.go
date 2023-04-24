@@ -35,6 +35,7 @@ import (
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	"github.com/vmware-tanzu/velero/internal/delete"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	velerov1alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1alpha1"
 	"github.com/vmware-tanzu/velero/pkg/discovery"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
@@ -587,7 +588,7 @@ func getPodVolumeSnapshots(ctx context.Context, backup *velerov1api.Backup, kbCl
 // getDataMoveSnapshots returns a list of all data move snapshot ids associated with
 // a given Velero backup.
 func getDataMoveSnapshots(ctx context.Context, backup *velerov1api.Backup, kbClient client.Client) ([]repository.SnapshotIdentifier, error) {
-	snapshotbackups := &velerov1api.SnapshotBackupList{}
+	snapshotbackups := &velerov1alpha1api.SnapshotBackupList{}
 	options := &client.ListOptions{
 		LabelSelector: labels.Set(map[string]string{
 			velerov1api.BackupNameLabel: label.GetValidName(backup.Name),

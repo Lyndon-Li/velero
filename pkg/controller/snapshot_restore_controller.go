@@ -43,7 +43,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
+	sharedapi "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	velerov1alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1alpha1"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
@@ -83,7 +85,7 @@ type SnapshotRestoreReconciler struct {
 }
 
 type SnapshotRestoreProgressUpdater struct {
-	SnapshotRestore *velerov1api.SnapshotRestore
+	SnapshotRestore *velerov1alpha1api.SnapshotRestore
 	Log             logrus.FieldLogger
 	Ctx             context.Context
 	Cli             client.Client
@@ -98,7 +100,7 @@ type SnapshotRestoreProgressUpdater struct {
 func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := s.logger.WithField("SnapshotRestore", req.NamespacedName.String())
 
-	ssr := &velerov1api.SnapshotRestore{}
+	ssr := &velerov1alpha1api.SnapshotRestore{}
 
 	if err := s.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Name}, ssr); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -114,7 +116,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, nil
 	}
 
-	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1api.SnapshotRestorePhaseNew {
+	if ssr.Status.Phase == "" || ssr.Status.Phase == velerov1alpha1api.SnapshotRestorePhaseNew {
 		log.Info("Snapshot restore starting")
 
 		if _, err := s.getTargetPVC(ctx, ssr); err != nil {
@@ -145,7 +147,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Info("Restore pvc is created")
 
 		return ctrl.Result{}, nil
-	} else if ssr.Status.Phase == velerov1api.SnapshotRestorePhasePrepared {
+	} else if ssr.Status.Phase == velerov1alpha1api.SnapshotRestorePhasePrepared {
 		s.DataPathTrackerLock.Lock()
 		_, found := s.DataPathTracker[ssr.Name]
 		s.DataPathTrackerLock.Unlock()
@@ -164,7 +166,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Info("Restore PVC is ready")
 
 		original := ssr.DeepCopy()
-		ssr.Status.Phase = velerov1api.SnapshotRestorePhaseInProgress
+		ssr.Status.Phase = velerov1alpha1api.SnapshotRestorePhaseInProgress
 		ssr.Status.StartTimestamp = &metav1.Time{Time: s.clock.Now()}
 		if err := s.Patch(ctx, ssr, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Error("Unable to update status to in progress")
@@ -176,7 +178,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		s.runCancelableDataPath(ctx, ssr, path, log)
 
 		return ctrl.Result{}, nil
-	} else if ssr.Status.Phase == velerov1api.SnapshotRestorePhaseInProgress && ssr.Spec.Cancel {
+	} else if ssr.Status.Phase == velerov1alpha1api.SnapshotRestorePhaseInProgress && ssr.Spec.Cancel {
 		s.DataPathTrackerLock.Lock()
 		dataPathContext, found := s.DataPathTracker[ssr.Name]
 		s.DataPathTrackerLock.Unlock()
@@ -188,7 +190,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		// Update status to Canceling.
 		original := ssr.DeepCopy()
-		ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCanceling
+		ssr.Status.Phase = velerov1alpha1api.SnapshotRestorePhaseCanceling
 		if err := s.Client.Patch(ctx, ssr, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Error("error updating SnapshotRestore status")
 			return ctrl.Result{}, err
@@ -203,7 +205,7 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 }
 
-func (s *SnapshotRestoreReconciler) runCancelableDataPath(ctx context.Context, ssr *velerov1api.SnapshotRestore, path string, log logrus.FieldLogger) {
+func (s *SnapshotRestoreReconciler) runCancelableDataPath(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, path string, log logrus.FieldLogger) {
 	cancelCtx, cancel := context.WithCancel(ctx)
 
 	log.Info("Creating data path routine")
@@ -264,10 +266,10 @@ func (s *SnapshotRestoreReconciler) runCancelableDataPath(ctx context.Context, s
 		original := ssr.DeepCopy()
 
 		if err == provider.ErrorCanceled {
-			ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCanceled
+			ssr.Status.Phase = velerov1alpha1api.SnapshotRestorePhaseCanceled
 			ssr.Status.CompletionTimestamp = &metav1.Time{Time: s.clock.Now()}
 		} else {
-			ssr.Status.Phase = velerov1api.SnapshotRestorePhaseCompleted
+			ssr.Status.Phase = velerov1alpha1api.SnapshotRestorePhaseCompleted
 			ssr.Status.CompletionTimestamp = &metav1.Time{Time: s.clock.Now()}
 		}
 
@@ -285,7 +287,7 @@ func (s *SnapshotRestoreReconciler) runCancelableDataPath(ctx context.Context, s
 
 func (s *SnapshotRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&velerov1api.SnapshotRestore{}).
+		For(&velerov1alpha1api.SnapshotRestore{}).
 		Watches(&source.Kind{Type: &corev1.Pod{}}, kube.EnqueueRequestsFromMapUpdateFunc(s.findSnapshotRestoreForPod),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(ue event.UpdateEvent) bool {
@@ -321,7 +323,7 @@ func (s *SnapshotRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 func (s *SnapshotRestoreReconciler) findSnapshotRestoreForPod(podObj client.Object) []reconcile.Request {
 	pod := podObj.(*corev1.Pod)
 
-	ssr := &velerov1api.SnapshotRestore{}
+	ssr := &velerov1alpha1api.SnapshotRestore{}
 	err := s.Client.Get(context.Background(), types.NamespacedName{
 		Namespace: pod.Namespace,
 		Name:      pod.Labels[velerov1api.SnapshotRestoreLabel],
@@ -332,7 +334,7 @@ func (s *SnapshotRestoreReconciler) findSnapshotRestoreForPod(podObj client.Obje
 		return []reconcile.Request{}
 	}
 
-	if ssr.Status.Phase != velerov1api.SnapshotRestorePhaseAccepted {
+	if ssr.Status.Phase != velerov1alpha1api.SnapshotRestorePhaseAccepted {
 		return []reconcile.Request{}
 	}
 
@@ -351,7 +353,7 @@ func (s *SnapshotRestoreReconciler) findSnapshotRestoreForPod(podObj client.Obje
 	return requests
 }
 
-func (s *SnapshotRestoreReconciler) patchSnapshotRestore(ctx context.Context, req *velerov1api.SnapshotRestore, mutate func(*velerov1api.SnapshotRestore)) error {
+func (s *SnapshotRestoreReconciler) patchSnapshotRestore(ctx context.Context, req *velerov1alpha1api.SnapshotRestore, mutate func(*velerov1alpha1api.SnapshotRestore)) error {
 	original := req.DeepCopy()
 	mutate(req)
 	if err := s.Client.Patch(ctx, req, client.MergeFrom(original)); err != nil {
@@ -361,20 +363,20 @@ func (s *SnapshotRestoreReconciler) patchSnapshotRestore(ctx context.Context, re
 	return nil
 }
 
-func prepareSnapshotRestore(ssb *velerov1api.SnapshotRestore) {
-	ssb.Status.Phase = velerov1api.SnapshotRestorePhasePrepared
+func prepareSnapshotRestore(ssb *velerov1alpha1api.SnapshotRestore) {
+	ssb.Status.Phase = velerov1alpha1api.SnapshotRestorePhasePrepared
 }
 
-func (s *SnapshotRestoreReconciler) errorOut(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
+func (s *SnapshotRestoreReconciler) errorOut(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) (ctrl.Result, error) {
 	s.cleanUpExposeEnv(ctx, ssr, log)
 
 	return ctrl.Result{}, s.updateStatusToFailed(ctx, ssr, err, msg, log)
 }
 
-func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ssr *velerov1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) error {
+func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, err error, msg string, log logrus.FieldLogger) error {
 	log.Infof("updateStatusToFailed %v", ssr.Status.Phase)
 	original := ssr.DeepCopy()
-	ssr.Status.Phase = velerov1api.SnapshotRestorePhaseFailed
+	ssr.Status.Phase = velerov1alpha1api.SnapshotRestorePhaseFailed
 	ssr.Status.Message = errors.WithMessage(err, msg).Error()
 	ssr.Status.CompletionTimestamp = &metav1.Time{Time: s.clock.Now()}
 
@@ -386,7 +388,7 @@ func (s *SnapshotRestoreReconciler) updateStatusToFailed(ctx context.Context, ss
 	return nil
 }
 
-func (s *SnapshotRestoreReconciler) NewSnapshotBackupProgressUpdater(ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger, ctx context.Context) *SnapshotRestoreProgressUpdater {
+func (s *SnapshotRestoreReconciler) NewSnapshotBackupProgressUpdater(ssr *velerov1alpha1api.SnapshotRestore, log logrus.FieldLogger, ctx context.Context) *SnapshotRestoreProgressUpdater {
 	return &SnapshotRestoreProgressUpdater{ssr, log, ctx, s.Client}
 }
 
@@ -394,7 +396,7 @@ func (s *SnapshotRestoreReconciler) NewSnapshotBackupProgressUpdater(ssr *velero
 func (s *SnapshotRestoreProgressUpdater) UpdateProgress(p *uploader.UploaderProgress) {
 	restoreVCName := s.SnapshotRestore.Name
 	original := s.SnapshotRestore.DeepCopy()
-	s.SnapshotRestore.Status.Progress = velerov1api.DataMoveOperationProgress{TotalBytes: p.TotalBytes, BytesDone: p.BytesDone}
+	s.SnapshotRestore.Status.Progress = sharedapi.DataMoveOperationProgress{TotalBytes: p.TotalBytes, BytesDone: p.BytesDone}
 	if s.Cli == nil {
 		s.Log.Errorf("failed to update snapshot %s restore progress with uninitailize client", restoreVCName)
 		return
@@ -404,9 +406,9 @@ func (s *SnapshotRestoreProgressUpdater) UpdateProgress(p *uploader.UploaderProg
 	}
 }
 
-func (r *SnapshotRestoreReconciler) acceptSnapshotRestore(ctx context.Context, ssr *velerov1api.SnapshotRestore) (bool, error) {
+func (r *SnapshotRestoreReconciler) acceptSnapshotRestore(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore) (bool, error) {
 	updated := ssr.DeepCopy()
-	updated.Status.Phase = velerov1api.SnapshotRestorePhaseAccepted
+	updated.Status.Phase = velerov1alpha1api.SnapshotRestorePhaseAccepted
 
 	r.logger.Infof("Accepting snapshot restore %s", ssr.Name)
 
@@ -423,7 +425,7 @@ func (r *SnapshotRestoreReconciler) acceptSnapshotRestore(ctx context.Context, s
 	}
 }
 
-func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, log logrus.FieldLogger) error {
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
@@ -435,7 +437,7 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 			Namespace: ssr.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					APIVersion: velerov1alpha1api.SchemeGroupVersion.String(),
 					Kind:       "SnapshotRestore",
 					Name:       ssr.Name,
 					UID:        ssr.UID,
@@ -473,11 +475,11 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 	return s.Client.Create(ctx, pod, &client.CreateOptions{})
 }
 
-func (s *SnapshotRestoreReconciler) getTargetPVC(ctx context.Context, ssr *velerov1api.SnapshotRestore) (*v1.PersistentVolumeClaim, error) {
+func (s *SnapshotRestoreReconciler) getTargetPVC(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore) (*v1.PersistentVolumeClaim, error) {
 	return s.kubeClient.CoreV1().PersistentVolumeClaims(ssr.Spec.TargetVolume.Namespace).Get(ctx, ssr.Spec.TargetVolume.PVC, metav1.GetOptions{})
 }
 
-func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, log logrus.FieldLogger) error {
 	restorePVCName := ssr.Name
 
 	targetPVC, err := s.getTargetPVC(ctx, ssr)
@@ -493,7 +495,7 @@ func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *v
 			Annotations: targetPVC.Annotations,
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: velerov1api.SchemeGroupVersion.String(),
+					APIVersion: velerov1alpha1api.SchemeGroupVersion.String(),
 					Kind:       "SnapshotRestore",
 					Name:       ssr.Name,
 					UID:        ssr.UID,
@@ -525,7 +527,7 @@ func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *v
 	return nil
 }
 
-func (s *SnapshotRestoreReconciler) waitRestorePVCExposed(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) (string, error) {
+func (s *SnapshotRestoreReconciler) waitRestorePVCExposed(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, log logrus.FieldLogger) (string, error) {
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
@@ -577,7 +579,7 @@ func (s *SnapshotRestoreReconciler) waitRestorePVCExposed(ctx context.Context, s
 	return path, nil
 }
 
-func (s *SnapshotRestoreReconciler) cleanUpExposeEnv(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) {
+func (s *SnapshotRestoreReconciler) cleanUpExposeEnv(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, log logrus.FieldLogger) {
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
@@ -585,7 +587,7 @@ func (s *SnapshotRestoreReconciler) cleanUpExposeEnv(ctx context.Context, ssr *v
 	kube.DeletePVCIfAny(ctx, s.kubeClient.CoreV1(), restorePVCName, ssr.Namespace, log)
 }
 
-func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr *velerov1alpha1api.SnapshotRestore, log logrus.FieldLogger) error {
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 

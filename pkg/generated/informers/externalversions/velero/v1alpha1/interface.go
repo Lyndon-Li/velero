@@ -24,10 +24,10 @@ import (
 
 // Interface provides access to all the informers in this group version.
 type Interface interface {
-	// DataDownloads returns a DataDownloadInformer.
-	DataDownloads() DataDownloadInformer
-	// DataUploads returns a DataUploadInformer.
-	DataUploads() DataUploadInformer
+	// SnapshotBackups returns a SnapshotBackupInformer.
+	SnapshotBackups() SnapshotBackupInformer
+	// SnapshotRestores returns a SnapshotRestoreInformer.
+	SnapshotRestores() SnapshotRestoreInformer
 }
 
 type version struct {
@@ -41,12 +41,12 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 	return &version{factory: f, namespace: namespace, tweakListOptions: tweakListOptions}
 }
 
-// DataDownloads returns a DataDownloadInformer.
-func (v *version) DataDownloads() DataDownloadInformer {
-	return &dataDownloadInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+// SnapshotBackups returns a SnapshotBackupInformer.
+func (v *version) SnapshotBackups() SnapshotBackupInformer {
+	return &snapshotBackupInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }
 
-// DataUploads returns a DataUploadInformer.
-func (v *version) DataUploads() DataUploadInformer {
-	return &dataUploadInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+// SnapshotRestores returns a SnapshotRestoreInformer.
+func (v *version) SnapshotRestores() SnapshotRestoreInformer {
+	return &snapshotRestoreInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
 }

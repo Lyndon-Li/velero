@@ -68,14 +68,6 @@ func (c *FakeVeleroV1) ServerStatusRequests(namespace string) v1.ServerStatusReq
 	return &FakeServerStatusRequests{c, namespace}
 }
 
-func (c *FakeVeleroV1) SnapshotBackups(namespace string) v1.SnapshotBackupInterface {
-	return &FakeSnapshotBackups{c, namespace}
-}
-
-func (c *FakeVeleroV1) SnapshotRestores(namespace string) v1.SnapshotRestoreInterface {
-	return &FakeSnapshotRestores{c, namespace}
-}
-
 func (c *FakeVeleroV1) VolumeSnapshotLocations(namespace string) v1.VolumeSnapshotLocationInterface {
 	return &FakeVolumeSnapshotLocations{c, namespace}
 }

@@ -14,9 +14,10 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package v1
+package v1alpha1
 
 import (
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -137,7 +138,7 @@ type SnapshotBackupStatus struct {
 	// number of backed up bytes. This can be used to display progress information
 	// about the backup operation.
 	// +optional
-	Progress DataMoveOperationProgress `json:"progress,omitempty"`
+	Progress shared.DataMoveOperationProgress `json:"progress,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,
