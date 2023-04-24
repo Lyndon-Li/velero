@@ -243,7 +243,7 @@ update:
 	@$(MAKE) shell CMD="-c 'hack/update-all.sh'"
 
 update-crd:
-	@$(MAKE) shell CMD="-c 'hack/update-3generated-crd-code.sh'"
+	@$(MAKE) shell CMD="-c 'hack/update-3generated-crd-code.sh'"	
 
 build-dirs:
 	@mkdir -p _output/bin/$(GOOS)/$(GOARCH)
