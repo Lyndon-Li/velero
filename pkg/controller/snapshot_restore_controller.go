@@ -132,13 +132,20 @@ func (s *SnapshotRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		log.Info("Snapshot restore is accepted")
 
-		if err := s.createRestorePod(ctx, ssr, log); err != nil {
+		selectedNode, targetPVC, err := kube.WaitPVCMounted(ctx, s.kubeClient.CoreV1(), ssr.Spec.TargetVolume.PVC, ssr.Spec.TargetVolume.Namespace, s.kubeClient.StorageV1(), ssr.Spec.OperationTimeout.Duration)
+		if err != nil {
+			return s.errorOut(ctx, ssr, err, "error to wait target PVC mounted, %s/%s", log)
+		}
+
+		log.WithField("selected node", selectedNode).Info("Target PVC is mounted")
+
+		if err := s.createRestorePod(ctx, ssr, selectedNode, log); err != nil {
 			return s.errorOut(ctx, ssr, err, "error creating restore pod", log)
 		}
 
 		log.Info("Snapshot restore pod is created")
 
-		if err := s.createRestorePVC(ctx, ssr, log); err != nil {
+		if err := s.createRestorePVC(ctx, ssr, selectedNode, targetPVC, log); err != nil {
 			return s.errorOut(ctx, ssr, err, "error to create restore pvc", log)
 		}
 
@@ -423,7 +430,7 @@ func (r *SnapshotRestoreReconciler) acceptSnapshotRestore(ctx context.Context, s
 	}
 }
 
-func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *velerov1api.SnapshotRestore, selectedNode string, log logrus.FieldLogger) error {
 	restorePodName := ssr.Name
 	restorePVCName := ssr.Name
 
@@ -467,6 +474,7 @@ func (s *SnapshotRestoreReconciler) createRestorePod(ctx context.Context, ssr *v
 					},
 				},
 			}},
+			NodeName: selectedNode,
 		},
 	}
 
@@ -477,13 +485,8 @@ func (s *SnapshotRestoreReconciler) getTargetPVC(ctx context.Context, ssr *veler
 	return s.kubeClient.CoreV1().PersistentVolumeClaims(ssr.Spec.TargetVolume.Namespace).Get(ctx, ssr.Spec.TargetVolume.PVC, metav1.GetOptions{})
 }
 
-func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *velerov1api.SnapshotRestore, log logrus.FieldLogger) error {
+func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *velerov1api.SnapshotRestore, selectedNode string, targetPVC *v1.PersistentVolumeClaim, log logrus.FieldLogger) error {
 	restorePVCName := ssr.Name
-
-	targetPVC, err := s.getTargetPVC(ctx, ssr)
-	if err != nil {
-		return errors.Wrap(err, fmt.Sprintf("Failed to get target PVC"))
-	}
 
 	pvcObj := &corev1api.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -507,6 +510,12 @@ func (s *SnapshotRestoreReconciler) createRestorePVC(ctx context.Context, ssr *v
 			VolumeMode:       targetPVC.Spec.VolumeMode,
 			Resources:        targetPVC.Spec.Resources,
 		},
+	}
+
+	if selectedNode != "" {
+		pvcObj.Annotations = map[string]string{
+			kube.KubeAnnSelectedNode: selectedNode,
+		}
 	}
 
 	restorePVC, err := s.kubeClient.CoreV1().PersistentVolumeClaims(pvcObj.Namespace).Create(ctx, pvcObj, metav1.CreateOptions{})

@@ -33,6 +33,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+
+	storagev1api "k8s.io/api/storage/v1"
+	storagev1 "k8s.io/client-go/kubernetes/typed/storage/v1"
 )
 
 func GetVolumeModeFromDataMover(dataMover string) corev1api.PersistentVolumeMode {
@@ -303,4 +306,44 @@ func SetPVReclaimPolicy(ctx context.Context, pvGetter corev1client.PersistentVol
 	}
 
 	return nil
+}
+
+func WaitPVCMounted(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvc string, namespace string,
+	storageClient storagev1.StorageV1Interface, timeout time.Duration) (string, *corev1api.PersistentVolumeClaim, error) {
+	selectedNode := ""
+	var updated *corev1api.PersistentVolumeClaim
+	var storageClass *storagev1api.StorageClass
+	interval := 1 * time.Second
+	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+		tmpPVC, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvc, metav1.GetOptions{})
+		if err != nil {
+			return false, errors.Wrapf(err, fmt.Sprintf("failed to get pvc %s/%s", namespace, pvc))
+		}
+
+		if tmpPVC.Spec.StorageClassName != nil && storageClass == nil {
+			storageClass, err = storageClient.StorageClasses().Get(ctx, *tmpPVC.Spec.StorageClassName, metav1.GetOptions{})
+			if err != nil {
+				return false, errors.Wrapf(err, "error to get storage class %s", *tmpPVC.Spec.StorageClassName)
+			}
+		}
+
+		if storageClass != nil {
+			if storageClass.VolumeBindingMode != nil && *storageClass.VolumeBindingMode == storagev1api.VolumeBindingWaitForFirstConsumer {
+				selectedNode = tmpPVC.Annotations[KubeAnnSelectedNode]
+				if selectedNode == "" {
+					return false, nil
+				}
+			}
+		}
+
+		updated = tmpPVC
+
+		return true, nil
+	})
+
+	if err != nil {
+		return "", nil, errors.Wrap(err, "error to wait for PVC mounted")
+	}
+
+	return selectedNode, updated, err
 }
