@@ -18,17 +18,23 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
+	jsonpatch "github.com/evanphx/json-patch"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+
+	storagev1api "k8s.io/api/storage/v1"
+	storagev1 "k8s.io/client-go/kubernetes/typed/storage/v1"
 )
 
 const (
@@ -76,4 +82,189 @@ func WaitPVCBound(ctx context.Context, pvcGetter corev1client.PersistentVolumeCl
 	}
 
 	return pv, err
+}
+
+// DeletePVIfAny deletes a PV by name if it exists, and log an error when the deletion fails
+func DeletePVIfAny(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pvName string, log logrus.FieldLogger) {
+	err := pvGetter.PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.WithError(err).Debugf("Abort deleting PV, it doesn't exist, %s", pvName)
+		} else {
+			log.WithError(err).Errorf("Failed to delete PV %s", pvName)
+		}
+	}
+}
+
+// EnsureDeletePVC asserts the existence of a PVC by name, deletes it and waits for its disappearance and returns errors on any failure
+func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvc string, namespace string, timeout time.Duration) error {
+	err := pvcGetter.PersistentVolumeClaims(namespace).Delete(ctx, pvc, metav1.DeleteOptions{})
+	if err != nil {
+		return errors.Wrapf(err, "error to delete pvc %s", pvc)
+	}
+
+	err = wait.PollImmediate(waitInternal, timeout, func() (bool, error) {
+		_, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvc, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+
+			return false, errors.Wrapf(err, "error to get pvc %s", pvc)
+		}
+
+		return false, nil
+	})
+
+	if err != nil {
+		return errors.Wrapf(err, "error to retrieve pvc info for %s", pvc)
+	}
+
+	return nil
+}
+
+// RebindPVC rebinds a PVC by modifying its VolumeName to the specific PV
+func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter,
+	pvc *corev1api.PersistentVolumeClaim, pv string) (*corev1api.PersistentVolumeClaim, error) {
+	origBytes, err := json.Marshal(pvc)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling original PVC")
+	}
+
+	updated := pvc.DeepCopy()
+	updated.Spec.VolumeName = pv
+
+	updatedBytes, err := json.Marshal(updated)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling updated PV")
+	}
+
+	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating json merge patch for PV")
+	}
+
+	updated, err = pvcGetter.PersistentVolumeClaims(pvc.Namespace).Patch(ctx, pvc.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "error patching PVC")
+	}
+
+	return updated, nil
+}
+
+// ResetPVBinding resets the binding info of a PV and adds the required labels so as to make it ready for binding
+func ResetPVBinding(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume, labels map[string]string) (*corev1api.PersistentVolume, error) {
+	origBytes, err := json.Marshal(pv)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling original PV")
+	}
+
+	updated := pv.DeepCopy()
+	delete(updated.Annotations, KubeAnnBindCompleted)
+	delete(updated.Annotations, KubeAnnBoundByController)
+	updated.Spec.ClaimRef = nil
+
+	if labels != nil {
+		if updated.Labels == nil {
+			updated.Labels = make(map[string]string)
+		}
+
+		for k, v := range labels {
+			if _, ok := updated.Labels[k]; !ok {
+				updated.Labels[k] = v
+			}
+		}
+	}
+
+	updatedBytes, err := json.Marshal(updated)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling updated PV")
+	}
+
+	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating json merge patch for PV")
+	}
+
+	updated, err = pvGetter.PersistentVolumes().Patch(ctx, pv.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "error patching PV")
+	}
+
+	return updated, nil
+}
+
+// SetPVReclaimPolicy sets the sepcified reclaim policy to a PV
+func SetPVReclaimPolicy(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume,
+	policy corev1api.PersistentVolumeReclaimPolicy) (*corev1api.PersistentVolume, error) {
+	if pv.Spec.PersistentVolumeReclaimPolicy == policy {
+		return nil, nil
+	}
+
+	origBytes, err := json.Marshal(pv)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling original PV")
+	}
+
+	updated := pv.DeepCopy()
+	updated.Spec.PersistentVolumeReclaimPolicy = policy
+
+	updatedBytes, err := json.Marshal(updated)
+	if err != nil {
+		return nil, errors.Wrap(err, "error marshalling updated PV")
+	}
+
+	patchBytes, err := jsonpatch.CreateMergePatch(origBytes, updatedBytes)
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating json merge patch for PV")
+	}
+
+	updated, err = pvGetter.PersistentVolumes().Patch(ctx, pv.Name, types.MergePatchType, patchBytes, metav1.PatchOptions{})
+	if err != nil {
+		return nil, errors.Wrap(err, "error patching PV")
+	}
+
+	return updated, nil
+}
+
+// WaitPVCConsumed waits for a PVC to be consumed by a pod so that the selected node is set by the pod scheduling; or does
+// nothing if the consuming doesn't affect the PV provision.
+// The latest PVC and the selected node will be returned.
+func WaitPVCConsumed(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvc string, namespace string,
+	storageClient storagev1.StorageClassesGetter, timeout time.Duration) (string, *corev1api.PersistentVolumeClaim, error) {
+	selectedNode := ""
+	var updated *corev1api.PersistentVolumeClaim
+	var storageClass *storagev1api.StorageClass
+	err := wait.PollImmediate(waitInternal, timeout, func() (bool, error) {
+		tmpPVC, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvc, metav1.GetOptions{})
+		if err != nil {
+			return false, errors.Wrapf(err, "error to get pvc %s/%s", namespace, pvc)
+		}
+
+		if tmpPVC.Spec.StorageClassName != nil && storageClass == nil {
+			storageClass, err = storageClient.StorageClasses().Get(ctx, *tmpPVC.Spec.StorageClassName, metav1.GetOptions{})
+			if err != nil {
+				return false, errors.Wrapf(err, "error to get storage class %s", *tmpPVC.Spec.StorageClassName)
+			}
+		}
+
+		if storageClass != nil {
+			if storageClass.VolumeBindingMode != nil && *storageClass.VolumeBindingMode == storagev1api.VolumeBindingWaitForFirstConsumer {
+				selectedNode = tmpPVC.Annotations[KubeAnnSelectedNode]
+				if selectedNode == "" {
+					return false, nil
+				}
+			}
+		}
+
+		updated = tmpPVC
+
+		return true, nil
+	})
+
+	if err != nil {
+		return "", nil, errors.Wrap(err, "error to wait for PVC")
+	}
+
+	return selectedNode, updated, err
 }
