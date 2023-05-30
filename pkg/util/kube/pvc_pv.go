@@ -42,7 +42,7 @@ const (
 )
 
 // DeletePVCIfAny deletes a PVC by name if it exists, and log an error when the deletion fails
-func DeletePVCIfAny(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvcName string, pvcNamespace string, log logrus.FieldLogger) {
+func DeletePVCIfAny(ctx context.Context, pvcGetter corev1client.CoreV1Interface, pvcName string, pvcNamespace string, log logrus.FieldLogger) {
 	err := pvcGetter.PersistentVolumeClaims(pvcNamespace).Delete(ctx, pvcName, metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -54,8 +54,8 @@ func DeletePVCIfAny(ctx context.Context, pvcGetter corev1client.PersistentVolume
 }
 
 // WaitPVCBound wait for binding of a PVC specified by name and returns the bound PV object
-func WaitPVCBound(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter,
-	pvGetter corev1client.PersistentVolumesGetter, pvc string, namespace string, timeout time.Duration) (*corev1api.PersistentVolume, error) {
+func WaitPVCBound(ctx context.Context, pvcGetter corev1client.CoreV1Interface,
+	pvGetter corev1client.CoreV1Interface, pvc string, namespace string, timeout time.Duration) (*corev1api.PersistentVolume, error) {
 	var updated *corev1api.PersistentVolumeClaim
 	err := wait.PollImmediate(waitInternal, timeout, func() (bool, error) {
 		tmpPVC, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvc, metav1.GetOptions{})

@@ -73,7 +73,7 @@ func isPodScheduledInStatus(pod *corev1api.Pod, statusCheckFunc func(*corev1api.
 }
 
 // DeletePodIfAny deletes a pod by name if it exists, and log an error when the deletion fails
-func DeletePodIfAny(ctx context.Context, podGetter corev1client.PodsGetter, podName string, podNamespace string, log logrus.FieldLogger) {
+func DeletePodIfAny(ctx context.Context, podGetter corev1client.CoreV1Interface, podName string, podNamespace string, log logrus.FieldLogger) {
 	err := podGetter.Pods(podNamespace).Delete(ctx, podName, metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {

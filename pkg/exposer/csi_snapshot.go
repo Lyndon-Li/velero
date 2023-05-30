@@ -361,9 +361,10 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject *u
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{
-					Name:    podName,
-					Image:   "alpine:latest",
-					Command: []string{"sleep", "infinity"},
+					Name:            podName,
+					Image:           "alpine:latest",
+					ImagePullPolicy: corev1.PullIfNotPresent,
+					Command:         []string{"sleep", "infinity"},
 					VolumeMounts: []corev1.VolumeMount{{
 						Name:      backupPVC.Name,
 						MountPath: "/" + backupPVC.Name,
