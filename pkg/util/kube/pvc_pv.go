@@ -85,7 +85,7 @@ func WaitPVCBound(ctx context.Context, pvcGetter corev1client.CoreV1Interface,
 }
 
 // DeletePVIfAny deletes a PV by name if it exists, and log an error when the deletion fails
-func DeletePVIfAny(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pvName string, log logrus.FieldLogger) {
+func DeletePVIfAny(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, log logrus.FieldLogger) {
 	err := pvGetter.PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -97,7 +97,7 @@ func DeletePVIfAny(ctx context.Context, pvGetter corev1client.PersistentVolumesG
 }
 
 // EnsureDeletePVC asserts the existence of a PVC by name, deletes it and waits for its disappearance and returns errors on any failure
-func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvc string, namespace string, timeout time.Duration) error {
+func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.CoreV1Interface, pvc string, namespace string, timeout time.Duration) error {
 	err := pvcGetter.PersistentVolumeClaims(namespace).Delete(ctx, pvc, metav1.DeleteOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "error to delete pvc %s", pvc)
@@ -124,7 +124,7 @@ func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.PersistentVolum
 }
 
 // RebindPVC rebinds a PVC by modifying its VolumeName to the specific PV
-func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter,
+func RebindPVC(ctx context.Context, pvcGetter corev1client.CoreV1Interface,
 	pvc *corev1api.PersistentVolumeClaim, pv string) (*corev1api.PersistentVolumeClaim, error) {
 	origBytes, err := json.Marshal(pvc)
 	if err != nil {
@@ -153,7 +153,7 @@ func RebindPVC(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaim
 }
 
 // ResetPVBinding resets the binding info of a PV and adds the required labels so as to make it ready for binding
-func ResetPVBinding(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume, labels map[string]string) (*corev1api.PersistentVolume, error) {
+func ResetPVBinding(ctx context.Context, pvGetter corev1client.CoreV1Interface, pv *corev1api.PersistentVolume, labels map[string]string) (*corev1api.PersistentVolume, error) {
 	origBytes, err := json.Marshal(pv)
 	if err != nil {
 		return nil, errors.Wrap(err, "error marshalling original PV")
@@ -195,7 +195,7 @@ func ResetPVBinding(ctx context.Context, pvGetter corev1client.PersistentVolumes
 }
 
 // SetPVReclaimPolicy sets the sepcified reclaim policy to a PV
-func SetPVReclaimPolicy(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter, pv *corev1api.PersistentVolume,
+func SetPVReclaimPolicy(ctx context.Context, pvGetter corev1client.CoreV1Interface, pv *corev1api.PersistentVolume,
 	policy corev1api.PersistentVolumeReclaimPolicy) (*corev1api.PersistentVolume, error) {
 	if pv.Spec.PersistentVolumeReclaimPolicy == policy {
 		return nil, nil
@@ -230,8 +230,8 @@ func SetPVReclaimPolicy(ctx context.Context, pvGetter corev1client.PersistentVol
 // WaitPVCConsumed waits for a PVC to be consumed by a pod so that the selected node is set by the pod scheduling; or does
 // nothing if the consuming doesn't affect the PV provision.
 // The latest PVC and the selected node will be returned.
-func WaitPVCConsumed(ctx context.Context, pvcGetter corev1client.PersistentVolumeClaimsGetter, pvc string, namespace string,
-	storageClient storagev1.StorageClassesGetter, timeout time.Duration) (string, *corev1api.PersistentVolumeClaim, error) {
+func WaitPVCConsumed(ctx context.Context, pvcGetter corev1client.CoreV1Interface, pvc string, namespace string,
+	storageClient storagev1.StorageV1Interface, timeout time.Duration) (string, *corev1api.PersistentVolumeClaim, error) {
 	selectedNode := ""
 	var updated *corev1api.PersistentVolumeClaim
 	var storageClass *storagev1api.StorageClass
