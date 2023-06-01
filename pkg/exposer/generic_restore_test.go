@@ -24,7 +24,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 
@@ -124,11 +123,15 @@ func TestRestoreExpose(t *testing.T) {
 				log:        velerotest.NewLogger(),
 			}
 
-			var ownerObject *unstructured.Unstructured
+			var ownerObject corev1api.ObjectReference
 			if test.ownerRestore != nil {
-				unstruct, err := runtime.DefaultUnstructuredConverter.ToUnstructured(test.ownerRestore)
-				assert.NoError(t, err)
-				ownerObject = &unstructured.Unstructured{Object: unstruct}
+				ownerObject = corev1api.ObjectReference{
+					Kind:       test.ownerRestore.Kind,
+					Namespace:  test.ownerRestore.Namespace,
+					Name:       test.ownerRestore.Name,
+					UID:        test.ownerRestore.UID,
+					APIVersion: test.ownerRestore.APIVersion,
+				}
 			}
 
 			err := exposer.Expose(context.Background(), ownerObject, test.targetPVCName, test.sourceNamespace, map[string]string{}, time.Millisecond)
@@ -311,11 +314,15 @@ func TestRebindVolume(t *testing.T) {
 				log:        velerotest.NewLogger(),
 			}
 
-			var ownerObject *unstructured.Unstructured
+			var ownerObject corev1api.ObjectReference
 			if test.ownerRestore != nil {
-				unstruct, err := runtime.DefaultUnstructuredConverter.ToUnstructured(test.ownerRestore)
-				assert.NoError(t, err)
-				ownerObject = &unstructured.Unstructured{Object: unstruct}
+				ownerObject = corev1api.ObjectReference{
+					Kind:       test.ownerRestore.Kind,
+					Namespace:  test.ownerRestore.Namespace,
+					Name:       test.ownerRestore.Name,
+					UID:        test.ownerRestore.UID,
+					APIVersion: test.ownerRestore.APIVersion,
+				}
 			}
 
 			err := exposer.RebindVolume(context.Background(), ownerObject, test.targetPVCName, test.sourceNamespace, time.Millisecond)
