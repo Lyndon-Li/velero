@@ -20,19 +20,19 @@ import (
 	"context"
 	"time"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	corev1 "k8s.io/api/core/v1"
 )
 
 // SnapshotExposer is the interfaces for a snapshot exposer
 type SnapshotExposer interface {
 	// Expose starts the process to expose a snapshot, the expose process may take long time
-	Expose(context.Context, *unstructured.Unstructured, string, time.Duration, interface{}) error
+	Expose(context.Context, corev1.ObjectReference, string, time.Duration, interface{}) error
 
 	// GetExposed polls the status of the expose.
 	// If the expose is accessible by the current caller, it waits the expose ready and returns the expose result.
 	// Otherwise, it returns nil as the expose result without an error.
-	GetExposed(context.Context, *unstructured.Unstructured, time.Duration, interface{}) (*ExposeResult, error)
+	GetExposed(context.Context, corev1.ObjectReference, time.Duration, interface{}) (*ExposeResult, error)
 
 	// CleanUp cleans up any objects generated during the snapshot expose
-	CleanUp(context.Context, *unstructured.Unstructured, string, string)
+	CleanUp(context.Context, corev1.ObjectReference, string, string)
 }

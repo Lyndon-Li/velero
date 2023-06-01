@@ -29,7 +29,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 
@@ -81,11 +80,11 @@ type csiSnapshotExposer struct {
 	log               logrus.FieldLogger
 }
 
-func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject *unstructured.Unstructured, snapshotName string, timeout time.Duration, param interface{}) error {
+func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.ObjectReference, snapshotName string, timeout time.Duration, param interface{}) error {
 	csiExposeParam := param.(*CSISnapshotExposeParam)
 
 	curLog := e.log.WithFields(logrus.Fields{
-		"owner": ownerObject.GetName(),
+		"owner": ownerObject.Name,
 	})
 
 	curLog.Info("Exposing CSI snapshot")
@@ -181,19 +180,19 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject *unstructur
 	return nil
 }
 
-func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject *unstructured.Unstructured, timeout time.Duration, param interface{}) (*ExposeResult, error) {
+func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.ObjectReference, timeout time.Duration, param interface{}) (*ExposeResult, error) {
 	exposeWaitParam := param.(*CSISnapshotExposeWaitParam)
 
-	backupPodName := ownerObject.GetName()
-	backupPVCName := ownerObject.GetName()
+	backupPodName := ownerObject.Name
+	backupPVCName := ownerObject.Name
 
 	curLog := e.log.WithFields(logrus.Fields{
-		"owner": ownerObject.GetName(),
+		"owner": ownerObject.Name,
 	})
 
 	pod := &corev1.Pod{}
 	err := exposeWaitParam.NodeClient.Get(ctx, types.NamespacedName{
-		Namespace: ownerObject.GetNamespace(),
+		Namespace: ownerObject.Namespace,
 		Name:      backupPodName,
 	}, pod)
 	if err != nil {
@@ -207,7 +206,7 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject *unstru
 
 	curLog.WithField("pod", pod.Name).Infof("Backup pod is in running state in node %s", pod.Spec.NodeName)
 
-	_, err = kube.WaitPVCBound(ctx, e.kubeClient.CoreV1(), e.kubeClient.CoreV1(), backupPVCName, ownerObject.GetNamespace(), timeout)
+	_, err = kube.WaitPVCBound(ctx, e.kubeClient.CoreV1(), e.kubeClient.CoreV1(), backupPVCName, ownerObject.Namespace, timeout)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error to wait backup PVC bound, %s", backupPVCName)
 	}
@@ -217,14 +216,14 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject *unstru
 	return &ExposeResult{ByPod: ExposeByPod{HostingPod: pod, PVC: backupPVCName}}, nil
 }
 
-func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject *unstructured.Unstructured, vsName string, sourceNamespace string) {
-	backupPodName := ownerObject.GetName()
-	backupPVCName := ownerObject.GetName()
-	backupVSName := ownerObject.GetName()
+func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject corev1.ObjectReference, vsName string, sourceNamespace string) {
+	backupPodName := ownerObject.Name
+	backupPVCName := ownerObject.Name
+	backupVSName := ownerObject.Name
 
-	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), backupPodName, ownerObject.GetNamespace(), e.log)
-	kube.DeletePVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVCName, ownerObject.GetNamespace(), e.log)
-	csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVSName, ownerObject.GetNamespace(), e.log)
+	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), backupPodName, ownerObject.Namespace, e.log)
+	kube.DeletePVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVCName, ownerObject.Namespace, e.log)
+	csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVSName, ownerObject.Namespace, e.log)
 	csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, vsName, sourceNamespace, e.log)
 }
 
@@ -236,14 +235,14 @@ func getVolumeModeByAccessMode(accessMode string) (corev1.PersistentVolumeMode, 
 	}
 }
 
-func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject *unstructured.Unstructured, snapshotVS *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshot, error) {
-	backupVSName := ownerObject.GetName()
-	backupVSCName := ownerObject.GetName()
+func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject corev1.ObjectReference, snapshotVS *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshot, error) {
+	backupVSName := ownerObject.Name
+	backupVSCName := ownerObject.Name
 
 	vs := &snapshotv1api.VolumeSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      backupVSName,
-			Namespace: ownerObject.GetNamespace(),
+			Namespace: ownerObject.Namespace,
 			// Don't add ownerReference to SnapshotBackup.
 			// The backupPVC should be deleted before backupVS, otherwise, the deletion of backupVS will fail since
 			// backupPVC has its dataSource referring to it
@@ -259,8 +258,8 @@ func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject *un
 	return e.csiSnapshotClient.VolumeSnapshots(vs.Namespace).Create(ctx, vs, metav1.CreateOptions{})
 }
 
-func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject *unstructured.Unstructured, snapshotVSC *snapshotv1api.VolumeSnapshotContent, vs *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshotContent, error) {
-	backupVSCName := ownerObject.GetName()
+func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject corev1.ObjectReference, snapshotVSC *snapshotv1api.VolumeSnapshotContent, vs *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshotContent, error) {
+	backupVSCName := ownerObject.Name
 
 	vsc := &snapshotv1api.VolumeSnapshotContent{
 		ObjectMeta: metav1.ObjectMeta{
@@ -285,8 +284,8 @@ func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject *u
 	return e.csiSnapshotClient.VolumeSnapshotContents().Create(ctx, vsc, metav1.CreateOptions{})
 }
 
-func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject *unstructured.Unstructured, backupVS string, storageClass string, accessMode string, resource resource.Quantity) (*corev1.PersistentVolumeClaim, error) {
-	backupVCName := ownerObject.GetName()
+func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject corev1.ObjectReference, backupVS string, storageClass string, accessMode string, resource resource.Quantity) (*corev1.PersistentVolumeClaim, error) {
+	backupVCName := ownerObject.Name
 
 	volumeMode, err := getVolumeModeByAccessMode(accessMode)
 	if err != nil {
@@ -301,14 +300,14 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject *u
 
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: ownerObject.GetNamespace(),
+			Namespace: ownerObject.Namespace,
 			Name:      backupVCName,
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: ownerObject.GetAPIVersion(),
-					Kind:       ownerObject.GetKind(),
-					Name:       ownerObject.GetName(),
-					UID:        ownerObject.GetUID(),
+					APIVersion: ownerObject.APIVersion,
+					Kind:       ownerObject.Kind,
+					Name:       ownerObject.Name,
+					UID:        ownerObject.UID,
 					Controller: boolptr.True(),
 				},
 			},
@@ -338,21 +337,21 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject *u
 	return created, err
 }
 
-func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject *unstructured.Unstructured, backupPVC *corev1.PersistentVolumeClaim, label map[string]string) (*corev1.Pod, error) {
-	podName := ownerObject.GetName()
+func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject corev1.ObjectReference, backupPVC *corev1.PersistentVolumeClaim, label map[string]string) (*corev1.Pod, error) {
+	podName := ownerObject.Name
 
 	var gracePeriod int64 = 0
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
-			Namespace: ownerObject.GetNamespace(),
+			Namespace: ownerObject.Namespace,
 			OwnerReferences: []metav1.OwnerReference{
 				{
-					APIVersion: ownerObject.GetAPIVersion(),
-					Kind:       ownerObject.GetKind(),
-					Name:       ownerObject.GetName(),
-					UID:        ownerObject.GetUID(),
+					APIVersion: ownerObject.APIVersion,
+					Kind:       ownerObject.Kind,
+					Name:       ownerObject.Name,
+					UID:        ownerObject.UID,
 					Controller: boolptr.True(),
 				},
 			},
@@ -383,5 +382,5 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject *u
 		},
 	}
 
-	return e.kubeClient.CoreV1().Pods(ownerObject.GetNamespace()).Create(ctx, pod, metav1.CreateOptions{})
+	return e.kubeClient.CoreV1().Pods(ownerObject.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 }

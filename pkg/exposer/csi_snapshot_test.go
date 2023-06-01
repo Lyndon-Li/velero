@@ -27,10 +27,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	clientTesting "k8s.io/client-go/testing"
+
+	corev1 "k8s.io/api/core/v1"
 
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
@@ -279,11 +280,15 @@ func TestExpose(t *testing.T) {
 				log:               velerotest.NewLogger(),
 			}
 
-			var ownerObject *unstructured.Unstructured
+			var ownerObject corev1.ObjectReference
 			if test.ownerBackup != nil {
-				unstruct, err := runtime.DefaultUnstructuredConverter.ToUnstructured(test.ownerBackup)
-				assert.NoError(t, err)
-				ownerObject = &unstructured.Unstructured{Object: unstruct}
+				ownerObject = corev1.ObjectReference{
+					Kind:       test.ownerBackup.Kind,
+					Namespace:  test.ownerBackup.Namespace,
+					Name:       test.ownerBackup.Name,
+					UID:        test.ownerBackup.UID,
+					APIVersion: test.ownerBackup.APIVersion,
+				}
 			}
 
 			err := exposer.Expose(context.Background(), ownerObject, test.snapshotName, time.Millisecond, &test.exposeParam)
