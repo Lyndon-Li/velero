@@ -246,7 +246,6 @@ func RebindPV(ctx context.Context, pvGetter corev1client.PersistentVolumesGetter
 	}
 
 	updated := pv.DeepCopy()
-	delete(updated.Annotations, KubeAnnBindCompleted)
 	delete(updated.Annotations, KubeAnnBoundByController)
 	updated.Spec.ClaimRef = nil
 
@@ -346,4 +345,38 @@ func WaitPVCMounted(ctx context.Context, pvcGetter corev1client.PersistentVolume
 	}
 
 	return selectedNode, updated, err
+}
+
+func WaitPVBound(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, pvcName string, pvcNamespace string,
+	timeout time.Duration) (*corev1api.PersistentVolume, error) {
+	var updated *corev1api.PersistentVolume
+	interval := 1 * time.Second
+	err := wait.PollImmediate(interval, timeout, func() (bool, error) {
+		tmpPV, err := pvGetter.PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+		if err != nil {
+			return false, errors.Wrapf(err, fmt.Sprintf("failed to get pv %s", pvName))
+		}
+
+		if tmpPV.Spec.ClaimRef == nil {
+			return false, nil
+		}
+
+		if tmpPV.Spec.ClaimRef.Name != pvcName {
+			return false, nil
+		}
+
+		if tmpPV.Spec.ClaimRef.Namespace != pvcNamespace {
+			return false, nil
+		}
+
+		updated = tmpPV
+
+		return true, nil
+	})
+
+	if err != nil {
+		return nil, errors.Wrap(err, "error to wait for bound of PV")
+	} else {
+		return updated, nil
+	}
 }

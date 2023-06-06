@@ -621,7 +621,7 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 
 	defer func() {
 		if retained != nil {
-			log.WithField("restore PV", restorePV.Name).Info("Deleting retained PV on error")
+			log.WithField("restore PV", retained.Name).Info("Deleting retained PV on error")
 			kube.DeletePVIfAny(ctx, s.kubeClient.CoreV1(), retained.Name, log)
 		}
 	}()
@@ -654,19 +654,20 @@ func (s *SnapshotRestoreReconciler) rebindRestoreVolume(ctx context.Context, ssr
 		matchLabel = targetPVC.Spec.Selector.MatchLabels
 	}
 
+	restorePVName := restorePV.Name
 	restorePV, err = kube.RebindPV(ctx, s.kubeClient.CoreV1(), restorePV, matchLabel)
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("Failed to rebind restore PV %s", restorePV.Name))
+		return errors.Wrapf(err, fmt.Sprintf("Failed to rebind restore PV %s", restorePVName))
 	}
 
 	log.WithField("restore PV", restorePV.Name).Info("Restore PV is rebound")
 
-	_, _, err = kube.WaitPVCBound(ctx, s.kubeClient.CoreV1(), s.kubeClient.CoreV1(), targetPVC.Name, targetPVC.Namespace, ssr.Spec.OperationTimeout.Duration)
+	restorePV, err = kube.WaitPVBound(ctx, s.kubeClient.CoreV1(), restorePV.Name, targetPVC.Name, targetPVC.Namespace, ssr.Spec.OperationTimeout.Duration)
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("Failed to wait target PVC bound, targetPVC %s/%s", targetPVC.Namespace, targetPVC.Name))
+		return errors.Wrapf(err, "error to wait restore PV bound, restore PV %s", restorePVName)
 	}
 
-	log.WithField("target PVC", fmt.Sprintf("%s/%s", targetPVC.Namespace, targetPVC.Name)).Info("Target PVC is ready")
+	log.WithField("restore PV", restorePV.Name).Info("Restore PV is ready")
 
 	retained = nil
 
