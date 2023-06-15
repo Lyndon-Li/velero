@@ -26,6 +26,7 @@ const (
 	KopiaType            = "kopia"
 	SnapshotRequesterTag = "snapshot-requester"
 	SnapshotUploaderTag  = "snapshot-uploader"
+	UserSnapshotIDTag    = "user-snapshot-id"
 )
 
 // ValidateUploaderType validates if the input param is a valid uploader type.

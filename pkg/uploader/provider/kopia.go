@@ -117,6 +117,7 @@ func (kp *kopiaProvider) RunBackup(
 	realSource string,
 	tags map[string]string,
 	forceFull bool,
+	userSnapshotID string,
 	parentSnapshot string,
 	updater uploader.ProgressUpdater) (string, bool, error) {
 	if updater == nil {
@@ -131,6 +132,7 @@ func (kp *kopiaProvider) RunBackup(
 		"path":           path,
 		"realSource":     realSource,
 		"parentSnapshot": parentSnapshot,
+		"userSnapshotID": userSnapshotID,
 	})
 	repoWriter := kopia.NewShimRepo(kp.bkRepo)
 	kpUploader := snapshotfs.NewUploader(repoWriter)
@@ -152,6 +154,7 @@ func (kp *kopiaProvider) RunBackup(
 	}
 	tags[uploader.SnapshotRequesterTag] = kp.requestorType
 	tags[uploader.SnapshotUploaderTag] = uploader.KopiaType
+	tags[uploader.UserSnapshotIDTag] = userSnapshotID
 
 	snapshotInfo, isSnapshotEmpty, err := BackupFunc(ctx, kpUploader, repoWriter, path, realSource, forceFull, parentSnapshot, tags, log)
 	if err != nil {

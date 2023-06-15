@@ -18,6 +18,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -76,6 +77,10 @@ func (r *resticRepositoryProvider) EnsureUnlockRepo(ctx context.Context, param R
 
 func (r *resticRepositoryProvider) Forget(ctx context.Context, snapshotID string, param RepoParam) error {
 	return r.svc.Forget(param.BackupLocation, param.BackupRepo, snapshotID)
+}
+
+func (r *resticRepositoryProvider) ForgetByUserID(ctx context.Context, snapshotID string, param RepoParam) error {
+	return errors.New("ForgetByUserID is not supported")
 }
 
 func (r *resticRepositoryProvider) DefaultMaintenanceFrequency(ctx context.Context, param RepoParam) time.Duration {

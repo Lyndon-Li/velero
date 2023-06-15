@@ -227,7 +227,13 @@ func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, du *
 		return r.errorOut(ctx, du, err, "error to initialize data path", log)
 	}
 	log.WithField("path", path.ByPath).Info("fs init")
-	if err := fsBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, nil); err != nil {
+
+	userSnapshotID := ""
+	// if du.Labels != nil {
+	// 	userSnapshotID = du.Labels[velerov2alpha1api.AsyncOperationIdLabel]
+	// }
+
+	if err := fsBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, userSnapshotID, nil); err != nil {
 		return r.errorOut(ctx, du, err, "error starting data path backup", log)
 	}
 

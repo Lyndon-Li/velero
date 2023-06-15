@@ -45,6 +45,9 @@ type SnapshotIdentifier struct {
 	// SnapshotID is the short ID of the snapshot.
 	SnapshotID string
 
+	// UserSnapshotID is the snapshot identifer from user view.
+	UserSnapshotID string
+
 	// RepositoryType is the type of the repository where the
 	// snapshot is stored
 	RepositoryType string
@@ -217,7 +220,11 @@ func (m *manager) Forget(ctx context.Context, snapshot SnapshotIdentifier) error
 		return errors.WithStack(err)
 	}
 
-	return prd.Forget(context.Background(), snapshot.SnapshotID, param)
+	if snapshot.SnapshotID != "" {
+		return prd.Forget(context.Background(), snapshot.SnapshotID, param)
+	} else {
+		return prd.ForgetByUserID(context.Background(), snapshot.UserSnapshotID, param)
+	}
 }
 
 func (m *manager) DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error) {

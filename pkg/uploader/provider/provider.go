@@ -47,6 +47,7 @@ type Provider interface {
 		realSource string,
 		tags map[string]string,
 		forceFull bool,
+		userSnapshotID string,
 		parentSnapshot string,
 		updater uploader.ProgressUpdater) (string, bool, error)
 	// RunRestore which will do restore for one specific volume with given snapshot id and return error

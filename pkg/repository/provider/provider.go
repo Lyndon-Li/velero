@@ -54,8 +54,11 @@ type Provider interface {
 	// EnsureUnlockRepo esures to remove any stale file locks in the storage
 	EnsureUnlockRepo(ctx context.Context, param RepoParam) error
 
-	// Forget is to delete a snapshot from the repository
+	// Forget is to delete a snapshot from the repository by snapshot ID
 	Forget(ctx context.Context, snapshotID string, param RepoParam) error
+
+	// Forget is to delete a snapshot from the repository by user snapshot ID
+	ForgetByUserID(ctx context.Context, snapshotID string, param RepoParam) error
 
 	// DefaultMaintenanceFrequency returns the default frequency to run maintenance
 	DefaultMaintenanceFrequency(ctx context.Context, param RepoParam) time.Duration

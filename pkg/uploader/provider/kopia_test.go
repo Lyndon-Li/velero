@@ -96,7 +96,7 @@ func TestRunBackup(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			BackupFunc = tc.hookBackupFunc
-			_, _, err := kp.RunBackup(context.Background(), "var", "", nil, false, "", &updater)
+			_, _, err := kp.RunBackup(context.Background(), "var", "", nil, false, "", "", &updater)
 			if tc.notError {
 				assert.NoError(t, err)
 			} else {
