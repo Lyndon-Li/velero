@@ -33,7 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
-	veleroapishared "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/exposer"
@@ -137,7 +136,9 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	// Update status to InProgress.
 	original := pvb.DeepCopy()
 	pvb.Status.Phase = velerov1api.PodVolumeBackupPhaseInProgress
+	pvb.Status.Progress.StartTime = &metav1.Time{Time: r.clock.Now()}
 	pvb.Status.StartTimestamp = &metav1.Time{Time: r.clock.Now()}
+
 	if err := r.Client.Patch(ctx, &pvb, client.MergeFrom(original)); err != nil {
 		return r.errorOut(ctx, &pvb, err, "error updating PodVolumeBackup status", log)
 	}
@@ -190,6 +191,8 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *PodVolumeBackupReconciler) OnDataPathCompleted(ctx context.Context, namespace string, pvbName string, result datapath.Result) {
 	defer r.closeDataPath(ctx, pvbName)
 
+	dataPathCompleteTime := &metav1.Time{Time: r.clock.Now()}
+
 	log := r.logger.WithField("pvb", pvbName)
 
 	log.WithField("PVB", pvbName).Info("Async fs backup data path completed")
@@ -205,6 +208,7 @@ func (r *PodVolumeBackupReconciler) OnDataPathCompleted(ctx context.Context, nam
 	pvb.Status.Path = result.Backup.Source.ByPath
 	pvb.Status.Phase = velerov1api.PodVolumeBackupPhaseCompleted
 	pvb.Status.SnapshotID = result.Backup.SnapshotID
+	pvb.Status.Progress.CompleteTime = dataPathCompleteTime
 	pvb.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
 	if result.Backup.EmptySnapshot {
 		pvb.Status.Message = "volume was empty so no snapshot was taken"
@@ -265,7 +269,8 @@ func (r *PodVolumeBackupReconciler) OnDataPathProgress(ctx context.Context, name
 	}
 
 	original := pvb.DeepCopy()
-	pvb.Status.Progress = veleroapishared.DataMoveOperationProgress{TotalBytes: progress.TotalBytes, BytesDone: progress.BytesDone}
+	pvb.Status.Progress.TotalBytes = progress.TotalBytes
+	pvb.Status.Progress.BytesDone = progress.BytesDone
 
 	if err := r.Client.Patch(ctx, &pvb, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("Failed to update progress")

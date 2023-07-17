@@ -40,7 +40,6 @@ import (
 	snapshotter "github.com/kubernetes-csi/external-snapshotter/client/v4/clientset/versioned/typed/volumesnapshot/v1"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
-	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 	"github.com/vmware-tanzu/velero/pkg/datamover"
@@ -210,6 +209,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 		// Update status to InProgress
 		original := du.DeepCopy()
+		du.Status.Progress.StartTime = &metav1.Time{Time: r.Clock.Now()}
 		du.Status.Phase = velerov2alpha1api.DataUploadPhaseInProgress
 		if err := r.client.Patch(ctx, &du, client.MergeFrom(original)); err != nil {
 			return r.errorOut(ctx, &du, err, "error updating dataupload status", log)
@@ -276,6 +276,8 @@ func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, fsBa
 func (r *DataUploadReconciler) OnDataUploadCompleted(ctx context.Context, namespace string, duName string, result datapath.Result) {
 	defer r.closeDataPath(ctx, duName)
 
+	dataPathCompleteTime := &metav1.Time{Time: r.Clock.Now()}
+
 	log := r.logger.WithField("dataupload", duName)
 
 	log.Info("Async fs backup data path completed")
@@ -304,6 +306,7 @@ func (r *DataUploadReconciler) OnDataUploadCompleted(ctx context.Context, namesp
 	du.Status.Path = result.Backup.Source.ByPath
 	du.Status.Phase = velerov2alpha1api.DataUploadPhaseCompleted
 	du.Status.SnapshotID = result.Backup.SnapshotID
+	du.Status.Progress.CompleteTime = dataPathCompleteTime
 	du.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
 	if result.Backup.EmptySnapshot {
 		du.Status.Message = "volume was empty so no data was upload"
@@ -381,7 +384,8 @@ func (r *DataUploadReconciler) OnDataUploadProgress(ctx context.Context, namespa
 	}
 
 	original := du.DeepCopy()
-	du.Status.Progress = shared.DataMoveOperationProgress{TotalBytes: progress.TotalBytes, BytesDone: progress.BytesDone}
+	du.Status.Progress.TotalBytes = progress.TotalBytes
+	du.Status.Progress.BytesDone = progress.BytesDone
 
 	if err := r.client.Patch(ctx, &du, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("Failed to update progress")

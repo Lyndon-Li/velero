@@ -51,6 +51,7 @@ ${GOPATH}/src/k8s.io/code-generator/generate-groups.sh \
 controller-gen \
   crd:crdVersions=v1 \
   paths=./pkg/apis/velero/v1/... \
+  paths=./pkg/apis/velero/shared/... \
   paths=./pkg/controller/... \
   output:crd:artifacts:config=config/crd/v1/bases \
   object \
@@ -60,6 +61,7 @@ controller-gen \
 controller-gen \
   crd:crdVersions=v1 \
   paths=./pkg/apis/velero/v2alpha1/... \
+  paths=./pkg/apis/velero/shared/... \
   paths=./pkg/controller/... \
   output:crd:artifacts:config=config/crd/v2alpha1/bases \
   object \

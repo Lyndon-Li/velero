@@ -157,9 +157,25 @@ spec:
                   progress information about the restore operation.
                 properties:
                   bytesDone:
+                    description: BytesDone records the completed bytes of data for
+                      a data movement
                     format: int64
                     type: integer
+                  completeTime:
+                    description: CompleteTime records the time a data movement was
+                      completed. The server's time is used for CompleteTime
+                    format: date-time
+                    nullable: true
+                    type: string
+                  startTime:
+                    description: StartTime records the time a data movement was started.
+                      The server's time is used for StartTime
+                    format: date-time
+                    nullable: true
+                    type: string
                   totalBytes:
+                    description: TotalBytes records the total bytes of data for a
+                      data movement
                     format: int64
                     type: integer
                 type: object

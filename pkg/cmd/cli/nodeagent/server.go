@@ -256,7 +256,7 @@ func (s *nodeAgentServer) run() {
 		s.logger.Fatal(err, "unable to create controller", "controller", controller.PodVolumeBackup)
 	}
 
-	if err = controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), repoEnsurer, credentialGetter, s.logger).SetupWithManager(s.mgr); err != nil {
+	if err = controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), repoEnsurer, credentialGetter, s.config.resourceTimeout, s.logger).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
 

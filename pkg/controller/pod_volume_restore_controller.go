@@ -38,7 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
-	veleroapishared "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/exposer"
@@ -51,7 +50,7 @@ import (
 )
 
 func NewPodVolumeRestoreReconciler(client client.Client, ensurer *repository.Ensurer,
-	credentialGetter *credentials.CredentialGetter, logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
+	credentialGetter *credentials.CredentialGetter, resourceTimeout time.Duration, logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
 	return &PodVolumeRestoreReconciler{
 		Client:            client,
 		logger:            logger.WithField("controller", "PodVolumeRestore"),
@@ -60,6 +59,7 @@ func NewPodVolumeRestoreReconciler(client client.Client, ensurer *repository.Ens
 		fileSystem:        filesystem.NewFileSystem(),
 		clock:             &clocks.RealClock{},
 		dataPathMgr:       datapath.NewManager(1),
+		resourceTimeout:   resourceTimeout,
 	}
 }
 
@@ -71,6 +71,7 @@ type PodVolumeRestoreReconciler struct {
 	fileSystem        filesystem.Interface
 	clock             clocks.WithTickerAndDelayedExecution
 	dataPathMgr       *datapath.Manager
+	resourceTimeout   time.Duration
 }
 
 // +kubebuilder:rbac:groups=velero.io,resources=podvolumerestores,verbs=get;list;watch;create;update;patch;delete
@@ -100,6 +101,7 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
 	if !shouldProcess {
 		return ctrl.Result{}, nil
 	}
@@ -130,7 +132,9 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	original := pvr.DeepCopy()
 	pvr.Status.Phase = velerov1api.PodVolumeRestorePhaseInProgress
+	pvr.Status.Progress.StartTime = &metav1.Time{Time: c.clock.Now()}
 	pvr.Status.StartTimestamp = &metav1.Time{Time: c.clock.Now()}
+
 	if err = c.Patch(ctx, pvr, client.MergeFrom(original)); err != nil {
 		return c.errorOut(ctx, pvr, err, "error to update status to in progress", log)
 	}
@@ -261,6 +265,8 @@ func getInitContainerIndex(pod *corev1api.Pod) int {
 func (c *PodVolumeRestoreReconciler) OnDataPathCompleted(ctx context.Context, namespace string, pvrName string, result datapath.Result) {
 	defer c.closeDataPath(ctx, pvrName)
 
+	dataPathCompleteTime := &metav1.Time{Time: c.clock.Now()}
+
 	log := c.logger.WithField("pvr", pvrName)
 
 	log.WithField("PVR", pvrName).Info("Async fs restore data path completed")
@@ -310,6 +316,7 @@ func (c *PodVolumeRestoreReconciler) OnDataPathCompleted(ctx context.Context, na
 
 	original := pvr.DeepCopy()
 	pvr.Status.Phase = velerov1api.PodVolumeRestorePhaseCompleted
+	pvr.Status.Progress.CompleteTime = dataPathCompleteTime
 	pvr.Status.CompletionTimestamp = &metav1.Time{Time: c.clock.Now()}
 	if err := c.Patch(ctx, &pvr, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("error updating PodVolumeRestore status")
@@ -358,7 +365,8 @@ func (c *PodVolumeRestoreReconciler) OnDataPathProgress(ctx context.Context, nam
 	}
 
 	original := pvr.DeepCopy()
-	pvr.Status.Progress = veleroapishared.DataMoveOperationProgress{TotalBytes: progress.TotalBytes, BytesDone: progress.BytesDone}
+	pvr.Status.Progress.TotalBytes = progress.TotalBytes
+	pvr.Status.Progress.BytesDone = progress.BytesDone
 
 	if err := c.Client.Patch(ctx, &pvr, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("Failed to update progress")

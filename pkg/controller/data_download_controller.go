@@ -38,7 +38,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
-	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 	datamover "github.com/vmware-tanzu/velero/pkg/datamover"
@@ -212,6 +211,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		// Update status to InProgress
 		original := dd.DeepCopy()
+		dd.Status.Progress.StartTime = &metav1.Time{Time: r.Clock.Now()}
 		dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseInProgress
 		if err := r.client.Patch(ctx, dd, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Error("Unable to update status to in progress")
@@ -278,6 +278,8 @@ func (r *DataDownloadReconciler) runCancelableDataPath(ctx context.Context, fsRe
 func (r *DataDownloadReconciler) OnDataDownloadCompleted(ctx context.Context, namespace string, ddName string, result datapath.Result) {
 	defer r.closeDataPath(ctx, ddName)
 
+	dataPathCompleteTime := &metav1.Time{Time: r.Clock.Now()}
+
 	log := r.logger.WithField("datadownload", ddName)
 	log.Info("Async fs restore data path completed")
 
@@ -299,6 +301,7 @@ func (r *DataDownloadReconciler) OnDataDownloadCompleted(ctx context.Context, na
 
 	original := dd.DeepCopy()
 	dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseCompleted
+	dd.Status.Progress.CompleteTime = dataPathCompleteTime
 	dd.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
 	if err := r.client.Patch(ctx, &dd, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("error updating data download status")
@@ -363,7 +366,8 @@ func (r *DataDownloadReconciler) OnDataDownloadProgress(ctx context.Context, nam
 	}
 
 	original := dd.DeepCopy()
-	dd.Status.Progress = shared.DataMoveOperationProgress{TotalBytes: progress.TotalBytes, BytesDone: progress.BytesDone}
+	dd.Status.Progress.TotalBytes = progress.TotalBytes
+	dd.Status.Progress.BytesDone = progress.BytesDone
 
 	if err := r.client.Patch(ctx, &dd, client.MergeFrom(original)); err != nil {
 		log.WithError(err).Error("Failed to update restore snapshot progress")

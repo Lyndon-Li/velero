@@ -16,14 +16,32 @@ limitations under the License.
 
 package shared
 
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
 // DataMoveOperationProgress represents the progress of a
 // data movement operation
 
 // +k8s:deepcopy-gen=true
 type DataMoveOperationProgress struct {
+	// StartTime records the time a data movement was started.
+	// The server's time is used for StartTime
+	// +optional
+	// +nullable
+	StartTime *metav1.Time `json:"startTime,omitempty"`
+
+	// CompleteTime records the time a data movement was completed.
+	// The server's time is used for CompleteTime
+	// +optional
+	// +nullable
+	CompleteTime *metav1.Time `json:"completeTime,omitempty"`
+
+	// TotalBytes records the total bytes of data for a data movement
 	// +optional
 	TotalBytes int64 `json:"totalBytes,omitempty"`
 
+	// BytesDone records the completed bytes of data for a data movement
 	// +optional
 	BytesDone int64 `json:"bytesDone,omitempty"`
 }
