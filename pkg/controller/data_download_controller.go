@@ -529,7 +529,7 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 		return true, nil
 	}
 
-	r.logger.WithField("DataDownload", dd.Name).Info("This datadownload has been accepted by others")
+	r.logger.WithField("DataDownload", dd.Name).Debug("This datadownload has been accepted by others")
 	return false, nil
 }
 

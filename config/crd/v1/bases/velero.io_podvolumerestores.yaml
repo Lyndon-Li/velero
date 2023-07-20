@@ -35,12 +35,12 @@ spec:
       jsonPath: .status.phase
       name: Status
       type: string
-    - description: Pod Volume Restore status such as New/InProgress
+    - description: Total bytes
       format: int64
       jsonPath: .status.progress.totalBytes
       name: TotalBytes
       type: integer
-    - description: Pod Volume Restore status such as New/InProgress
+    - description: Completed bytes
       format: int64
       jsonPath: .status.progress.bytesDone
       name: BytesDone

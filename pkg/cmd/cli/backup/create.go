@@ -138,8 +138,7 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	// like a normal bool flag
 	f.NoOptDefVal = cmd.TRUE
 
-	f = flags.VarPF(&o.SnapshotMoveData, "snapshot-move-data", "", "Specify whether snapshot data should be moved")
-	f.NoOptDefVal = cmd.TRUE
+	flags.VarP(&o.SnapshotMoveData, "snapshot-move-data", "", "Specify whether snapshot data should be moved. Works with snapshot backups that support data movement only")
 
 	f = flags.VarPF(&o.IncludeClusterResources, "include-cluster-resources", "", "Include cluster-scoped resources in the backup. Cannot work with include-cluster-scoped-resources, exclude-cluster-scoped-resources, include-namespace-scoped-resources and exclude-namespace-scoped-resources.")
 	f.NoOptDefVal = cmd.TRUE

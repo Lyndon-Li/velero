@@ -551,7 +551,7 @@ func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov
 		return true, nil
 	}
 
-	r.logger.WithField("Dataupload", du.Name).Info("This datauplod has been accepted by others")
+	r.logger.WithField("Dataupload", du.Name).Debug("This datauplod has been accepted by others")
 	return false, nil
 }
 
