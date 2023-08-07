@@ -669,7 +669,7 @@ func TestAcceptDataUpload(t *testing.T) {
 		name        string
 		du          *velerov2alpha1api.DataUpload
 		needErrs    []error
-		succeeded   bool
+		updated     *velerov2alpha1api.DataUpload
 		expectedErr string
 	}{
 		{
@@ -684,10 +684,10 @@ func TestAcceptDataUpload(t *testing.T) {
 			needErrs: []error{nil, nil, &fakeAPIStatus{metav1.StatusReasonConflict}, nil},
 		},
 		{
-			name:      "succeed",
-			du:        dataUploadBuilder().Result(),
-			needErrs:  []error{nil, nil, nil, nil},
-			succeeded: true,
+			name:     "succeed",
+			du:       dataUploadBuilder().Result(),
+			needErrs: []error{nil, nil, nil, nil},
+			updated:  dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Result(),
 		},
 	}
 	for _, test := range tests {
@@ -698,12 +698,16 @@ func TestAcceptDataUpload(t *testing.T) {
 		err = r.client.Create(ctx, test.du)
 		require.NoError(t, err)
 
-		succeeded, err := r.acceptDataUpload(ctx, test.du)
-		assert.Equal(t, test.succeeded, succeeded)
+		updated, err := r.acceptDataUpload(ctx, test.du)
 		if test.expectedErr == "" {
 			assert.NoError(t, err)
 		} else {
 			assert.EqualError(t, err, test.expectedErr)
+		}
+
+		if test.updated != nil {
+			assert.Equal(t, test.updated.Status.Phase, updated.Status.Phase)
+			assert.NotNil(t, updated.Status.StartTimestamp)
 		}
 	}
 }

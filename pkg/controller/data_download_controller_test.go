@@ -643,7 +643,7 @@ func TestAcceptDataDownload(t *testing.T) {
 		name        string
 		dd          *velerov2alpha1api.DataDownload
 		needErrs    []error
-		succeeded   bool
+		updated     *velerov2alpha1api.DataDownload
 		expectedErr string
 	}{
 		{
@@ -658,10 +658,10 @@ func TestAcceptDataDownload(t *testing.T) {
 			needErrs: []error{nil, nil, &fakeAPIStatus{metav1.StatusReasonConflict}, nil},
 		},
 		{
-			name:      "succeed",
-			dd:        dataDownloadBuilder().Result(),
-			needErrs:  []error{nil, nil, nil, nil},
-			succeeded: true,
+			name:     "succeed",
+			dd:       dataDownloadBuilder().Result(),
+			needErrs: []error{nil, nil, nil, nil},
+			updated:  dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Result(),
 		},
 	}
 	for _, test := range tests {
@@ -672,12 +672,16 @@ func TestAcceptDataDownload(t *testing.T) {
 		err = r.client.Create(ctx, test.dd)
 		require.NoError(t, err)
 
-		succeeded, err := r.acceptDataDownload(ctx, test.dd)
-		assert.Equal(t, test.succeeded, succeeded)
+		updated, err := r.acceptDataDownload(ctx, test.dd)
 		if test.expectedErr == "" {
 			assert.NoError(t, err)
 		} else {
 			assert.EqualError(t, err, test.expectedErr)
+		}
+
+		if test.updated != nil {
+			assert.Equal(t, test.updated.Status.Phase, updated.Status.Phase)
+			assert.NotNil(t, updated.Status.StartTimestamp)
 		}
 	}
 }

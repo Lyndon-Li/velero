@@ -125,17 +125,19 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{Requeue: true}, nil
 		}
 
-		accepted, err := r.acceptDataDownload(ctx, dd)
+		updated, err := r.acceptDataDownload(ctx, dd)
 		if err != nil {
 			return r.errorOut(ctx, dd, err, "error to accept the data download", log)
 		}
 
-		if !accepted {
+		if updated == nil {
 			log.Debug("Data download is not accepted")
 			return ctrl.Result{}, nil
 		}
 
 		log.Info("Data download is accepted")
+
+		dd = updated
 
 		if dd.Spec.Cancel {
 			log.Debugf("Data download is been canceled %s in Phase %s", dd.GetName(), dd.Status.Phase)
@@ -510,7 +512,7 @@ func (r *DataDownloadReconciler) updateStatusToFailed(ctx context.Context, dd *v
 	return err
 }
 
-func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload) (bool, error) {
+func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload) (*velerov2alpha1api.DataDownload, error) {
 	r.logger.Infof("Accepting data download %s", dd.Name)
 
 	// For all data download controller in each node-agent will try to update download CR, and only one controller will success,
@@ -521,16 +523,25 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 	})
 
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	if succeeded {
 		r.logger.WithField("DataDownload", dd.Name).Infof("This datadownload has been accepted by %s", r.nodeName)
-		return true, nil
+
+		updated := &velerov2alpha1api.DataDownload{}
+		if err := r.client.Get(context.Background(), types.NamespacedName{
+			Namespace: dd.Namespace,
+			Name:      dd.Name,
+		}, updated); err != nil {
+			return nil, errors.Wrapf(err, "error to get updated DataDownload %s", dd.Name)
+		}
+
+		return updated, nil
 	}
 
 	r.logger.WithField("DataDownload", dd.Name).Info("This datadownload has been accepted by others")
-	return false, nil
+	return nil, nil
 }
 
 func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *velerov2alpha1api.DataDownload) {

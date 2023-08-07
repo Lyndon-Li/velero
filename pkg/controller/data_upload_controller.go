@@ -129,27 +129,27 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if du.Status.Phase == "" || du.Status.Phase == velerov2alpha1api.DataUploadPhaseNew {
 		log.Info("Data upload starting")
 
-		accepted, err := r.acceptDataUpload(ctx, &du)
+		updated, err := r.acceptDataUpload(ctx, &du)
 		if err != nil {
 			return r.errorOut(ctx, &du, err, "error to accept the data upload", log)
 		}
 
-		if !accepted {
+		if updated == nil {
 			log.Debug("Data upload is not accepted")
 			return ctrl.Result{}, nil
 		}
 
 		log.Info("Data upload is accepted")
 
-		if du.Spec.Cancel {
-			r.OnDataUploadCancelled(ctx, du.GetNamespace(), du.GetName())
+		if updated.Spec.Cancel {
+			r.OnDataUploadCancelled(ctx, updated.GetNamespace(), updated.GetName())
 			return ctrl.Result{}, nil
 		}
 
-		exposeParam := r.setupExposeParam(&du)
+		exposeParam := r.setupExposeParam(updated)
 
-		if err := ep.Expose(ctx, getOwnerObject(&du), exposeParam); err != nil {
-			return r.errorOut(ctx, &du, err, "error to expose snapshot", log)
+		if err := ep.Expose(ctx, getOwnerObject(updated), exposeParam); err != nil {
+			return r.errorOut(ctx, updated, err, "error to expose snapshot", log)
 		}
 		log.Info("Snapshot is exposed")
 		// Expose() will trigger to create one pod whose volume is restored by a given volume snapshot,
@@ -532,7 +532,7 @@ func (r *DataUploadReconciler) updateStatusToFailed(ctx context.Context, du *vel
 	return err
 }
 
-func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov2alpha1api.DataUpload) (bool, error) {
+func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov2alpha1api.DataUpload) (*velerov2alpha1api.DataUpload, error) {
 	r.logger.Infof("Accepting data upload %s", du.Name)
 
 	// For all data upload controller in each node-agent will try to update dataupload CR, and only one controller will success,
@@ -543,16 +543,25 @@ func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov
 	})
 
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 
 	if succeeded {
 		r.logger.WithField("Dataupload", du.Name).Infof("This datauplod has been accepted by %s", r.nodeName)
-		return true, nil
+
+		updated := &velerov2alpha1api.DataUpload{}
+		if err := r.client.Get(context.Background(), types.NamespacedName{
+			Namespace: du.Namespace,
+			Name:      du.Name,
+		}, updated); err != nil {
+			return nil, errors.Wrapf(err, "error to get updated Dataupload %s", du.Name)
+		}
+
+		return updated, nil
 	}
 
 	r.logger.WithField("Dataupload", du.Name).Info("This datauplod has been accepted by others")
-	return false, nil
+	return nil, nil
 }
 
 func (r *DataUploadReconciler) onPrepareTimeout(ctx context.Context, du *velerov2alpha1api.DataUpload) {
