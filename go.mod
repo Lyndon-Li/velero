@@ -23,6 +23,7 @@ require (
 	github.com/joho/godotenv v1.3.0
 	github.com/kopia/kopia v0.13.0
 	github.com/kubernetes-csi/external-snapshotter/client/v4 v4.2.0
+	github.com/minio/minio-go/v7 v7.0.52
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/gomega v1.20.1
 	github.com/pkg/errors v0.9.1
@@ -113,7 +114,6 @@ require (
 	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/matttproud/golang_protobuf_extensions v1.0.4 // indirect
 	github.com/minio/md5-simd v1.1.2 // indirect
-	github.com/minio/minio-go/v7 v7.0.52 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/go-testing-interface v1.0.0 // indirect
