@@ -406,10 +406,10 @@ func validateNamespaceName(ns string) []error {
 }
 
 // generateIncludesExcludes constructs an IncludesExcludes struct by taking the provided
-// include/exclude slices, applying the specified mapping function to each item in them,
+// include/exclude/escape slices, applying the specified mapping function to each item in them,
 // and adding the output of the function to the new struct. If the mapping function returns
 // an empty string for an item, it is omitted from the result.
-func generateIncludesExcludes(includes, excludes []string, mapFunc func(string) string) *IncludesExcludes {
+func generateIncludesExcludes(includes, excludes, escapes []string, mapFunc func(string) string) *IncludesExcludes {
 	res := NewIncludesExcludes()
 
 	for _, item := range includes {
@@ -437,6 +437,23 @@ func generateIncludesExcludes(includes, excludes []string, mapFunc func(string) 
 			continue
 		}
 		res.Excludes(key)
+	}
+
+	if escapes != nil {
+		for _, item := range escapes {
+			// wildcards are invalid for escapes,
+			// so ignore them.
+			if item == "*" {
+				continue
+			}
+
+			key := mapFunc(item)
+			if key == "" {
+				continue
+			}
+			res.Includes(key)
+			res.excludes.Delete(key)
+		}
 	}
 
 	return res
@@ -470,13 +487,39 @@ func generateFilter(filter globStringSet, resources []string, mapFunc func(strin
 	}
 }
 
-// GetResourceIncludesExcludes takes the lists of resources to include and exclude, uses the
+// GetResourceIncludesExcludes takes the lists of resources to include, exclude, uses the
 // discovery helper to resolve them to fully-qualified group-resource names, and returns an
 // IncludesExcludes list.
 func GetResourceIncludesExcludes(helper discovery.Helper, includes, excludes []string) *IncludesExcludes {
 	resources := generateIncludesExcludes(
 		includes,
 		excludes,
+		nil,
+		func(item string) string {
+			gvr, _, err := helper.ResourceFor(schema.ParseGroupResource(item).WithVersion(""))
+			if err != nil {
+				// If we can't resolve it, return it as-is. This prevents the generated
+				// includes-excludes list from including *everything*, if none of the includes
+				// can be resolved. ref. https://github.com/vmware-tanzu/velero/issues/2461
+				return item
+			}
+
+			gr := gvr.GroupResource()
+			return gr.String()
+		},
+	)
+
+	return resources
+}
+
+// GetResourceIncludesExcludes takes the lists of resources to include, exclude (with escapes), uses the
+// discovery helper to resolve them to fully-qualified group-resource names, and returns an
+// IncludesExcludes list.
+func GetResourceIncludesExcludesWithEscapes(helper discovery.Helper, includes, excludes, escapes []string) *IncludesExcludes {
+	resources := generateIncludesExcludes(
+		includes,
+		excludes,
+		escapes,
 		func(item string) string {
 			gvr, _, err := helper.ResourceFor(schema.ParseGroupResource(item).WithVersion(""))
 			if err != nil {

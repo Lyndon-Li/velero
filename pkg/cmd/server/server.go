@@ -572,6 +572,10 @@ var defaultRestorePriorities = restore.Priorities{
 	},
 }
 
+var mustIncludeResources = []string{
+	"datauploads.velero.io",
+}
+
 func (s *server) checkNodeAgent() {
 	// warn if node agent does not exist
 	if err := nodeagent.IsRunning(s.ctx, s.kubeClient, s.namespace); err == nodeagent.ErrDaemonSetNotFound {
@@ -917,6 +921,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			s.kubeClient.CoreV1().RESTClient(),
 			s.credentialFileStore,
 			s.mgr.GetClient(),
+			mustIncludeResources,
 		)
 
 		cmd.CheckError(err)

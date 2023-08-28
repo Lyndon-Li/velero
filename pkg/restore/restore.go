@@ -106,6 +106,7 @@ type kubernetesRestorer struct {
 	podGetter                  cache.Getter
 	credentialFileStore        credentials.FileStore
 	kbClient                   crclient.Client
+	mustIncludeResources       []string
 }
 
 // NewKubernetesRestorer creates a new kubernetesRestorer.
@@ -123,6 +124,7 @@ func NewKubernetesRestorer(
 	podGetter cache.Getter,
 	credentialStore credentials.FileStore,
 	kbClient crclient.Client,
+	mustIncludeResources []string,
 ) (Restorer, error) {
 	return &kubernetesRestorer{
 		discoveryHelper:            discoveryHelper,
@@ -142,11 +144,12 @@ func NewKubernetesRestorer(
 			veleroCloneName := "velero-clone-" + veleroCloneUUID.String()
 			return veleroCloneName, nil
 		},
-		fileSystem:          filesystem.NewFileSystem(),
-		podCommandExecutor:  podCommandExecutor,
-		podGetter:           podGetter,
-		credentialFileStore: credentialStore,
-		kbClient:            kbClient,
+		fileSystem:           filesystem.NewFileSystem(),
+		podCommandExecutor:   podCommandExecutor,
+		podGetter:            podGetter,
+		credentialFileStore:  credentialStore,
+		kbClient:             kbClient,
+		mustIncludeResources: mustIncludeResources,
 	}, nil
 }
 
@@ -193,10 +196,11 @@ func (kr *kubernetesRestorer) RestoreWithResolvers(
 	}
 
 	// Get resource includes-excludes.
-	resourceIncludesExcludes := collections.GetResourceIncludesExcludes(
+	resourceIncludesExcludes := collections.GetResourceIncludesExcludesWithEscapes(
 		kr.discoveryHelper,
 		req.Restore.Spec.IncludedResources,
 		req.Restore.Spec.ExcludedResources,
+		kr.mustIncludeResources,
 	)
 
 	// Get resource status includes-excludes. Defaults to excluding all resources
