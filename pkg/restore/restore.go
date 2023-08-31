@@ -99,6 +99,7 @@ type kubernetesRestorer struct {
 	resourceTerminatingTimeout time.Duration
 	resourceTimeout            time.Duration
 	resourcePriorities         Priorities
+	resourceMustHave           []string
 	fileSystem                 filesystem.Interface
 	pvRenamer                  func(string) (string, error)
 	logger                     logrus.FieldLogger
@@ -113,6 +114,7 @@ func NewKubernetesRestorer(
 	discoveryHelper discovery.Helper,
 	dynamicFactory client.DynamicFactory,
 	resourcePriorities Priorities,
+	resourceMustHave []string,
 	namespaceClient corev1.NamespaceInterface,
 	podVolumeRestorerFactory podvolume.RestorerFactory,
 	podVolumeTimeout time.Duration,
@@ -133,6 +135,7 @@ func NewKubernetesRestorer(
 		resourceTerminatingTimeout: resourceTerminatingTimeout,
 		resourceTimeout:            resourceTimeout,
 		resourcePriorities:         resourcePriorities,
+		resourceMustHave:           resourceMustHave,
 		logger:                     logger,
 		pvRenamer: func(string) (string, error) {
 			veleroCloneUUID, err := uuid.NewRandom()
@@ -213,7 +216,19 @@ func (kr *kubernetesRestorer) RestoreWithResolvers(
 	// Get namespace includes-excludes.
 	namespaceIncludesExcludes := collections.NewIncludesExcludes().
 		Includes(req.Restore.Spec.IncludedNamespaces...).
-		Excludes(req.Restore.Spec.ExcludedNamespaces...)
+		Excludes(req.Restore.Spec.ExcludedNamespaces...).
+		Escapes(kr.resourceMustHave...)
+
+	clusterScopeIncludesExcludes := collections.NewIncludesExcludes().
+		Includes(req.Restore.Spec.IncludedNamespaces...).
+		Excludes(req.Restore.Spec.ExcludedNamespaces...).
+		Escapes(kr.resourceMustHave...)
+
+	if boolptr.IsSetToFalse(req.Restore.Spec.IncludeClusterResources) {
+		clusterScopeIncludesExcludes = clusterScopeIncludesExcludes.Excludes("").Escapes(kr.resourceMustHave...)
+	} else if boolptr.IsSetToTrue(req.Restore.Spec.IncludeClusterResources) {
+		clusterScopeIncludesExcludes = clusterScopeIncludesExcludes.Includes("").Escapes(kr.resourceMustHave...)
+	}
 
 	resolvedActions, err := restoreItemActionResolver.ResolveActions(kr.discoveryHelper, kr.logger)
 	if err != nil {
@@ -276,6 +291,7 @@ func (kr *kubernetesRestorer) RestoreWithResolvers(
 		resourceIncludesExcludes:       resourceIncludesExcludes,
 		resourceStatusIncludesExcludes: restoreStatusIncludesExcludes,
 		namespaceIncludesExcludes:      namespaceIncludesExcludes,
+		clusterScopeIncludesExcludes:   clusterScopeIncludesExcludes,
 		chosenGrpVersToRestore:         make(map[string]ChosenGroupVersion),
 		selector:                       selector,
 		OrSelectors:                    OrSelectors,
@@ -320,6 +336,7 @@ type restoreContext struct {
 	resourceIncludesExcludes       *collections.IncludesExcludes
 	resourceStatusIncludesExcludes *collections.IncludesExcludes
 	namespaceIncludesExcludes      *collections.IncludesExcludes
+	clusterScopeIncludesExcludes   *collections.IncludesExcludes
 	chosenGrpVersToRestore         map[string]ChosenGroupVersion
 	selector                       labels.Selector
 	OrSelectors                    []labels.Selector
@@ -989,7 +1006,7 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 	// via obj.GetNamespace()) instead of the namespace parameter, because we want
 	// to check the *original* namespace, not the remapped one if it's been remapped.
 	if namespace != "" {
-		if !ctx.namespaceIncludesExcludes.ShouldInclude(obj.GetNamespace()) {
+		if !ctx.namespaceIncludesExcludes.ShouldIncludeEx(obj.GetNamespace(), groupResource.String(), true) {
 			ctx.log.WithFields(logrus.Fields{
 				"namespace":     obj.GetNamespace(),
 				"name":          obj.GetName(),
@@ -1017,12 +1034,12 @@ func (ctx *restoreContext) restoreItem(obj *unstructured.Unstructured, groupReso
 			ctx.restoredItems[itemKey] = restoredItemStatus{action: itemRestoreResultCreated, itemExists: true}
 		}
 	} else {
-		if boolptr.IsSetToFalse(ctx.restore.Spec.IncludeClusterResources) {
+		if !ctx.clusterScopeIncludesExcludes.ShouldIncludeEx("", groupResource.String(), false) {
 			ctx.log.WithFields(logrus.Fields{
 				"namespace":     obj.GetNamespace(),
 				"name":          obj.GetName(),
 				"groupResource": groupResource.String(),
-			}).Info("Not restoring item because it's cluster-scoped")
+			}).Info("Not restoring item because it's cluster-scoped which has been excluded")
 			return warnings, errs, itemExists
 		}
 	}
@@ -2016,7 +2033,7 @@ func (ctx *restoreContext) getOrderedResourceCollection(
 		// Iterate through each namespace that contains instances of the
 		// resource and append to the list of to-be restored resources.
 		for namespace, items := range resourceList.ItemsByNamespace {
-			if namespace != "" && !ctx.namespaceIncludesExcludes.ShouldInclude(namespace) {
+			if namespace != "" && !ctx.namespaceIncludesExcludes.ShouldIncludeEx(namespace, groupResource.String(), true) {
 				ctx.log.Infof("Skipping namespace %s", namespace)
 				continue
 			}
@@ -2028,13 +2045,8 @@ func (ctx *restoreContext) getOrderedResourceCollection(
 				targetNamespace = target
 			}
 
-			if targetNamespace == "" && boolptr.IsSetToFalse(ctx.restore.Spec.IncludeClusterResources) {
-				ctx.log.Infof("Skipping resource %s because it's cluster-scoped", resource)
-				continue
-			}
-
-			if targetNamespace == "" && !boolptr.IsSetToTrue(ctx.restore.Spec.IncludeClusterResources) && !ctx.namespaceIncludesExcludes.IncludeEverything() {
-				ctx.log.Infof("Skipping resource %s because it's cluster-scoped and only specific namespaces are included in the restore", resource)
+			if targetNamespace == "" && !ctx.clusterScopeIncludesExcludes.ShouldIncludeEx(targetNamespace, groupResource.String(), true) {
+				ctx.log.Infof("Skipping resource %s because it's cluster-scoped which has been excluded", resource)
 				continue
 			}
 

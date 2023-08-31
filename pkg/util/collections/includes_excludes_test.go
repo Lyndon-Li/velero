@@ -36,6 +36,7 @@ func TestShouldInclude(t *testing.T) {
 		name     string
 		includes []string
 		excludes []string
+		escapes  []string
 		item     string
 		want     bool
 	}{
@@ -116,6 +117,51 @@ func TestShouldInclude(t *testing.T) {
 			includesExcludes := NewIncludesExcludes().Includes(tc.includes...).Excludes(tc.excludes...)
 
 			if got := includesExcludes.ShouldInclude((tc.item)); got != tc.want {
+				t.Errorf("want %t, got %t", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestShouldIncludeEx(t *testing.T) {
+	tests := []struct {
+		name      string
+		includes  []string
+		excludes  []string
+		escapes   []string
+		item      string
+		associate string
+		strict    bool
+		want      bool
+	}{
+		{
+			name:      "an item should be included when escape hits",
+			excludes:  []string{"foo"},
+			escapes:   []string{"bar"},
+			item:      "foo",
+			associate: "bar",
+			want:      true,
+		},
+		{
+			name:     "an item should be included if not explictly excluded under non-strict mode",
+			includes: []string{"foo"},
+			item:     "bar",
+			want:     true,
+		},
+		{
+			name:     "an item should be excluded if not explictly excluded under strict mode",
+			includes: []string{"foo"},
+			item:     "bar",
+			strict:   true,
+			want:     false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			includesExcludes := NewIncludesExcludes().Includes(tc.includes...).Excludes(tc.excludes...).Escapes(tc.escapes...)
+
+			if got := includesExcludes.ShouldIncludeEx((tc.item), tc.associate, tc.strict); got != tc.want {
 				t.Errorf("want %t, got %t", tc.want, got)
 			}
 		})

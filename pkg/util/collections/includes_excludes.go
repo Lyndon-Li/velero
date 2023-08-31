@@ -53,20 +53,23 @@ func (gss globStringSet) match(match string) bool {
 	return false
 }
 
-// IncludesExcludes is a type that manages lists of included
-// and excluded items. The logic implemented is that everything
-// in the included list except those items in the excluded list
-// should be included. '*' in the includes list means "include
-// everything", but it is not valid in the exclude list.
+// IncludesExcludes is a type that manages lists of included and excluded items.
+// '*' in the includes list means "include everything", but it is not valid in the exclude list.
+// Everything contained in the escapes list should be included.
+// The escapes list could contain the same values being checked or associate values of what being checked.
+// Otherwise, everything in the excludes list should be excluded.
+// Otherwise, everything is included under non-restrict mode or values in includes list are included.
 type IncludesExcludes struct {
 	includes globStringSet
 	excludes globStringSet
+	escapes  globStringSet
 }
 
 func NewIncludesExcludes() *IncludesExcludes {
 	return &IncludesExcludes{
 		includes: newGlobStringSet(),
 		excludes: newGlobStringSet(),
+		escapes:  newGlobStringSet(),
 	}
 }
 
@@ -93,12 +96,35 @@ func (ie *IncludesExcludes) GetExcludes() []string {
 	return ie.excludes.List()
 }
 
-// ShouldInclude returns whether the specified item should be
-// included or not. Everything in the includes list except those
-// items in the excludes list should be included.
+// Excludes adds items to the excludes list
+func (ie *IncludesExcludes) Escapes(escapes ...string) *IncludesExcludes {
+	ie.escapes.Insert(escapes...)
+	return ie
+}
+
+// ShouldInclude returns whether the specified item should be included or not.
+// It assumes there is no associated values and under the strict mode.
 func (ie *IncludesExcludes) ShouldInclude(s string) bool {
+	return ie.ShouldIncludeEx(s, "", true)
+}
+
+// ShouldIncludeEx returns whether the specified item should be included or not.
+// It allows callers to specify associated values and the strict mode.
+func (ie *IncludesExcludes) ShouldIncludeEx(s string, associated string, strict bool) bool {
+	if ie.escapes.match(s) {
+		return true
+	}
+
+	if associated != "" && ie.escapes.match(associated) {
+		return true
+	}
+
 	if ie.excludes.match(s) {
 		return false
+	}
+
+	if !strict {
+		return true
 	}
 
 	// len=0 means include everything

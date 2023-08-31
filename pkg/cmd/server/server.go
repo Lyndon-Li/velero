@@ -121,6 +121,7 @@ type serverConfig struct {
 	defaultBackupTTL, storeValidationFrequency, defaultCSISnapshotTimeout   time.Duration
 	defaultItemOperationTimeout, resourceTimeout                            time.Duration
 	restoreResourcePriorities                                               restore.Priorities
+	resourceMustHave                                                        []string
 	defaultVolumeSnapshotLocations                                          map[string]string
 	restoreOnly                                                             bool
 	disabledControllers                                                     []string
@@ -154,6 +155,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 			storeValidationFrequency:       defaultStoreValidationFrequency,
 			podVolumeOperationTimeout:      defaultPodVolumeOperationTimeout,
 			restoreResourcePriorities:      defaultRestorePriorities,
+			resourceMustHave:               defaultResourceMustHave,
 			clientQPS:                      defaultClientQPS,
 			clientBurst:                    defaultClientBurst,
 			clientPageSize:                 defaultClientPageSize,
@@ -572,6 +574,10 @@ var defaultRestorePriorities = restore.Priorities{
 	},
 }
 
+var defaultResourceMustHave = []string{
+	"datauploads.velero.io",
+}
+
 func (s *server) checkNodeAgent() {
 	// warn if node agent does not exist
 	if err := nodeagent.IsRunning(s.ctx, s.kubeClient, s.namespace); err == nodeagent.ErrDaemonSetNotFound {
@@ -899,6 +905,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			s.discoveryHelper,
 			client.NewDynamicFactory(s.dynamicClient),
 			s.config.restoreResourcePriorities,
+			s.config.resourceMustHave,
 			s.kubeClient.CoreV1().Namespaces(),
 			podvolume.NewRestorerFactory(
 				s.repoLocker,
