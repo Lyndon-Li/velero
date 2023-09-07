@@ -59,8 +59,6 @@ func injectSnapshotFuncs() *snapshotMockes {
 		repoWriterMock: &repomocks.RepositoryWriter{},
 	}
 
-	setPolicyFunc = s.policyMock.SetPolicy
-	treeForSourceFunc = s.policyMock.TreeForSource
 	loadSnapshotFunc = s.snapshotMock.LoadSnapshot
 	saveSnapshotFunc = s.snapshotMock.SaveSnapshot
 	return s
@@ -131,19 +129,6 @@ func TestSnapshotSource(t *testing.T) {
 				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
 				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
 				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{nil}},
-			},
-			notError: false,
-		},
-		{
-			name: "failed to set policy",
-			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, nil}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{errors.New("failed to set policy")}},
 				{methodName: "Upload", returns: []interface{}{manifest, nil}},
 				{methodName: "Flush", returns: []interface{}{nil}},
 			},

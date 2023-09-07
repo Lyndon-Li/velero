@@ -44,8 +44,6 @@ import (
 )
 
 // All function mainly used to make testing more convenient
-var treeForSourceFunc = policy.TreeForSource
-var setPolicyFunc = policy.SetPolicy
 var saveSnapshotFunc = snapshot.SaveSnapshot
 var loadSnapshotFunc = snapshot.LoadSnapshot
 var listSnapshotsFunc = snapshot.ListSnapshots
@@ -75,14 +73,6 @@ func newOptionalBool(b bool) *policy.OptionalBool {
 
 func getDefaultPolicy() *policy.Policy {
 	return &policy.Policy{
-		RetentionPolicy: policy.RetentionPolicy{
-			KeepLatest:  newOptionalInt(math.MaxInt32),
-			KeepAnnual:  newOptionalInt(math.MaxInt32),
-			KeepDaily:   newOptionalInt(math.MaxInt32),
-			KeepHourly:  newOptionalInt(math.MaxInt32),
-			KeepMonthly: newOptionalInt(math.MaxInt32),
-			KeepWeekly:  newOptionalInt(math.MaxInt32),
-		},
 		CompressionPolicy: policy.CompressionPolicy{
 			CompressorName: "none",
 		},
@@ -99,20 +89,8 @@ func getDefaultPolicy() *policy.Policy {
 	}
 }
 
-func setupDefaultPolicy(ctx context.Context, rep repo.RepositoryWriter, sourceInfo snapshot.SourceInfo) (*policy.Tree, error) {
-	// some internal operations from Kopia code retrieves policies from repo directly, so we need to persist the policy to repo
-	err := setPolicyFunc(ctx, rep, sourceInfo, getDefaultPolicy())
-	if err != nil {
-		return nil, errors.Wrap(err, "error to set policy")
-	}
-
-	// retrieve policy from repo
-	policyTree, err := treeForSourceFunc(ctx, rep, sourceInfo)
-	if err != nil {
-		return nil, errors.Wrap(err, "error to retrieve policy")
-	}
-
-	return policyTree, nil
+func setupDefaultPolicy(ctx context.Context, rep repo.RepositoryWriter, sourceInfo snapshot.SourceInfo) *policy.Tree {
+	return policy.BuildTree(nil, getDefaultPolicy())
 }
 
 // Backup backup specific sourcePath and update progress
@@ -144,10 +122,12 @@ func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.Re
 	sourceInfo := snapshot.SourceInfo{
 		UserName: udmrepo.GetRepoUser(),
 		Host:     udmrepo.GetRepoDomain(),
-		Path:     filepath.Clean(realSource),
 	}
+
 	if realSource == "" {
 		sourceInfo.Path = dir
+	} else {
+		sourceInfo.Path = filepath.Clean(realSource)
 	}
 
 	rootDir, err := getLocalFSEntry(dir)
@@ -242,10 +222,7 @@ func SnapshotSource(
 		log.Infof("Using parent snapshot %s, start time %v, end time %v, description %s", previous[i].ID, previous[i].StartTime.ToTime(), previous[i].EndTime.ToTime(), previous[i].Description)
 	}
 
-	policyTree, err := setupDefaultPolicy(ctx, rep, sourceInfo)
-	if err != nil {
-		return "", 0, errors.Wrapf(err, "unable to set policy for si %v", sourceInfo)
-	}
+	policyTree := setupDefaultPolicy(ctx, rep, sourceInfo)
 
 	manifest, err := u.Upload(ctx, rootDir, policyTree, sourceInfo, previous...)
 	if err != nil {
@@ -255,6 +232,7 @@ func SnapshotSource(
 	manifest.Tags = snapshotTags
 
 	manifest.Description = description
+	manifest.Pins = []string{"velero-pin"}
 
 	if _, err = saveSnapshotFunc(ctx, rep, manifest); err != nil {
 		return "", 0, errors.Wrapf(err, "Failed to save kopia manifest %v", manifest.ID)
