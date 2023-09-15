@@ -150,7 +150,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if dd.Status.Phase == "" || dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseNew {
 		log.Info("Data download starting")
 
-		if _, err := r.getTargetPVC(ctx, dd); err != nil {
+		if !r.isTargetPVCConsumed(ctx, dd) {
 			return ctrl.Result{Requeue: true}, nil
 		}
 
@@ -682,8 +682,14 @@ func (r *DataDownloadReconciler) exclusiveUpdateDataDownload(ctx context.Context
 	}
 }
 
-func (r *DataDownloadReconciler) getTargetPVC(ctx context.Context, dd *velerov2alpha1api.DataDownload) (*v1.PersistentVolumeClaim, error) {
-	return r.kubeClient.CoreV1().PersistentVolumeClaims(dd.Spec.TargetVolume.Namespace).Get(ctx, dd.Spec.TargetVolume.PVC, metav1.GetOptions{})
+func (r *DataDownloadReconciler) isTargetPVCConsumed(ctx context.Context, dd *velerov2alpha1api.DataDownload) bool {
+	consumed, err := kube.IsPVCConsumed(ctx, r.kubeClient.CoreV1(), dd.Spec.TargetVolume.PVC, dd.Spec.TargetVolume.Namespace, r.kubeClient.StorageV1())
+	if err != nil {
+		r.logger.WithError(err).WithField("target PVC", dd.Spec.TargetVolume.PVC).WithField("namespace", dd.Spec.TargetVolume.Namespace).Warn("Failed to check target PVC consumed")
+		return false
+	}
+
+	return consumed
 }
 
 func (r *DataDownloadReconciler) closeDataPath(ctx context.Context, ddName string) {

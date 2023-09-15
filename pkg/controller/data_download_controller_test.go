@@ -185,6 +185,12 @@ func TestDataDownloadReconcile(t *testing.T) {
 			targetPVC: builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
 		},
 		{
+			name:           "Target PVC is not consumed",
+			dd:             dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhasePrepared).Result(),
+			targetPVC:      builder.ForPersistentVolumeClaim("test-ns", "test-pvc").StorageClass("fake-sc").Result(),
+			expectedResult: &ctrl.Result{Requeue: true, RequeueAfter: time.Minute},
+		},
+		{
 			name:              "Cancel data downloand in progress and patch data download error",
 			dd:                dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseInProgress).Cancel(true).Result(),
 			targetPVC:         builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),

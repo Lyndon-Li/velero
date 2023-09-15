@@ -288,6 +288,156 @@ func TestWaitPVCConsumed(t *testing.T) {
 	}
 }
 
+func TestIsPVCConsumed(t *testing.T) {
+	storageClass := "fake-storage-class"
+	bindModeImmediate := storagev1api.VolumeBindingImmediate
+	bindModeWait := storagev1api.VolumeBindingWaitForFirstConsumer
+
+	pvcObject := &corev1api.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "fake-namespace",
+			Name:      "fake-pvc-1",
+		},
+	}
+
+	pvcObjectWithSC := &corev1api.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: "fake-namespace",
+			Name:      "fake-pvc-2",
+		},
+		Spec: corev1api.PersistentVolumeClaimSpec{
+			StorageClassName: &storageClass,
+		},
+	}
+
+	scObjWithoutBindMode := &storagev1api.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "fake-storage-class",
+		},
+	}
+
+	scObjWaitBind := &storagev1api.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "fake-storage-class",
+		},
+		VolumeBindingMode: &bindModeWait,
+	}
+
+	scObjWithImmidateBinding := &storagev1api.StorageClass{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "fake-storage-class",
+		},
+		VolumeBindingMode: &bindModeImmediate,
+	}
+
+	pvcObjectWithSCAndAnno := &corev1api.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace:   "fake-namespace",
+			Name:        "fake-pvc-3",
+			Annotations: map[string]string{"volume.kubernetes.io/selected-node": "fake-node-1"},
+		},
+		Spec: corev1api.PersistentVolumeClaimSpec{
+			StorageClassName: &storageClass,
+		},
+	}
+
+	tests := []struct {
+		name          string
+		pvcName       string
+		pvcNamespace  string
+		kubeClientObj []runtime.Object
+		kubeReactors  []reactor
+		consumed      bool
+		err           string
+	}{
+		{
+			name:         "get pvc error",
+			pvcName:      "fake-pvc",
+			pvcNamespace: "fake-namespace",
+			err:          "error to get pvc fake-namespace/fake-pvc: persistentvolumeclaims \"fake-pvc\" not found",
+		},
+		{
+			name:         "success when no sc",
+			pvcName:      "fake-pvc-1",
+			pvcNamespace: "fake-namespace",
+			kubeClientObj: []runtime.Object{
+				pvcObject,
+			},
+			consumed: true,
+		},
+		{
+			name:         "get sc fail",
+			pvcName:      "fake-pvc-2",
+			pvcNamespace: "fake-namespace",
+			kubeClientObj: []runtime.Object{
+				pvcObjectWithSC,
+			},
+			err: "error to get storage class fake-storage-class: storageclasses.storage.k8s.io \"fake-storage-class\" not found",
+		},
+		{
+			name:         "success on sc without binding mode",
+			pvcName:      "fake-pvc-2",
+			pvcNamespace: "fake-namespace",
+			kubeClientObj: []runtime.Object{
+				pvcObjectWithSC,
+				scObjWithoutBindMode,
+			},
+			consumed: true,
+		},
+		{
+			name:         "success on sc without immediate binding mode",
+			pvcName:      "fake-pvc-2",
+			pvcNamespace: "fake-namespace",
+			kubeClientObj: []runtime.Object{
+				pvcObjectWithSC,
+				scObjWithImmidateBinding,
+			},
+			consumed: true,
+		},
+		{
+			name:         "pvc annotation miss",
+			pvcName:      "fake-pvc-2",
+			pvcNamespace: "fake-namespace",
+			kubeClientObj: []runtime.Object{
+				pvcObjectWithSC,
+				scObjWaitBind,
+			},
+		},
+		{
+			name:         "success on sc without wait binding mode",
+			pvcName:      "fake-pvc-3",
+			pvcNamespace: "fake-namespace",
+			kubeClientObj: []runtime.Object{
+				pvcObjectWithSCAndAnno,
+				scObjWaitBind,
+			},
+			consumed: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
+
+			for _, reactor := range test.kubeReactors {
+				fakeKubeClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
+			}
+
+			var kubeClient kubernetes.Interface = fakeKubeClient
+
+			consumed, err := IsPVCConsumed(context.Background(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, kubeClient.StorageV1())
+
+			if err != nil {
+				assert.EqualError(t, err, test.err)
+			} else {
+				assert.NoError(t, err)
+			}
+
+			assert.Equal(t, test.consumed, consumed)
+		})
+	}
+}
+
 func TestDeletePVCIfAny(t *testing.T) {
 	tests := []struct {
 		name          string

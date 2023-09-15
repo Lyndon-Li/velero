@@ -275,6 +275,36 @@ func WaitPVCConsumed(ctx context.Context, pvcGetter corev1client.CoreV1Interface
 	return selectedNode, updated, err
 }
 
+// IsPVCConsumed checks a PVC to be consumed by a pod so that the selected node is set by the pod scheduling; or does
+// nothing if the consuming doesn't affect the PV provision.
+func IsPVCConsumed(ctx context.Context, pvcGetter corev1client.CoreV1Interface, pvc string, namespace string, storageClient storagev1.StorageV1Interface) (bool, error) {
+	selectedNode := ""
+	var storageClass *storagev1api.StorageClass
+
+	tmpPVC, err := pvcGetter.PersistentVolumeClaims(namespace).Get(ctx, pvc, metav1.GetOptions{})
+	if err != nil {
+		return false, errors.Wrapf(err, "error to get pvc %s/%s", namespace, pvc)
+	}
+
+	if tmpPVC.Spec.StorageClassName != nil {
+		storageClass, err = storageClient.StorageClasses().Get(ctx, *tmpPVC.Spec.StorageClassName, metav1.GetOptions{})
+		if err != nil {
+			return false, errors.Wrapf(err, "error to get storage class %s", *tmpPVC.Spec.StorageClassName)
+		}
+	}
+
+	if storageClass != nil {
+		if storageClass.VolumeBindingMode != nil && *storageClass.VolumeBindingMode == storagev1api.VolumeBindingWaitForFirstConsumer {
+			selectedNode = tmpPVC.Annotations[KubeAnnSelectedNode]
+			if selectedNode == "" {
+				return false, nil
+			}
+		}
+	}
+
+	return true, nil
+}
+
 // WaitPVBound wait for binding of a PV specified by name and returns the bound PV object
 func WaitPVBound(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, pvcName string, pvcNamespace string, timeout time.Duration) (*corev1api.PersistentVolume, error) {
 	var updated *corev1api.PersistentVolume
