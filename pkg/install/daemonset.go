@@ -135,6 +135,10 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 									Name:  "VELERO_SCRATCH_DIR",
 									Value: "/scratch",
 								},
+								{
+									Name:  "LD_LIBRARY_PATH",
+									Value: "/lib",
+								},
 							},
 							Resources: c.resources,
 						},

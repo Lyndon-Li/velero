@@ -38,6 +38,14 @@ WORKDIR /go/src/github.com/vmware-tanzu/velero
 
 COPY . /go/src/github.com/vmware-tanzu/velero
 
+COPY .libs/vmware-vix-disklib-distrib /usr/local/vmware-vix-disklib-distrib
+
+RUN mkdir -p /output/lib
+RUN cp -R .libs/vmware-vix-disklib-distrib/lib64/* /output/lib
+RUN chmod 644 /output/lib/*
+
+RUN echo ${BIN}
+
 RUN mkdir -p /output/usr/bin && \
     export GOARM=$( echo "${GOARM}" | cut -c2-) && \
     go build -o /output/${BIN} \
