@@ -19,7 +19,7 @@ package config
 import (
 	"github.com/pkg/errors"
 
-	"github.com/vmware-tanzu/velero/pkg/util/azure"
+	"github.com/vmware-tanzu/velero/pkg/azure"
 )
 
 // GetAzureResticEnvVars gets the environment variables that restic

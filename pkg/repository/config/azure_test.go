@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vmware-tanzu/velero/pkg/util/azure"
+	"github.com/vmware-tanzu/velero/pkg/azure"
 )
 
 func TestGetAzureResticEnvVars(t *testing.T) {
