@@ -65,7 +65,8 @@ type DataUploadSpec struct {
 type SnapshotType string
 
 const (
-	SnapshotTypeCSI SnapshotType = "CSI"
+	SnapshotTypeCSI        SnapshotType = "CSI"
+	SnapshotTypeVsphereCSI SnapshotType = "vSphere-CSI"
 )
 
 // CSISnapshotSpec is the specification for a CSI snapshot.
