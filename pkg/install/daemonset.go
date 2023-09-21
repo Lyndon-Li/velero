@@ -87,6 +87,14 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 							},
 						},
 						{
+							Name: "host-plugins",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/var/lib/kubelet/plugins",
+								},
+							},
+						},
+						{
 							Name: "scratch",
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: new(corev1.EmptyDirVolumeSource),
