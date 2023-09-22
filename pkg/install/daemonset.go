@@ -53,6 +53,8 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 	userID := int64(0)
 	mountPropagationMode := corev1.MountPropagationHostToContainer
 
+	privilegedMode := true
+
 	daemonSet := &appsv1.DaemonSet{
 		ObjectMeta: objectMeta(namespace, "node-agent"),
 		TypeMeta: metav1.TypeMeta{
@@ -87,6 +89,14 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 							},
 						},
 						{
+							Name: "host-dev",
+							VolumeSource: corev1.VolumeSource{
+								HostPath: &corev1.HostPathVolumeSource{
+									Path: "/dev",
+								},
+							},
+						},
+						{
 							Name: "scratch",
 							VolumeSource: corev1.VolumeSource{
 								EmptyDir: new(corev1.EmptyDirVolumeSource),
@@ -103,10 +113,19 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 							},
 							Args: daemonSetArgs,
 
+							SecurityContext: &corev1.SecurityContext{
+								Privileged: &privilegedMode,
+							},
+
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:             "host-pods",
 									MountPath:        "/host_pods",
+									MountPropagation: &mountPropagationMode,
+								},
+								{
+									Name:             "host-dev",
+									MountPath:        "/dev",
 									MountPropagation: &mountPropagationMode,
 								},
 								{
@@ -137,7 +156,7 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 								},
 								{
 									Name:  "LD_LIBRARY_PATH",
-									Value: "/lib",
+									Value: "/usr/lib/vmware-vix-disklib/lib64",
 								},
 							},
 							Resources: c.resources,

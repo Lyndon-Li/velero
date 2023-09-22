@@ -245,7 +245,7 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 								},
 								{
 									Name:  "LD_LIBRARY_PATH",
-									Value: "/plugins:/lib",
+									Value: "/plugins:/usr/lib/vmware-vix-disklib/lib64",
 								},
 							},
 							Resources: c.resources,
