@@ -299,3 +299,9 @@ func (b *BackupBuilder) DataMover(name string) *BackupBuilder {
 	b.object.Spec.DataMover = name
 	return b
 }
+
+// SnapshotsToRetain sets the Backup's SnapshotsToRetain flag
+func (b *BackupBuilder) SnapshotsToRetain(num int) *BackupBuilder {
+	b.object.Spec.SnapshotsToRetain = num
+	return b
+}

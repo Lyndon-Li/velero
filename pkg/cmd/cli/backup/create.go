@@ -106,6 +106,7 @@ type CreateOptions struct {
 	ItemOperationTimeout            time.Duration
 	ResPoliciesConfigmap            string
 	client                          kbclient.WithWatch
+	SnapshotsToRetain               int
 }
 
 func NewCreateOptions() *CreateOptions {
@@ -151,6 +152,7 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 
 	flags.StringVar(&o.ResPoliciesConfigmap, "resource-policies-configmap", "", "Reference to the resource policies configmap that backup using")
 	flags.StringVar(&o.DataMover, "data-mover", "", "Specify the data mover to be used by the backup. If the parameter is not set or set as 'velero', the built-in data mover will be used")
+	flags.IntVar(&o.SnapshotsToRetain, "snapshots-to-retain", 0, "Specify the number of the retained snapshots for each volume after data mover backup")
 }
 
 // BindWait binds the wait flag separately so it is not called by other create
@@ -372,7 +374,8 @@ func (o *CreateOptions) BuildBackup(namespace string) (*velerov1api.Backup, erro
 			VolumeSnapshotLocations(o.SnapshotLocations...).
 			CSISnapshotTimeout(o.CSISnapshotTimeout).
 			ItemOperationTimeout(o.ItemOperationTimeout).
-			DataMover(o.DataMover)
+			DataMover(o.DataMover).
+			SnapshotsToRetain(o.SnapshotsToRetain)
 		if len(o.OrderedResources) > 0 {
 			orders, err := ParseOrderedResources(o.OrderedResources)
 			if err != nil {

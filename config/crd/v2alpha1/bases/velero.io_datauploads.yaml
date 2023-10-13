@@ -110,6 +110,10 @@ spec:
                 description: OperationTimeout specifies the time used to wait internal
                   operations, before returning error as timeout.
                 type: string
+              retainSnapshot:
+                description: RetainSnapshot specifies whether to retain the snapshot
+                  after backup completes.
+                type: boolean
               snapshotType:
                 description: SnapshotType is the type of the snapshot to be backed
                   up.
@@ -182,6 +186,10 @@ spec:
                     format: int64
                     type: integer
                 type: object
+              retainedSnapshot:
+                description: RetainedSnapshot is name of the snapshot that has been
+                  retained.
+                type: string
               snapshotID:
                 description: SnapshotID is the identifier for the snapshot in the
                   backup repository.

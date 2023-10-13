@@ -469,6 +469,10 @@ spec:
                   any PV's referenced in the set of objects included in the Backup.
                 nullable: true
                 type: boolean
+              snapshotsToRetain:
+                description: SnapshotsToRetain specifies how many snapshots should
+                  be retained for each volume after data mover backup.
+                type: integer
               storageLocation:
                 description: StorageLocation is a string containing the name of a
                   BackupStorageLocation where the backup should be stored.

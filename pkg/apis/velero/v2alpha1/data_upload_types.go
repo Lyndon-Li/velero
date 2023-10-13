@@ -60,6 +60,10 @@ type DataUploadSpec struct {
 	// OperationTimeout specifies the time used to wait internal operations,
 	// before returning error as timeout.
 	OperationTimeout metav1.Duration `json:"operationTimeout"`
+
+	// RetainSnapshot specifies whether to retain the snapshot after backup completes.
+	// +optional
+	RetainSnapshot bool `json:"retainSnapshot,omitempty"`
 }
 
 type SnapshotType string
@@ -144,6 +148,10 @@ type DataUploadStatus struct {
 	// Node is name of the node where the DataUpload is processed.
 	// +optional
 	Node string `json:"node,omitempty"`
+
+	// RetainedSnapshot is name of the snapshot that has been retained.
+	// +optional
+	RetainedSnapshot string `json:"retainedSnapshot,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,

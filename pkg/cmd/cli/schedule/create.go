@@ -156,6 +156,7 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 				ItemOperationTimeout:             metav1.Duration{Duration: o.BackupOptions.ItemOperationTimeout},
 				DataMover:                        o.BackupOptions.DataMover,
 				SnapshotMoveData:                 o.BackupOptions.SnapshotMoveData.Value,
+				SnapshotsToRetain:                o.BackupOptions.SnapshotsToRetain,
 			},
 			Schedule:                   o.Schedule,
 			UseOwnerReferencesInBackup: &o.UseOwnerReferencesInBackup,

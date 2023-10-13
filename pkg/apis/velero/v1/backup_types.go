@@ -175,6 +175,10 @@ type BackupSpec struct {
 	// If DataMover is "" or "velero", the built-in data mover will be used.
 	// +optional
 	DataMover string `json:"datamover,omitempty"`
+
+	// SnapshotsToRetain specifies how many snapshots should be retained for each volume after data mover backup.
+	// +optional
+	SnapshotsToRetain int `json:"snapshotsToRetain,omitempty"`
 }
 
 // BackupHooks contains custom behaviors that should be executed at different phases of the backup.
