@@ -61,11 +61,12 @@ type Applicable interface {
 	AppliesTo() (ResourceSelector, error)
 }
 
-// ResourceIdentifier describes a single item by its group, resource, namespace, and name.
+// ResourceIdentifier describes a single item by its group, resource, namespace, name and labels.
 type ResourceIdentifier struct {
 	schema.GroupResource
-	Namespace string
-	Name      string
+	Namespace     string
+	Name          string
+	LabelSelector string
 }
 
 func (in *ResourceIdentifier) DeepCopy() *ResourceIdentifier {

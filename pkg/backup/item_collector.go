@@ -218,8 +218,9 @@ func (r *itemCollector) getResourceItems(log logrus.FieldLogger, gv schema.Group
 		for _, resourceID := range resourceIDs {
 			log.WithFields(
 				logrus.Fields{
-					"namespace": resourceID.Namespace,
-					"name":      resourceID.Name,
+					"namespace":      resourceID.Namespace,
+					"name":           resourceID.Name,
+					"label selector": resourceID.LabelSelector,
 				},
 			).Infof("Getting item")
 			resourceClient, err := r.dynamicFactory.ClientForGroupVersionResource(gv, resource, resourceID.Namespace)
@@ -227,9 +228,29 @@ func (r *itemCollector) getResourceItems(log logrus.FieldLogger, gv schema.Group
 				log.WithError(errors.WithStack(err)).Error("Error getting client for resource")
 				continue
 			}
-			unstructured, err := resourceClient.Get(resourceID.Name, metav1.GetOptions{})
-			if err != nil {
-				log.WithError(errors.WithStack(err)).Error("Error getting item")
+
+			var unstructured *unstructured.Unstructured
+			if resourceID.Name != "" {
+				unstructured, err = resourceClient.Get(resourceID.Name, metav1.GetOptions{})
+				if err != nil {
+					log.WithError(errors.WithStack(err)).Error("Error getting item")
+					continue
+				}
+			} else if resourceID.LabelSelector != "" {
+				listItem, err := resourceClient.List(metav1.ListOptions{LabelSelector: resourceID.LabelSelector})
+				if err != nil {
+					log.WithError(errors.WithStack(err)).Error("Error listing item")
+					continue
+				}
+
+				if len(listItem.Items) != 1 {
+					log.Errorf("Expecting one of item listed, got %v, skip", len(listItem.Items))
+					continue
+				}
+
+				unstructured = &listItem.Items[0]
+			} else {
+				log.Error("Neither name or labels is valid, skip")
 				continue
 			}
 
