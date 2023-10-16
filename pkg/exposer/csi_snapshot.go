@@ -61,6 +61,9 @@ type CSISnapshotExposeParam struct {
 
 	// Timeout specifies the time wait for resources operations in Expose
 	Timeout time.Duration
+
+	// RetainSnapshot specifies whether to retain snapshot after backup completes
+	RetainSnapshot bool
 }
 
 // CSISnapshotExposeWaitParam define the input param for WaitExposed of CSI snapshots
@@ -149,12 +152,12 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 		}
 	}()
 
-	backupVSC, err := e.createBackupVSC(ctx, ownerObject, vsc, backupVS)
+	backupVSC, err := e.createBackupVSC(ctx, ownerObject, vsc, backupVS, csiExposeParam.RetainSnapshot)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup volume snapshot content")
 	}
 
-	curLog.WithField("vsc name", backupVSC.Name).Infof("Backup VSC is created from %s", vsc.Name)
+	curLog.WithField("vsc name", backupVSC.Name).Infof("Backup VSC is created from %s, retain snapshot %v", vsc.Name, csiExposeParam.RetainSnapshot)
 
 	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupVS.Name, csiExposeParam.StorageClass, csiExposeParam.AccessMode, *volumeSnapshot.Status.RestoreSize)
 	if err != nil {
@@ -267,8 +270,13 @@ func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject cor
 	return e.csiSnapshotClient.VolumeSnapshots(vs.Namespace).Create(ctx, vs, metav1.CreateOptions{})
 }
 
-func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject corev1.ObjectReference, snapshotVSC *snapshotv1api.VolumeSnapshotContent, vs *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshotContent, error) {
+func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject corev1.ObjectReference, snapshotVSC *snapshotv1api.VolumeSnapshotContent,
+	vs *snapshotv1api.VolumeSnapshot, retainSnapshot bool) (*snapshotv1api.VolumeSnapshotContent, error) {
 	backupVSCName := ownerObject.Name
+	deletePolicy := snapshotv1api.VolumeSnapshotContentDelete
+	if retainSnapshot {
+		deletePolicy = snapshotv1api.VolumeSnapshotContentRetain
+	}
 
 	vsc := &snapshotv1api.VolumeSnapshotContent{
 		ObjectMeta: metav1.ObjectMeta{
@@ -285,7 +293,7 @@ func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject co
 			Source: snapshotv1api.VolumeSnapshotContentSource{
 				SnapshotHandle: snapshotVSC.Status.SnapshotHandle,
 			},
-			DeletionPolicy:          snapshotv1api.VolumeSnapshotContentDelete,
+			DeletionPolicy:          deletePolicy,
 			Driver:                  snapshotVSC.Spec.Driver,
 			VolumeSnapshotClassName: snapshotVSC.Spec.VolumeSnapshotClassName,
 		},

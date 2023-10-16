@@ -232,7 +232,7 @@ func (ib *itemBackupper) backupItemInternal(logger logrus.FieldLogger, obj runti
 		backupErrs = append(backupErrs, err)
 
 		// if there was an error running actions, execute post hooks and return
-		log.Debug("Executing post hooks")
+		log.WithError(err).Debug("Executing post hooks on error")
 		if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost); err != nil {
 			backupErrs = append(backupErrs, err)
 		}
