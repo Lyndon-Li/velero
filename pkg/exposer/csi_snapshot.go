@@ -255,6 +255,7 @@ func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject cor
 			Name:        backupVSName,
 			Namespace:   ownerObject.Namespace,
 			Annotations: snapshotVS.Annotations,
+			Labels:      snapshotVS.Labels,
 			// Don't add ownerReference to SnapshotBackup.
 			// The backupPVC should be deleted before backupVS, otherwise, the deletion of backupVS will fail since
 			// backupPVC has its dataSource referring to it
