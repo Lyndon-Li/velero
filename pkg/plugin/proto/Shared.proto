@@ -21,6 +21,7 @@ message ResourceIdentifier {
     string resource = 2;
     string namespace = 3;
     string name = 4;
+    string labelSelector = 5;
 }
 
 message ResourceSelector {

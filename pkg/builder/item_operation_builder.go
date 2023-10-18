@@ -107,14 +107,15 @@ func (bb *BackupOperationBuilder) Status(status itemoperation.OperationStatus) *
 }
 
 // ResourceIdentifier sets the BackupOperation's resource identifier.
-func (bb *BackupOperationBuilder) ResourceIdentifier(group, resource, ns, name string) *BackupOperationBuilder {
+func (bb *BackupOperationBuilder) ResourceIdentifier(group, resource, ns, name, labelSelector string) *BackupOperationBuilder {
 	bb.object.Spec.ResourceIdentifier = velero.ResourceIdentifier{
 		GroupResource: schema.GroupResource{
 			Group:    group,
 			Resource: resource,
 		},
-		Namespace: ns,
-		Name:      name,
+		Namespace:     ns,
+		Name:          name,
+		LabelSelector: labelSelector,
 	}
 	return bb
 }

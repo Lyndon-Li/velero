@@ -207,10 +207,11 @@ func (s *BackupItemActionGRPCServer) Cancel(
 
 func backupResourceIdentifierToProto(id velero.ResourceIdentifier) *proto.ResourceIdentifier {
 	return &proto.ResourceIdentifier{
-		Group:     id.Group,
-		Resource:  id.Resource,
-		Namespace: id.Namespace,
-		Name:      id.Name,
+		Group:         id.Group,
+		Resource:      id.Resource,
+		Namespace:     id.Namespace,
+		Name:          id.Name,
+		LabelSelector: id.LabelSelector,
 	}
 }
 

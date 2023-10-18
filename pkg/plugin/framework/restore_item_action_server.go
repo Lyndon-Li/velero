@@ -143,9 +143,10 @@ func (s *RestoreItemActionGRPCServer) Execute(ctx context.Context, req *proto.Re
 
 func restoreResourceIdentifierToProto(id velero.ResourceIdentifier) *proto.ResourceIdentifier {
 	return &proto.ResourceIdentifier{
-		Group:     id.Group,
-		Resource:  id.Resource,
-		Namespace: id.Namespace,
-		Name:      id.Name,
+		Group:         id.Group,
+		Resource:      id.Resource,
+		Namespace:     id.Namespace,
+		Name:          id.Name,
+		LabelSelector: id.LabelSelector,
 	}
 }

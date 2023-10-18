@@ -238,8 +238,9 @@ func (s *RestoreItemActionGRPCServer) AreAdditionalItemsReady(ctx context.Contex
 				Group:    itm.Group,
 				Resource: itm.Resource,
 			},
-			Namespace: itm.Namespace,
-			Name:      itm.Name,
+			Namespace:     itm.Namespace,
+			Name:          itm.Name,
+			LabelSelector: itm.LabelSelector,
 		}
 
 		additionalItems = append(additionalItems, newItem)
@@ -257,10 +258,11 @@ func (s *RestoreItemActionGRPCServer) AreAdditionalItemsReady(ctx context.Contex
 
 func restoreResourceIdentifierToProto(id velero.ResourceIdentifier) *proto.ResourceIdentifier {
 	return &proto.ResourceIdentifier{
-		Group:     id.Group,
-		Resource:  id.Resource,
-		Namespace: id.Namespace,
-		Name:      id.Name,
+		Group:         id.Group,
+		Resource:      id.Resource,
+		Namespace:     id.Namespace,
+		Name:          id.Name,
+		LabelSelector: id.LabelSelector,
 	}
 }
 

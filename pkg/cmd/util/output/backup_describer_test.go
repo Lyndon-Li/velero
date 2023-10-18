@@ -499,7 +499,7 @@ func TestDescribeBackupItemOperation(t *testing.T) {
 		BackupName("backup-1").
 		OperationID("op-1").
 		BackupItemAction("action-1").
-		ResourceIdentifier("group", "rs-type", "ns", "rs-name").
+		ResourceIdentifier("group", "rs-type", "ns", "rs-name", "").
 		Status(*builder.ForOperationStatus().
 			Phase(itemoperation.OperationPhaseFailed).
 			Error("operation error").

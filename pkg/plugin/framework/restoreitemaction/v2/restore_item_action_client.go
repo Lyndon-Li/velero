@@ -114,8 +114,9 @@ func (c *RestoreItemActionGRPCClient) Execute(input *velero.RestoreItemActionExe
 				Group:    itm.Group,
 				Resource: itm.Resource,
 			},
-			Namespace: itm.Namespace,
-			Name:      itm.Name,
+			Namespace:     itm.Namespace,
+			Name:          itm.Name,
+			LabelSelector: itm.LabelSelector,
 		}
 
 		additionalItems = append(additionalItems, newItem)

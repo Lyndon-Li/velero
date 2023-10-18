@@ -111,8 +111,9 @@ func (c *BackupItemActionGRPCClient) Execute(item runtime.Unstructured, backup *
 				Group:    itm.Group,
 				Resource: itm.Resource,
 			},
-			Namespace: itm.Namespace,
-			Name:      itm.Name,
+			Namespace:     itm.Namespace,
+			Name:          itm.Name,
+			LabelSelector: itm.LabelSelector,
 		}
 
 		additionalItems = append(additionalItems, newItem)
