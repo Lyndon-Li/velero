@@ -30,7 +30,8 @@ const (
 // ExposeResult defines the result of expose.
 // Varying from the type of the expose, the result may be different.
 type ExposeResult struct {
-	ByPod ExposeByPod
+	ByPod            ExposeByPod
+	RetainedSnapshot string
 }
 
 // ExposeByPod defines the result for the expose method that a hosting pod is created

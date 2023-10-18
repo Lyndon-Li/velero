@@ -278,6 +278,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// Update status to InProgress
 		original := du.DeepCopy()
 		du.Status.Phase = velerov2alpha1api.DataUploadPhaseInProgress
+		du.Status.RetainedSnapshot = res.RetainedSnapshot
 		if err := r.client.Patch(ctx, du, client.MergeFrom(original)); err != nil {
 			return r.errorOut(ctx, du, err, "error updating dataupload status", log)
 		}
@@ -771,8 +772,9 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 func (r *DataUploadReconciler) setupWaitExposePara(du *velerov2alpha1api.DataUpload) interface{} {
 	if du.Spec.SnapshotType == velerov2alpha1api.SnapshotTypeCSI {
 		return &exposer.CSISnapshotExposeWaitParam{
-			NodeClient: r.client,
-			NodeName:   r.nodeName,
+			NodeClient:     r.client,
+			NodeName:       r.nodeName,
+			RetainSnapshot: du.Spec.RetainSnapshot,
 		}
 	}
 	return nil

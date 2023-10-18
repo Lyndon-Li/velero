@@ -69,8 +69,9 @@ type CSISnapshotExposeParam struct {
 // CSISnapshotExposeWaitParam define the input param for WaitExposed of CSI snapshots
 type CSISnapshotExposeWaitParam struct {
 	// NodeClient is the client that is used to find the hosting pod
-	NodeClient client.Client
-	NodeName   string
+	NodeClient     client.Client
+	NodeName       string
+	RetainSnapshot bool
 }
 
 // NewCSISnapshotExposer create a new instance of CSI snapshot exposer
@@ -193,6 +194,7 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 
 	backupPodName := ownerObject.Name
 	backupPVCName := ownerObject.Name
+	backupVSCName := ownerObject.Name
 
 	curLog := e.log.WithFields(logrus.Fields{
 		"owner": ownerObject.Name,
@@ -221,7 +223,21 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 
 	curLog.WithField("backup pvc", backupPVCName).Info("Backup PVC is bound")
 
-	return &ExposeResult{ByPod: ExposeByPod{HostingPod: pod, VolumeName: pod.Spec.Volumes[0].Name}}, nil
+	retainedSnapshot := ""
+	if exposeWaitParam.RetainSnapshot {
+		if _, err := e.csiSnapshotClient.VolumeSnapshotContents().Get(ctx, backupVSCName, metav1.GetOptions{}); err != nil {
+			curLog.WithError(err).Warnf("Failed to find retained snapshot %s", backupVSCName)
+		} else {
+			retainedSnapshot = backupVSCName
+		}
+	}
+
+	curLog.WithField("retained snapshot", retainedSnapshot).Info("Retained snapshot is resolved")
+
+	return &ExposeResult{
+		ByPod:            ExposeByPod{HostingPod: pod, VolumeName: pod.Spec.Volumes[0].Name},
+		RetainedSnapshot: retainedSnapshot,
+	}, nil
 }
 
 func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject corev1.ObjectReference, vsName string, sourceNamespace string) {
