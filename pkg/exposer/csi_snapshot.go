@@ -282,6 +282,7 @@ func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject co
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        backupVSCName,
 			Annotations: snapshotVSC.Annotations,
+			Labels:      snapshotVSC.Labels,
 		},
 		Spec: snapshotv1api.VolumeSnapshotContentSpec{
 			VolumeSnapshotRef: corev1.ObjectReference{
