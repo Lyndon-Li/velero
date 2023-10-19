@@ -97,6 +97,14 @@ const (
 	// VolumesToExcludeAnnotation is the annotation on a pod whose mounted volumes
 	// should be excluded from pod volume backup.
 	VolumesToExcludeAnnotation = "backup.velero.io/backup-volumes-excludes"
+
+	// DataMoverSnapshotToRetain is the annotation on a backup CR as the number of snapshot
+	// to retain during data mover backup.
+	DataMoverSnapshotToRetain = "backup.velero.io/data-mover-snapshot-to-retain"
+
+	// DataMoverSnapshotRemoved is the label on a snapshot associated resource to indicate that
+	// the snapshot has been removed.
+	DataMoverSnapshotRemoved = "backup.velero.io/data-mover-snapshot-removed"
 )
 
 type AsyncOperationIDPrefix string

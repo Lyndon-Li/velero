@@ -21,6 +21,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
@@ -89,6 +90,7 @@ type backupReconciler struct {
 	credentialFileStore         credentials.FileStore
 	maxConcurrentK8SConnections int
 	defaultSnapshotMoveData     bool
+	dmSnapshotToRetain          int
 }
 
 func NewBackupReconciler(
@@ -115,6 +117,7 @@ func NewBackupReconciler(
 	credentialStore credentials.FileStore,
 	maxConcurrentK8SConnections int,
 	defaultSnapshotMoveData bool,
+	dmSnapshotToRetain int,
 ) *backupReconciler {
 	b := &backupReconciler{
 		ctx:                         ctx,
@@ -141,6 +144,7 @@ func NewBackupReconciler(
 		credentialFileStore:         credentialStore,
 		maxConcurrentK8SConnections: maxConcurrentK8SConnections,
 		defaultSnapshotMoveData:     defaultSnapshotMoveData,
+		dmSnapshotToRetain:          dmSnapshotToRetain,
 	}
 	b.updateTotalBackupMetric()
 	return b
@@ -430,6 +434,7 @@ func (b *backupReconciler) prepareBackupRequest(backup *velerov1api.Backup, logg
 	request.Annotations[velerov1api.SourceClusterK8sMajorVersionAnnotation] = b.discoveryHelper.ServerVersion().Major
 	request.Annotations[velerov1api.SourceClusterK8sMinorVersionAnnotation] = b.discoveryHelper.ServerVersion().Minor
 	request.Annotations[velerov1api.ResourceTimeoutAnnotation] = b.resourceTimeout.String()
+	request.Annotations[velerov1api.DataMoverSnapshotToRetain] = strconv.Itoa(b.dmSnapshotToRetain)
 
 	// Add namespaces with label velero.io/exclude-from-backup=true into request.Spec.ExcludedNamespaces
 	// Essentially, adding the label velero.io/exclude-from-backup=true to a namespace would be equivalent to setting spec.ExcludedNamespaces
@@ -664,9 +669,7 @@ func (b *backupReconciler) runBackup(backup *pkgbackup.Request) error {
 	var volumeSnapshots []snapshotv1api.VolumeSnapshot
 	var volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent
 	var volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass
-	if boolptr.IsSetToTrue(backup.Spec.SnapshotMoveData) {
-		backupLog.Info("backup SnapshotMoveData is set to true, skip VolumeSnapshot resource persistence.")
-	} else if features.IsEnabled(velerov1api.CSIFeatureFlag) {
+	if features.IsEnabled(velerov1api.CSIFeatureFlag) {
 		selector := label.NewSelectorForBackup(backup.Name)
 		vscList := &snapshotv1api.VolumeSnapshotContentList{}
 
