@@ -59,8 +59,14 @@ type CSISnapshotExposeParam struct {
 	// HostingPodLabels is the labels that are going to apply to the hosting pod
 	HostingPodLabels map[string]string
 
-	// Timeout specifies the time wait for resources operations in Expose
-	Timeout time.Duration
+	// OperationTimeout specifies the time wait for resources operations in Expose
+	OperationTimeout time.Duration
+
+	// ExposeTimeout specifies the timeout for the entire expose process
+	ExposeTimeout time.Duration
+
+	// VolumeSize specifies the size of the source volume
+	VolumeSize resource.Quantity
 
 	// RetainSnapshot specifies whether to retain snapshot after backup completes
 	RetainSnapshot bool
@@ -98,7 +104,7 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 
 	curLog.Info("Exposing CSI snapshot")
 
-	volumeSnapshot, err := csi.WaitVolumeSnapshotReady(ctx, e.csiSnapshotClient, csiExposeParam.SnapshotName, csiExposeParam.SourceNamespace, csiExposeParam.Timeout, curLog)
+	volumeSnapshot, err := csi.WaitVolumeSnapshotReady(ctx, e.csiSnapshotClient, csiExposeParam.SnapshotName, csiExposeParam.SourceNamespace, csiExposeParam.ExposeTimeout, curLog)
 	if err != nil {
 		return errors.Wrapf(err, "error wait volume snapshot ready")
 	}
@@ -125,14 +131,14 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 		}
 	}()
 
-	err = csi.EnsureDeleteVS(ctx, e.csiSnapshotClient, volumeSnapshot.Name, volumeSnapshot.Namespace, csiExposeParam.Timeout)
+	err = csi.EnsureDeleteVS(ctx, e.csiSnapshotClient, volumeSnapshot.Name, volumeSnapshot.Namespace, csiExposeParam.OperationTimeout)
 	if err != nil {
 		return errors.Wrap(err, "error to delete volume snapshot")
 	}
 
 	curLog.WithField("vs name", volumeSnapshot.Name).Infof("VS is deleted in namespace %s", volumeSnapshot.Namespace)
 
-	err = csi.EnsureDeleteVSC(ctx, e.csiSnapshotClient, vsc.Name, csiExposeParam.Timeout)
+	err = csi.EnsureDeleteVSC(ctx, e.csiSnapshotClient, vsc.Name, csiExposeParam.OperationTimeout)
 	if err != nil {
 		return errors.Wrap(err, "error to delete volume snapshot content")
 	}
@@ -160,7 +166,15 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 
 	curLog.WithField("vsc name", backupVSC.Name).Infof("Backup VSC is created from %s, retain snapshot %v", vsc.Name, csiExposeParam.RetainSnapshot)
 
-	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupVS.Name, csiExposeParam.StorageClass, csiExposeParam.AccessMode, *volumeSnapshot.Status.RestoreSize)
+	var volumeSize resource.Quantity
+	if volumeSnapshot.Status.RestoreSize != nil && !volumeSnapshot.Status.RestoreSize.IsZero() {
+		volumeSize = *volumeSnapshot.Status.RestoreSize
+	} else {
+		volumeSize = csiExposeParam.VolumeSize
+		curLog.WithField("vs name", volumeSnapshot.Name).Warnf("The snapshot doesn't contain a valid restore size, use source volume's size %v", volumeSize)
+	}
+
+	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupVS.Name, csiExposeParam.StorageClass, csiExposeParam.AccessMode, volumeSize)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup pvc")
 	}

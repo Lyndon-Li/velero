@@ -73,6 +73,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/persistence"
 	"github.com/vmware-tanzu/velero/pkg/plugin/clientmgmt"
 	"github.com/vmware-tanzu/velero/pkg/plugin/clientmgmt/process"
+	"github.com/vmware-tanzu/velero/pkg/plugin/framework/common"
 	"github.com/vmware-tanzu/velero/pkg/podexec"
 	"github.com/vmware-tanzu/velero/pkg/podvolume"
 	"github.com/vmware-tanzu/velero/pkg/repository"
@@ -240,7 +241,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 	command.Flags().IntVar(&config.maxConcurrentK8SConnections, "max-concurrent-k8s-connections", config.maxConcurrentK8SConnections, "Max concurrent connections number that Velero can create with kube-apiserver. Default is 30.")
 	command.Flags().BoolVar(&config.defaultSnapshotMoveData, "default-snapshot-move-data", config.defaultSnapshotMoveData, "Move data by default for all snapshots supporting data movement.")
-	command.Flags().BoolVar(&config.disableInformerCache, "disable-informer-cache", config.disableInformerCache, "Disable informer cache for Get calls on restore. WIth this enabled, it will speed up restore in cases where there are backup resources which already exist in the cluster, but for very large clusters this will increase velero memory usage. Default is false (don't disable).")
+	command.Flags().BoolVar(&config.disableInformerCache, "disable-informer-cache", config.disableInformerCache, "Disable informer cache for Get calls on restore. With this enabled, it will speed up restore in cases where there are backup resources which already exist in the cluster, but for very large clusters this will increase velero memory usage. Default is false (don't disable).")
 	command.Flags().IntVar(&config.dmSnapshotToRetain, "data-mover-snapshot-to-retain", config.dmSnapshotToRetain, "Number of data mover snapshots to retain.")
 
 	return command
@@ -309,6 +310,13 @@ func newServer(f client.Factory, config serverConfig, logger *logrus.Logger) (*s
 	pluginRegistry := process.NewRegistry(config.pluginDir, logger, logger.Level)
 	if err := pluginRegistry.DiscoverPlugins(); err != nil {
 		return nil, err
+	}
+
+	if !features.IsEnabled(velerov1api.CSIFeatureFlag) {
+		_, err = pluginRegistry.Get(common.PluginKindBackupItemActionV2, "velero.io/csi-pvc-backupper")
+		if err == nil {
+			logger.Warn("CSI plugins are registered, but the EnableCSI feature is not enabled.")
+		}
 	}
 
 	// cancelFunc is not deferred here because if it was, then ctx would immediately
@@ -1154,7 +1162,7 @@ func markDataDownloadsCancel(ctx context.Context, client ctrlclient.Client, rest
 				})
 
 			if err != nil {
-				log.WithError(errors.WithStack(err)).Errorf("failed to mark dataupload %q cancel", dd.GetName())
+				log.WithError(errors.WithStack(err)).Errorf("failed to mark datadownload %q cancel", dd.GetName())
 				continue
 			}
 			log.WithField("datadownload", dd.GetName()).Warn(dd.Status.Message)
