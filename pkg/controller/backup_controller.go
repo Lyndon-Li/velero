@@ -1210,14 +1210,15 @@ func generateVolumeInfoFromDataUpload(backup *pkgbackup.Request, crClient kbclie
 
 			if pvcPVInfo, ok := backup.PVMap[operation.Spec.ResourceIdentifier.Namespace+"/"+operation.Spec.ResourceIdentifier.Name]; ok {
 				volumeInfo := volume.VolumeInfo{
-					BackupMethod:      volume.CSISnapshot,
-					PVCName:           pvcPVInfo.PVCName,
-					PVCNamespace:      pvcPVInfo.PVCNamespace,
-					PVName:            pvcPVInfo.PV.Name,
-					SnapshotDataMoved: true,
-					Skipped:           false,
-					OperationID:       operation.Spec.OperationID,
-					StartTimestamp:    operation.Status.Created,
+					BackupMethod:          volume.CSISnapshot,
+					PVCName:               pvcPVInfo.PVCName,
+					PVCNamespace:          pvcPVInfo.PVCNamespace,
+					PVName:                pvcPVInfo.PV.Name,
+					PreserveLocalSnapshot: dataUpload.Spec.RetainSnapshot,
+					SnapshotDataMoved:     true,
+					Skipped:               false,
+					OperationID:           operation.Spec.OperationID,
+					StartTimestamp:        operation.Status.Created,
 					CSISnapshotInfo: volume.CSISnapshotInfo{
 						Driver: driverUsedByVSClass,
 					},
