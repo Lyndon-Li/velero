@@ -78,6 +78,7 @@ type itemBackupper struct {
 
 	itemHookHandler                    hook.ItemHookHandler
 	snapshotLocationVolumeSnapshotters map[string]vsv1.VolumeSnapshotter
+	hookTracker                        *hook.HookTracker
 }
 
 type FileForArchive struct {
@@ -184,7 +185,7 @@ func (ib *itemBackupper) backupItemInternal(logger logrus.FieldLogger, obj runti
 	)
 
 	log.Debug("Executing pre hooks")
-	if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePre); err != nil {
+	if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePre, ib.hookTracker); err != nil {
 		return false, itemFiles, err
 	}
 	if optedOut, podName := ib.podVolumeSnapshotTracker.OptedoutByPod(namespace, name); optedOut {
@@ -234,7 +235,7 @@ func (ib *itemBackupper) backupItemInternal(logger logrus.FieldLogger, obj runti
 
 		// if there was an error running actions, execute post hooks and return
 		log.WithError(err).Debug("Executing post hooks on error")
-		if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost); err != nil {
+		if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost, ib.hookTracker); err != nil {
 			backupErrs = append(backupErrs, err)
 		}
 		return false, itemFiles, kubeerrs.NewAggregate(backupErrs)
@@ -250,6 +251,10 @@ func (ib *itemBackupper) backupItemInternal(logger logrus.FieldLogger, obj runti
 	namespace = metadata.GetNamespace()
 
 	if groupResource == kuberesource.PersistentVolumes {
+		if err := ib.addVolumeInfo(obj, log); err != nil {
+			backupErrs = append(backupErrs, err)
+		}
+
 		if err := ib.takePVSnapshot(obj, log); err != nil {
 			backupErrs = append(backupErrs, err)
 		}
@@ -289,7 +294,7 @@ func (ib *itemBackupper) backupItemInternal(logger logrus.FieldLogger, obj runti
 	}
 
 	log.Debug("Executing post hooks")
-	if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost); err != nil {
+	if err := ib.itemHookHandler.HandleHooks(log, groupResource, obj, ib.backupRequest.ResourceHooks, hook.PhasePost, ib.hookTracker); err != nil {
 		backupErrs = append(backupErrs, err)
 	}
 
@@ -505,6 +510,7 @@ func (ib *itemBackupper) takePVSnapshot(obj runtime.Unstructured, log logrus.Fie
 
 	if boolptr.IsSetToFalse(ib.backupRequest.Spec.SnapshotVolumes) {
 		log.Info("Backup has volume snapshots disabled; skipping volume snapshot action.")
+		ib.trackSkippedPV(obj, kuberesource.PersistentVolumes, volumeSnapshotApproach, "backup has volume snapshots disabled", log)
 		return nil
 	}
 
@@ -683,6 +689,39 @@ func (ib *itemBackupper) unTrackSkippedPV(obj runtime.Unstructured, groupResourc
 	} else if err != nil {
 		log.WithError(err).Warnf("unable to get PV name, skip untracking.")
 	}
+}
+
+func (ib *itemBackupper) addVolumeInfo(obj runtime.Unstructured, log logrus.FieldLogger) error {
+	pv := new(corev1api.PersistentVolume)
+	err := runtime.DefaultUnstructuredConverter.FromUnstructured(obj.UnstructuredContent(), pv)
+	if err != nil {
+		log.WithError(err).Warnf("Fail to convert PV")
+		return err
+	}
+
+	if ib.backupRequest.PVMap == nil {
+		ib.backupRequest.PVMap = make(map[string]PvcPvInfo)
+	}
+
+	pvcName := ""
+	pvcNamespace := ""
+	if pv.Spec.ClaimRef != nil {
+		pvcName = pv.Spec.ClaimRef.Name
+		pvcNamespace = pv.Spec.ClaimRef.Namespace
+
+		ib.backupRequest.PVMap[pvcNamespace+"/"+pvcName] = PvcPvInfo{
+			PVCName:      pvcName,
+			PVCNamespace: pvcNamespace,
+			PV:           *pv,
+		}
+	}
+
+	ib.backupRequest.PVMap[pv.Name] = PvcPvInfo{
+		PVCName:      pvcName,
+		PVCNamespace: pvcNamespace,
+		PV:           *pv,
+	}
+	return nil
 }
 
 // convert the input object to PV/PVC and get the PV name

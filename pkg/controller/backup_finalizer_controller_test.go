@@ -45,10 +45,11 @@ import (
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
 
-func mockBackupFinalizerReconciler(fakeClient kbclient.Client, fakeClock *testclocks.FakeClock) (*backupFinalizerReconciler, *fakeBackupper) {
+func mockBackupFinalizerReconciler(fakeClient kbclient.Client, fakeGlobalClient kbclient.Client, fakeClock *testclocks.FakeClock) (*backupFinalizerReconciler, *fakeBackupper) {
 	backupper := new(fakeBackupper)
 	return NewBackupFinalizerReconciler(
 		fakeClient,
+		fakeGlobalClient,
 		fakeClock,
 		backupper,
 		func(logrus.FieldLogger) clientmgmt.Manager { return pluginManager },
@@ -160,7 +161,10 @@ func TestBackupFinalizerReconcile(t *testing.T) {
 			}
 
 			fakeClient := velerotest.NewFakeControllerRuntimeClient(t, initObjs...)
-			reconciler, backupper := mockBackupFinalizerReconciler(fakeClient, fakeClock)
+
+			fakeGlobalClient := velerotest.NewFakeControllerRuntimeClient(t, initObjs...)
+
+			reconciler, backupper := mockBackupFinalizerReconciler(fakeClient, fakeGlobalClient, fakeClock)
 			pluginManager.On("CleanupClients").Return(nil)
 			backupStore.On("GetBackupItemOperations", test.backup.Name).Return(test.backupOperations, nil)
 			backupStore.On("GetBackupContents", mock.Anything).Return(io.NopCloser(bytes.NewReader([]byte("hello world"))), nil)

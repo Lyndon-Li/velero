@@ -26,13 +26,13 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	veleroclient "github.com/vmware-tanzu/velero/pkg/client"
-	clientset "github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	"github.com/vmware-tanzu/velero/pkg/repository"
@@ -50,10 +50,7 @@ type backupper struct {
 	ctx          context.Context
 	repoLocker   *repository.RepoLocker
 	repoEnsurer  *repository.Ensurer
-	veleroClient clientset.Interface
-	pvcClient    corev1client.PersistentVolumeClaimsGetter
-	pvClient     corev1client.PersistentVolumesGetter
-	podClient    corev1client.PodsGetter
+	crClient     ctrlclient.Client
 	uploaderType string
 
 	results     map[string]chan *velerov1api.PodVolumeBackup
@@ -103,31 +100,30 @@ func newBackupper(
 	ctx context.Context,
 	repoLocker *repository.RepoLocker,
 	repoEnsurer *repository.Ensurer,
-	podVolumeBackupInformer cache.SharedIndexInformer,
-	veleroClient clientset.Interface,
-	pvcClient corev1client.PersistentVolumeClaimsGetter,
-	pvClient corev1client.PersistentVolumesGetter,
-	podClient corev1client.PodsGetter,
+	pvbInformer ctrlcache.Informer,
+	crClient ctrlclient.Client,
 	uploaderType string,
+	backup *velerov1api.Backup,
 	log logrus.FieldLogger,
 ) *backupper {
 	b := &backupper{
 		ctx:          ctx,
 		repoLocker:   repoLocker,
 		repoEnsurer:  repoEnsurer,
-		veleroClient: veleroClient,
-		pvcClient:    pvcClient,
-		pvClient:     pvClient,
-		podClient:    podClient,
+		crClient:     crClient,
 		uploaderType: uploaderType,
 
 		results: make(map[string]chan *velerov1api.PodVolumeBackup),
 	}
 
-	podVolumeBackupInformer.AddEventHandler(
+	pvbInformer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(_, obj interface{}) {
 				pvb := obj.(*velerov1api.PodVolumeBackup)
+
+				if pvb.GetLabels()[velerov1api.BackupUIDLabel] != string(backup.UID) {
+					return
+				}
 
 				if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseCompleted || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseFailed {
 					b.resultsLock.Lock()
@@ -153,7 +149,8 @@ func resultsKey(ns, name string) string {
 
 func (b *backupper) getMatchAction(resPolicies *resourcepolicies.Policies, pvc *corev1api.PersistentVolumeClaim, volume *corev1api.Volume) (*resourcepolicies.Action, error) {
 	if pvc != nil {
-		pv, err := b.pvClient.PersistentVolumes().Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
+		pv := new(corev1api.PersistentVolume)
+		err := b.crClient.Get(context.TODO(), ctrlclient.ObjectKey{Name: pvc.Spec.VolumeName}, pv)
 		if err != nil {
 			return nil, errors.Wrapf(err, "error getting pv for pvc %s", pvc.Spec.VolumeName)
 		}
@@ -173,7 +170,32 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 	}
 	log.Infof("pod %s/%s has volumes to backup: %v", pod.Namespace, pod.Name, volumesToBackup)
 
-	err := nodeagent.IsRunningInNode(b.ctx, backup.Namespace, pod.Spec.NodeName, b.podClient)
+	var (
+		pvcSummary = NewPVCBackupSummary()
+		podVolumes = make(map[string]corev1api.Volume)
+		errs       = []error{}
+	)
+
+	// put the pod's volumes and the PVC associated in maps for efficient lookup below
+	for _, podVolume := range pod.Spec.Volumes {
+		podVolumes[podVolume.Name] = podVolume
+		if podVolume.PersistentVolumeClaim != nil {
+			pvc := new(corev1api.PersistentVolumeClaim)
+			err := b.crClient.Get(context.TODO(), ctrlclient.ObjectKey{Namespace: pod.Namespace, Name: podVolume.PersistentVolumeClaim.ClaimName}, pvc)
+			if err != nil {
+				errs = append(errs, errors.Wrap(err, "error getting persistent volume claim for volume"))
+				continue
+			}
+			pvcSummary.pvcMap[podVolume.Name] = pvc
+		}
+	}
+
+	if err := kube.IsPodRunning(pod); err != nil {
+		skipAllPodVolumes(pod, volumesToBackup, err, pvcSummary, log)
+		return nil, pvcSummary, nil
+	}
+
+	err := nodeagent.IsRunningInNode(b.ctx, backup.Namespace, pod.Spec.NodeName, b.crClient)
 	if err != nil {
 		return nil, nil, []error{err}
 	}
@@ -201,35 +223,10 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 	b.resultsLock.Unlock()
 
 	var (
-		errs               []error
 		podVolumeBackups   []*velerov1api.PodVolumeBackup
-		podVolumes         = make(map[string]corev1api.Volume)
 		mountedPodVolumes  = sets.String{}
 		attachedPodDevices = sets.String{}
 	)
-	pvcSummary := NewPVCBackupSummary()
-
-	// put the pod's volumes and the PVC associated in maps for efficient lookup below
-	for _, podVolume := range pod.Spec.Volumes {
-		podVolumes[podVolume.Name] = podVolume
-		if podVolume.PersistentVolumeClaim != nil {
-			pvc, err := b.pvcClient.PersistentVolumeClaims(pod.Namespace).Get(context.TODO(), podVolume.PersistentVolumeClaim.ClaimName, metav1.GetOptions{})
-			if err != nil {
-				errs = append(errs, errors.Wrap(err, "error getting persistent volume claim for volume"))
-				continue
-			}
-			pvcSummary.pvcMap[podVolume.Name] = pvc
-		}
-	}
-
-	if err := kube.IsPodRunning(pod); err != nil {
-		for _, volumeName := range volumesToBackup {
-			err := errors.Wrapf(err, "backup for volume %s is skipped", volumeName)
-			log.WithError(err).Warn("Skip pod volume")
-			pvcSummary.addSkipped(volumeName, fmt.Sprintf("the pod the PVC is mounted to, %s/%s, is not running", pod.Namespace, pod.Name))
-		}
-		return nil, pvcSummary, nil
-	}
 
 	for _, container := range pod.Spec.Containers {
 		for _, volumeMount := range container.VolumeMounts {
@@ -263,7 +260,7 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 
 		// hostPath volumes are not supported because they're not mounted into /var/lib/kubelet/pods, so our
 		// daemonset pod has no way to access their data.
-		isHostPath, err := isHostPathVolume(&volume, pvc, b.pvClient.PersistentVolumes())
+		isHostPath, err := isHostPathVolume(&volume, pvc, b.crClient)
 		if err != nil {
 			errs = append(errs, errors.Wrap(err, "error checking if volume is a hostPath volume"))
 			continue
@@ -303,11 +300,7 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 		}
 
 		volumeBackup := newPodVolumeBackup(backup, pod, volume, repoIdentifier, b.uploaderType, pvc)
-		// TODO: once backupper is refactored to use controller-runtime, just pass client instead of anonymous func
-		if err := veleroclient.CreateRetryGenerateNameWithFunc(volumeBackup, func() error {
-			_, err := b.veleroClient.VeleroV1().PodVolumeBackups(volumeBackup.Namespace).Create(context.TODO(), volumeBackup, metav1.CreateOptions{})
-			return err
-		}); err != nil {
+		if err := veleroclient.CreateRetryGenerateName(b.crClient, b.ctx, volumeBackup); err != nil {
 			errs = append(errs, err)
 			continue
 		}
@@ -339,13 +332,16 @@ ForEachVolume:
 	return podVolumeBackups, pvcSummary, errs
 }
 
-type pvGetter interface {
-	Get(ctx context.Context, name string, opts metav1.GetOptions) (*corev1api.PersistentVolume, error)
+func skipAllPodVolumes(pod *corev1api.Pod, volumesToBackup []string, err error, pvcSummary *PVCBackupSummary, log logrus.FieldLogger) {
+	for _, volumeName := range volumesToBackup {
+		log.WithError(err).Warnf("Skip pod volume %s", volumeName)
+		pvcSummary.addSkipped(volumeName, fmt.Sprintf("encountered a problem with backing up the PVC of pod %s/%s: %v", pod.Namespace, pod.Name, err))
+	}
 }
 
 // isHostPathVolume returns true if the volume is either a hostPath pod volume or a persistent
 // volume claim on a hostPath persistent volume, or false otherwise.
-func isHostPathVolume(volume *corev1api.Volume, pvc *corev1api.PersistentVolumeClaim, pvGetter pvGetter) (bool, error) {
+func isHostPathVolume(volume *corev1api.Volume, pvc *corev1api.PersistentVolumeClaim, crClient ctrlclient.Client) (bool, error) {
 	if volume.HostPath != nil {
 		return true, nil
 	}
@@ -354,7 +350,8 @@ func isHostPathVolume(volume *corev1api.Volume, pvc *corev1api.PersistentVolumeC
 		return false, nil
 	}
 
-	pv, err := pvGetter.Get(context.TODO(), pvc.Spec.VolumeName, metav1.GetOptions{})
+	pv := new(corev1api.PersistentVolume)
+	err := crClient.Get(context.TODO(), ctrlclient.ObjectKey{Name: pvc.Spec.VolumeName}, pv)
 	if err != nil {
 		return false, errors.WithStack(err)
 	}
@@ -401,6 +398,7 @@ func newPodVolumeBackup(backup *velerov1api.Backup, pod *corev1api.Pod, volume c
 			BackupStorageLocation: backup.Spec.StorageLocation,
 			RepoIdentifier:        repoIdentifier,
 			UploaderType:          uploaderType,
+			UploaderConfig:        backup.Spec.UploaderConfig,
 		},
 	}
 
@@ -420,8 +418,4 @@ func newPodVolumeBackup(backup *velerov1api.Backup, pod *corev1api.Pod, volume c
 	}
 
 	return pvb
-}
-
-func errorOnly(_ interface{}, err error) error {
-	return err
 }

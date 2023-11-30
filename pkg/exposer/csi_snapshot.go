@@ -138,6 +138,13 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 
 	curLog.WithField("vs name", volumeSnapshot.Name).Infof("VS is deleted in namespace %s", volumeSnapshot.Namespace)
 
+	err = csi.RemoveVSCProtect(ctx, e.csiSnapshotClient, vsc.Name, csiExposeParam.ExposeTimeout)
+	if err != nil {
+		return errors.Wrap(err, "error to remove protect from volume snapshot content")
+	}
+
+	curLog.WithField("vsc name", vsc.Name).Infof("Removed protect from VSC")
+
 	err = csi.EnsureDeleteVSC(ctx, e.csiSnapshotClient, vsc.Name, csiExposeParam.OperationTimeout)
 	if err != nil {
 		return errors.Wrap(err, "error to delete volume snapshot content")
@@ -208,6 +215,7 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 
 	backupPodName := ownerObject.Name
 	backupPVCName := ownerObject.Name
+	volumeName := string(ownerObject.UID)
 	backupVSCName := ownerObject.Name
 
 	curLog := e.log.WithFields(logrus.Fields{
@@ -237,6 +245,19 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 
 	curLog.WithField("backup pvc", backupPVCName).Info("Backup PVC is bound")
 
+	i := 0
+	for i = 0; i < len(pod.Spec.Volumes); i++ {
+		if pod.Spec.Volumes[i].Name == volumeName {
+			break
+		}
+	}
+
+	if i == len(pod.Spec.Volumes) {
+		return nil, errors.Errorf("backup pod %s doesn't have the expected backup volume", pod.Name)
+	}
+
+	curLog.WithField("pod", pod.Name).Infof("Backup volume is found in pod at index %v", i)
+
 	retainedSnapshot := ""
 	if exposeWaitParam.RetainSnapshot {
 		if _, err := e.csiSnapshotClient.VolumeSnapshotContents().Get(ctx, backupVSCName, metav1.GetOptions{}); err != nil {
@@ -249,7 +270,7 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 	curLog.WithField("retained snapshot", retainedSnapshot).Info("Retained snapshot is resolved")
 
 	return &ExposeResult{
-		ByPod:            ExposeByPod{HostingPod: pod, VolumeName: pod.Spec.Volumes[0].Name},
+		ByPod:            ExposeByPod{HostingPod: pod, VolumeName: volumeName},
 		RetainedSnapshot: retainedSnapshot,
 	}, nil
 }

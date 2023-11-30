@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"sort"
 
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
+	corev1api "k8s.io/api/core/v1"
 
 	"github.com/vmware-tanzu/velero/internal/hook"
 	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
@@ -51,10 +51,19 @@ type Request struct {
 	VolumeSnapshots           []*volume.Snapshot
 	PodVolumeBackups          []*velerov1api.PodVolumeBackup
 	BackedUpItems             map[itemKey]struct{}
-	CSISnapshots              []snapshotv1api.VolumeSnapshot
 	itemOperationsList        *[]*itemoperation.BackupOperation
 	ResPolicies               *resourcepolicies.Policies
 	SkippedPVTracker          *skipPVTracker
+	// A map contains the backup-included PV detail content.
+	// The key is PV name or PVC name(The format is PVC-namespace/PVC-name)
+	PVMap       map[string]PvcPvInfo
+	VolumeInfos volume.VolumeInfos
+}
+
+type PvcPvInfo struct {
+	PVCName      string
+	PVCNamespace string
+	PV           corev1api.PersistentVolume
 }
 
 // GetItemOperationsList returns ItemOperationsList, initializing it if necessary

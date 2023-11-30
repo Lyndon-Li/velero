@@ -10,6 +10,14 @@ type SkippedPV struct {
 	Reasons []PVSkipReason `json:"reasons"`
 }
 
+func (s *SkippedPV) SerializeSkipReasons() string {
+	ret := ""
+	for _, reason := range s.Reasons {
+		ret = ret + reason.Approach + ": " + reason.Reason + ";"
+	}
+	return ret
+}
+
 type PVSkipReason struct {
 	Approach string `json:"approach"`
 	Reason   string `json:"reason"`
@@ -21,6 +29,8 @@ type skipPVTracker struct {
 	// pvs is a map of name of the pv to the list of reasons why it is skipped.
 	// The reasons are stored in a map each key of the map is the backup approach, each approach can have one reason
 	pvs map[string]map[string]string
+	// includedPVs is a set of pv to be included in the backup, the element in this set should not be in the "pvs" map
+	includedPVs map[string]struct{}
 }
 
 const (
@@ -32,8 +42,9 @@ const (
 
 func NewSkipPVTracker() *skipPVTracker {
 	return &skipPVTracker{
-		RWMutex: &sync.RWMutex{},
-		pvs:     make(map[string]map[string]string),
+		RWMutex:     &sync.RWMutex{},
+		pvs:         make(map[string]map[string]string),
+		includedPVs: make(map[string]struct{}),
 	}
 }
 
@@ -44,9 +55,12 @@ func (pt *skipPVTracker) Track(name, approach, reason string) {
 	if name == "" || reason == "" {
 		return
 	}
+	if _, ok := pt.includedPVs[name]; ok {
+		return
+	}
 	skipReasons := pt.pvs[name]
 	if skipReasons == nil {
-		skipReasons = make(map[string]string, 0)
+		skipReasons = make(map[string]string)
 		pt.pvs[name] = skipReasons
 	}
 	if approach == "" {
@@ -56,9 +70,12 @@ func (pt *skipPVTracker) Track(name, approach, reason string) {
 }
 
 // Untrack removes the pvc with the specified namespace and name.
+// This func should be called when the PV is taken for snapshot, regardless native snapshot, CSI snapshot or fsb backup
+// therefore, in one backup processed if a PV is Untracked once, it will not be tracked again.
 func (pt *skipPVTracker) Untrack(name string) {
 	pt.Lock()
 	defer pt.Unlock()
+	pt.includedPVs[name] = struct{}{}
 	delete(pt.pvs, name)
 }
 

@@ -41,6 +41,7 @@ import (
 // backupFinalizerReconciler reconciles a Backup object
 type backupFinalizerReconciler struct {
 	client            kbclient.Client
+	globalCRClient    kbclient.Client
 	clock             clocks.WithTickerAndDelayedExecution
 	backupper         pkgbackup.Backupper
 	newPluginManager  func(logrus.FieldLogger) clientmgmt.Manager
@@ -53,6 +54,7 @@ type backupFinalizerReconciler struct {
 // NewBackupFinalizerReconciler initializes and returns backupFinalizerReconciler struct.
 func NewBackupFinalizerReconciler(
 	client kbclient.Client,
+	globalCRClient kbclient.Client,
 	clock clocks.WithTickerAndDelayedExecution,
 	backupper pkgbackup.Backupper,
 	newPluginManager func(logrus.FieldLogger) clientmgmt.Manager,
@@ -63,6 +65,7 @@ func NewBackupFinalizerReconciler(
 ) *backupFinalizerReconciler {
 	return &backupFinalizerReconciler{
 		client:            client,
+		globalCRClient:    globalCRClient,
 		clock:             clock,
 		backupper:         backupper,
 		newPluginManager:  newPluginManager,
@@ -187,6 +190,7 @@ func (r *backupFinalizerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	backup.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
 	recordBackupMetrics(log, backup, outBackupFile, r.metrics, true)
 
+	pkgbackup.UpdateBackupCSISnapshotsStatus(r.client, r.globalCRClient, backup, log)
 	// update backup metadata in object store
 	backupJSON := new(bytes.Buffer)
 	if err := encode.To(backup, "json", backupJSON); err != nil {

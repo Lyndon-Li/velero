@@ -61,6 +61,9 @@ type DataUploadSpec struct {
 	// before returning error as timeout.
 	OperationTimeout metav1.Duration `json:"operationTimeout"`
 
+	// UploaderConfig specifies the configuration for the uploader.
+	UploaderConfig shared.UploaderConfig `json:"uploaderConfig,omitempty"`
+
 	// RetainSnapshot specifies whether to retain the snapshot after backup completes.
 	// +optional
 	RetainSnapshot bool `json:"retainSnapshot,omitempty"`
@@ -169,6 +172,7 @@ type DataUploadStatus struct {
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time duration since this DataUpload was created"
 // +kubebuilder:printcolumn:name="Node",type="string",JSONPath=".status.node",description="Name of the node where the DataUpload is processed"
 
+// DataUpload acts as the protocol between data mover plugins and data mover controller for the datamover backup operation
 type DataUpload struct {
 	metav1.TypeMeta `json:",inline"`
 
