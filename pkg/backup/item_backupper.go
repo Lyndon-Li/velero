@@ -384,8 +384,8 @@ func (ib *itemBackupper) executeActions(
 			// snapshot was skipped by CSI plugin
 			ib.trackSkippedPV(obj, groupResource, csiSnapshotApproach, "skipped b/c it's not a CSI volume", log)
 			delete(u.GetAnnotations(), skippedNoCSIPVAnnotation)
-		} else if actionName == csiBIAPluginName || actionName == vsphereBIAPluginName {
-			// the snapshot has been taken
+		} else if (actionName == csiBIAPluginName || actionName == vsphereBIAPluginName) && !boolptr.IsSetToFalse(ib.backupRequest.Backup.Spec.SnapshotVolumes) {
+			// the snapshot has been taken by the BIA plugin
 			ib.unTrackSkippedPV(obj, groupResource, log)
 		}
 		mustInclude := u.GetAnnotations()[mustIncludeAdditionalItemAnnotation] == "true" || finalize
@@ -699,28 +699,15 @@ func (ib *itemBackupper) addVolumeInfo(obj runtime.Unstructured, log logrus.Fiel
 		return err
 	}
 
-	if ib.backupRequest.PVMap == nil {
-		ib.backupRequest.PVMap = make(map[string]PvcPvInfo)
-	}
-
 	pvcName := ""
 	pvcNamespace := ""
 	if pv.Spec.ClaimRef != nil {
 		pvcName = pv.Spec.ClaimRef.Name
 		pvcNamespace = pv.Spec.ClaimRef.Namespace
-
-		ib.backupRequest.PVMap[pvcNamespace+"/"+pvcName] = PvcPvInfo{
-			PVCName:      pvcName,
-			PVCNamespace: pvcNamespace,
-			PV:           *pv,
-		}
 	}
 
-	ib.backupRequest.PVMap[pv.Name] = PvcPvInfo{
-		PVCName:      pvcName,
-		PVCNamespace: pvcNamespace,
-		PV:           *pv,
-	}
+	ib.backupRequest.VolumesInformation.InsertPVMap(*pv, pvcName, pvcNamespace)
+
 	return nil
 }
 
