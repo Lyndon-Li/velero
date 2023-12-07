@@ -30,9 +30,18 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 )
 
-// Common function to update the status of CSI snapshots
-// returns VolumeSnapshot, VolumeSnapshotContent, VolumeSnapshotClasses referenced
-func UpdateBackupCSISnapshotsStatus(client kbclient.Client, globalCRClient kbclient.Client, backup *velerov1api.Backup, backupLog logrus.FieldLogger) (volumeSnapshots []snapshotv1api.VolumeSnapshot, volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent, volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass) {
+// GetBackupCSIResources is used to get CSI snapshot related resources.
+// Returns VolumeSnapshot, VolumeSnapshotContent, VolumeSnapshotClasses referenced
+func GetBackupCSIResources(
+	client kbclient.Client,
+	globalCRClient kbclient.Client,
+	backup *velerov1api.Backup,
+	backupLog logrus.FieldLogger,
+) (
+	volumeSnapshots []snapshotv1api.VolumeSnapshot,
+	volumeSnapshotContents []snapshotv1api.VolumeSnapshotContent,
+	volumeSnapshotClasses []snapshotv1api.VolumeSnapshotClass,
+) {
 	if features.IsEnabled(velerov1api.CSIFeatureFlag) {
 		selector := label.NewSelectorForBackup(backup.Name)
 		vscList := &snapshotv1api.VolumeSnapshotContentList{}
@@ -66,14 +75,11 @@ func UpdateBackupCSISnapshotsStatus(client kbclient.Client, globalCRClient kbcli
 				}
 			}
 		}
-		backup.Status.CSIVolumeSnapshotsAttempted = len(volumeSnapshots)
-		csiVolumeSnapshotsCompleted := 0
-		for _, vs := range volumeSnapshots {
-			if vs.Status != nil && boolptr.IsSetToTrue(vs.Status.ReadyToUse) {
-				csiVolumeSnapshotsCompleted++
-			}
+
+		if boolptr.IsSetToTrue(backup.Spec.SnapshotMoveData) {
+			backup.Status.CSIVolumeSnapshotsAttempted = len(volumeSnapshots)
 		}
-		backup.Status.CSIVolumeSnapshotsCompleted = csiVolumeSnapshotsCompleted
 	}
+
 	return volumeSnapshots, volumeSnapshotContents, volumeSnapshotClasses
 }
