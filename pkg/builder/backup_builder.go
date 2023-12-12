@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 
 	"github.com/sirupsen/logrus"
@@ -312,5 +313,11 @@ func (b *BackupBuilder) ParallelFilesUpload(parallel int) *BackupBuilder {
 // WithStatus sets the Backup's status.
 func (b *BackupBuilder) WithStatus(status velerov1api.BackupStatus) *BackupBuilder {
 	b.object.Status = status
+	return b
+}
+
+// WithStatus sets the Backup's status.
+func (b *BackupBuilder) RepoLayout(layout shared.RepoLayout) *BackupBuilder {
+	b.RepoLayout(layout)
 	return b
 }

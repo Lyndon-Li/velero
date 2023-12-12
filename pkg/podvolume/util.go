@@ -22,6 +22,7 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
@@ -46,6 +47,7 @@ const (
 type volumeBackupInfo struct {
 	snapshotID     string
 	uploaderType   string
+	repoLayout     string
 	repositoryType string
 }
 
@@ -101,6 +103,7 @@ func getVolumeBackupInfoForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, 
 		volumes[pvb.Spec.Volume] = volumeBackupInfo{
 			snapshotID:     pvb.Status.SnapshotID,
 			uploaderType:   getUploaderTypeOrDefault(pvb.Spec.UploaderType),
+			repoLayout:     string(pvb.Spec.RepoLayout),
 			repositoryType: getRepositoryType(pvb.Spec.UploaderType),
 		}
 	}
@@ -115,7 +118,7 @@ func getVolumeBackupInfoForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, 
 	}
 
 	for k, v := range fromAnnntation {
-		volumes[k] = volumeBackupInfo{v, uploader.ResticType, velerov1api.BackupRepositoryTypeRestic}
+		volumes[k] = volumeBackupInfo{v, uploader.ResticType, shared.RepoLayoutNamespaced, velerov1api.BackupRepositoryTypeRestic}
 	}
 
 	return volumes

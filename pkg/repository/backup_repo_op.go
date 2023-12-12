@@ -25,12 +25,14 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	shared "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/label"
 )
 
 // A BackupRepositoryKey uniquely identify a backup repository
 type BackupRepositoryKey struct {
+	RepoLayout      string
 	VolumeNamespace string
 	BackupLocation  string
 	RepositoryType  string
@@ -92,16 +94,24 @@ func GetBackupRepository(ctx context.Context, cli client.Client, namespace strin
 }
 
 func NewBackupRepository(namespace string, key BackupRepositoryKey) *velerov1api.BackupRepository {
+	generatedName := ""
+	if key.RepoLayout == shared.RepoLayoutNamespaced {
+		generatedName = fmt.Sprintf("%s-%s-%s-", key.VolumeNamespace, key.BackupLocation, key.RepositoryType)
+	} else {
+		generatedName = fmt.Sprintf("%s-%s-", key.BackupLocation, key.RepositoryType)
+	}
+
 	return &velerov1api.BackupRepository{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:    namespace,
-			GenerateName: fmt.Sprintf("%s-%s-%s-", key.VolumeNamespace, key.BackupLocation, key.RepositoryType),
+			GenerateName: generatedName,
 			Labels:       repoLabelsFromKey(key),
 		},
 		Spec: velerov1api.BackupRepositorySpec{
 			VolumeNamespace:       key.VolumeNamespace,
 			BackupStorageLocation: key.BackupLocation,
 			RepositoryType:        key.RepositoryType,
+			Layout:                shared.RepoLayout(key.RepoLayout),
 		},
 	}
 }

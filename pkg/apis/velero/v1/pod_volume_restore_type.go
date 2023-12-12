@@ -54,6 +54,11 @@ type PodVolumeRestoreSpec struct {
 	// +optional
 	// +nullable
 	UploaderSettings map[string]string `json:"uploaderSettings,omitempty"`
+
+	// RepoLayout specifies the layout of backup repository in the backup storage.
+	// If RepoLayout is not specified, the legacy layout (namespaced) is used.
+	// +optional
+	RepoLayout shared.RepoLayout `json:"repoLayout,omitempty"`
 }
 
 // PodVolumeRestorePhase represents the lifecycle phase of a PodVolumeRestore.

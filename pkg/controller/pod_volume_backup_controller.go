@@ -158,7 +158,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	log.WithField("path", path.ByPath).Debugf("Found host path")
 
-	if err := fsBackup.Init(ctx, pvb.Spec.BackupStorageLocation, pvb.Spec.Pod.Namespace, pvb.Spec.UploaderType,
+	if err := fsBackup.Init(ctx, string(pvb.Spec.RepoLayout), pvb.Spec.BackupStorageLocation, pvb.Spec.Pod.Namespace, pvb.Spec.UploaderType,
 		podvolume.GetPvbRepositoryType(&pvb), pvb.Spec.RepoIdentifier, r.repositoryEnsurer, r.credentialGetter); err != nil {
 		return r.errorOut(ctx, &pvb, err, "error to initialize data path", log)
 	}

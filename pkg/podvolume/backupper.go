@@ -207,7 +207,7 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 		return nil, nil, []error{err}
 	}
 
-	repo, err := b.repoEnsurer.EnsureRepo(b.ctx, backup.Namespace, pod.Namespace, backup.Spec.StorageLocation, repositoryType)
+	repo, err := b.repoEnsurer.EnsureRepo(b.ctx, backup.Namespace, string(backup.Spec.RepoLayout), pod.Namespace, backup.Spec.StorageLocation, repositoryType)
 	if err != nil {
 		return nil, nil, []error{err}
 	}

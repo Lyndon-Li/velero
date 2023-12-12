@@ -129,7 +129,12 @@ func (r *restorer) RestorePodVolumes(data RestoreData) []error {
 		return []error{err}
 	}
 
-	repo, err := r.repoEnsurer.EnsureRepo(r.ctx, data.Restore.Namespace, data.SourceNamespace, data.BackupLocation, repositoryType)
+	repoLayout, err := getVolumesRepoLayout(volumesToRestore)
+	if err != nil {
+		return []error{err}
+	}
+
+	repo, err := r.repoEnsurer.EnsureRepo(r.ctx, data.Restore.Namespace, repoLayout, data.SourceNamespace, data.BackupLocation, repositoryType)
 	if err != nil {
 		return []error{err}
 	}
@@ -312,10 +317,34 @@ func getVolumesRepositoryType(volumes map[string]volumeBackupInfo) (string, erro
 		if repositoryType == "" {
 			repositoryType = backupInfo.repositoryType
 		} else if repositoryType != backupInfo.repositoryType {
-			return "", errors.Errorf("multiple repository type in one backup, current type %s, differential one [type %s, snapshot ID %s, uploader %s]",
-				repositoryType, backupInfo.repositoryType, backupInfo.snapshotID, backupInfo.uploaderType)
+			return "", errors.Errorf("multiple repository type in one backup, current type %s, differential one [type %s, layout %s, snapshot ID %s, uploader %s]",
+				repositoryType, backupInfo.repositoryType, backupInfo.repoLayout, backupInfo.snapshotID, backupInfo.uploaderType)
 		}
 	}
 
 	return repositoryType, nil
+}
+
+func getVolumesRepoLayout(volumes map[string]volumeBackupInfo) (string, error) {
+	if len(volumes) == 0 {
+		return "", errors.New("empty volume list")
+	}
+
+	// the podVolumeBackups list come from one backup. In one backup, it is impossible that volumes are
+	// backed up by different uploaders or to different repositories. Asserting this ensures one repo only,
+	// which will simplify the following logics
+	repoLayout := ""
+	for _, backupInfo := range volumes {
+		repoLayout = backupInfo.repoLayout
+		break
+	}
+
+	for _, backupInfo := range volumes {
+		if repoLayout != backupInfo.repoLayout {
+			return "", errors.Errorf("multiple repository layout in one backup, current layout %s, differential one [layout %s, repository Type %s, snapshot ID %s, uploader %s]",
+				repoLayout, backupInfo.repoLayout, backupInfo.repositoryType, backupInfo.snapshotID, backupInfo.uploaderType)
+		}
+	}
+
+	return repoLayout, nil
 }

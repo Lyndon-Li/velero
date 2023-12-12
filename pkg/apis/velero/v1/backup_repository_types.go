@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -41,6 +42,8 @@ type BackupRepositorySpec struct {
 
 	// MaintenanceFrequency is how often maintenance should be run.
 	MaintenanceFrequency metav1.Duration `json:"maintenanceFrequency"`
+
+	Layout shared.RepoLayout `json:"layout,omitempty"`
 }
 
 // BackupRepositoryPhase represents the lifecycle phase of a BackupRepository.

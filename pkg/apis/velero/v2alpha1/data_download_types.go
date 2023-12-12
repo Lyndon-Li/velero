@@ -54,6 +54,11 @@ type DataDownloadSpec struct {
 	// OperationTimeout specifies the time used to wait internal operations,
 	// before returning error as timeout.
 	OperationTimeout metav1.Duration `json:"operationTimeout"`
+
+	// RepoLayout specifies the layout of backup repository in the backup storage.
+	// If RepoLayout is not specified, the legacy layout (namespaced) is used.
+	// +optional
+	RepoLayout shared.RepoLayout `json:"repoLayout,omitempty"`
 }
 
 // TargetVolumeSpec is the specification for a target PVC.

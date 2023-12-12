@@ -48,6 +48,8 @@ type SnapshotIdentifier struct {
 	// RepositoryType is the type of the repository where the
 	// snapshot is stored
 	RepositoryType string `json:"repositoryType"`
+
+	RepoLayout string `json:"repoLayout"`
 }
 
 // Manager manages backup repositories.
@@ -196,7 +198,7 @@ func (m *manager) UnlockRepo(repo *velerov1api.BackupRepository) error {
 }
 
 func (m *manager) Forget(ctx context.Context, snapshot SnapshotIdentifier) error {
-	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
+	repo, err := m.repoEnsurer.EnsureRepo(ctx, m.namespace, snapshot.RepoLayout, snapshot.VolumeNamespace, snapshot.BackupStorageLocation, snapshot.RepositoryType)
 	if err != nil {
 		return err
 	}

@@ -61,7 +61,7 @@ func newFileSystemBR(jobName string, requestorType string, client client.Client,
 	return fs
 }
 
-func (fs *fileSystemBR) Init(ctx context.Context, bslName string, sourceNamespace string, uploaderType string, repositoryType string,
+func (fs *fileSystemBR) Init(ctx context.Context, repoLayout string, bslName string, sourceNamespace string, uploaderType string, repositoryType string,
 	repoIdentifier string, repositoryEnsurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter) error {
 	var err error
 	defer func() {
@@ -82,7 +82,7 @@ func (fs *fileSystemBR) Init(ctx context.Context, bslName string, sourceNamespac
 
 	fs.backupLocation = backupLocation
 
-	fs.backupRepo, err = repositoryEnsurer.EnsureRepo(ctx, fs.namespace, sourceNamespace, bslName, repositoryType)
+	fs.backupRepo, err = repositoryEnsurer.EnsureRepo(ctx, fs.namespace, repoLayout, sourceNamespace, bslName, repositoryType)
 	if err != nil {
 		return errors.Wrapf(err, "error to ensure backup repository %s-%s-%s", bslName, sourceNamespace, repositoryType)
 	}

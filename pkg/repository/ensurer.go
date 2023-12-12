@@ -27,6 +27,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	shared "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	veleroclient "github.com/vmware-tanzu/velero/pkg/client"
 )
@@ -52,14 +53,18 @@ func NewEnsurer(repoClient client.Client, log logrus.FieldLogger, resourceTimeou
 	}
 }
 
-func (r *Ensurer) EnsureRepo(ctx context.Context, namespace, volumeNamespace, backupLocation, repositoryType string) (*velerov1api.BackupRepository, error) {
-	if volumeNamespace == "" || backupLocation == "" || repositoryType == "" {
+func (r *Ensurer) EnsureRepo(ctx context.Context, namespace string, layout string, volumeNamespace, backupLocation, repositoryType string) (*velerov1api.BackupRepository, error) {
+	if backupLocation == "" || repositoryType == "" {
 		return nil, errors.Errorf("wrong parameters, namespace %q, backup storage location %q, repository type %q", volumeNamespace, backupLocation, repositoryType)
 	}
 
-	backupRepoKey := BackupRepositoryKey{volumeNamespace, backupLocation, repositoryType}
+	if layout == shared.RepoLayoutNamespaced && volumeNamespace == "" {
+		return nil, errors.New("wrong parameters, volumeNamespace is empty")
+	}
 
-	log := r.log.WithField("volumeNamespace", volumeNamespace).WithField("backupLocation", backupLocation).WithField("repositoryType", repositoryType)
+	backupRepoKey := BackupRepositoryKey{layout, volumeNamespace, backupLocation, repositoryType}
+
+	log := r.log.WithField("repoLayout", layout).WithField("volumeNamespace", volumeNamespace).WithField("backupLocation", backupLocation).WithField("repositoryType", repositoryType)
 
 	// It's only safe to have one instance of this method executing concurrently for a
 	// given BackupRepositoryKey, so synchronize based on that. It's fine

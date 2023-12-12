@@ -17,6 +17,7 @@ limitations under the License.
 package v1
 
 import (
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -180,6 +181,11 @@ type BackupSpec struct {
 	// +optional
 	// +nullable
 	UploaderConfig *UploaderConfigForBackup `json:"uploaderConfig,omitempty"`
+
+	// RepoLayout specifies the layout of backup repository in the backup storage.
+	// If RepoLayout is not specified, the legacy layout (namespaced) is used.
+	// +optional
+	RepoLayout shared.RepoLayout `json:"repoLayout,omitempty"`
 }
 
 // UploaderConfigForBackup defines the configuration for the uploader when doing backup.
