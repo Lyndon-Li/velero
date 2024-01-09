@@ -32,6 +32,7 @@ import (
 )
 
 const testMaintenanceFrequency = 10 * time.Minute
+const testSnapshotGCFrequency = 10 * time.Minute
 
 func mockBackupRepoReconciler(t *testing.T, rr *velerov1api.BackupRepository, mockOn string, arg interface{}, ret interface{}) *BackupRepoReconciler {
 	mgr := &repomokes.Manager{}
@@ -43,7 +44,9 @@ func mockBackupRepoReconciler(t *testing.T, rr *velerov1api.BackupRepository, mo
 		velerotest.NewLogger(),
 		velerotest.NewFakeControllerRuntimeClient(t),
 		testMaintenanceFrequency,
+		testSnapshotGCFrequency,
 		mgr,
+		nil,
 	)
 }
 
@@ -55,6 +58,7 @@ func mockBackupRepositoryCR() *velerov1api.BackupRepository {
 		},
 		Spec: velerov1api.BackupRepositorySpec{
 			MaintenanceFrequency: metav1.Duration{Duration: testMaintenanceFrequency},
+			SnapshotGCFrequency:  metav1.Duration{Duration: testSnapshotGCFrequency},
 		},
 	}
 
@@ -154,6 +158,7 @@ func TestBackupRepoReconcile(t *testing.T) {
 				},
 				Spec: velerov1api.BackupRepositorySpec{
 					MaintenanceFrequency: metav1.Duration{Duration: testMaintenanceFrequency},
+					SnapshotGCFrequency:  metav1.Duration{Duration: testSnapshotGCFrequency},
 				},
 			},
 			expectNil: true,
@@ -167,6 +172,7 @@ func TestBackupRepoReconcile(t *testing.T) {
 				},
 				Spec: velerov1api.BackupRepositorySpec{
 					MaintenanceFrequency: metav1.Duration{Duration: testMaintenanceFrequency},
+					SnapshotGCFrequency:  metav1.Duration{Duration: testSnapshotGCFrequency},
 				},
 			},
 			expectNil: true,
@@ -180,6 +186,7 @@ func TestBackupRepoReconcile(t *testing.T) {
 				},
 				Spec: velerov1api.BackupRepositorySpec{
 					MaintenanceFrequency: metav1.Duration{Duration: testMaintenanceFrequency},
+					SnapshotGCFrequency:  metav1.Duration{Duration: testSnapshotGCFrequency},
 				},
 				Status: velerov1api.BackupRepositoryStatus{
 					Phase: velerov1api.BackupRepositoryPhaseNew,
@@ -244,7 +251,9 @@ func TestGetRepositoryMaintenanceFrequency(t *testing.T) {
 				velerotest.NewLogger(),
 				velerotest.NewFakeControllerRuntimeClient(t),
 				test.userDefinedFreq,
+				time.Duration(0),
 				&mgr,
+				nil,
 			)
 
 			freq := reconciler.getRepositoryMaintenanceFrequency(test.repo)
@@ -371,7 +380,7 @@ func TestNeedInvalidBackupRepo(t *testing.T) {
 				velerov1api.DefaultNamespace,
 				velerotest.NewLogger(),
 				velerotest.NewFakeControllerRuntimeClient(t),
-				time.Duration(0), nil)
+				time.Duration(0), time.Duration(0), nil, nil)
 
 			need := reconciler.needInvalidBackupRepo(test.oldBSL, test.newBSL)
 			assert.Equal(t, test.expect, need)

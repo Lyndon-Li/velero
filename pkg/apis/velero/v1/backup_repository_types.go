@@ -41,6 +41,9 @@ type BackupRepositorySpec struct {
 
 	// MaintenanceFrequency is how often maintenance should be run.
 	MaintenanceFrequency metav1.Duration `json:"maintenanceFrequency"`
+
+	// SnapshotGCFrequency is how often snapshot GC should be run.
+	SnapshotGCFrequency metav1.Duration `json:"snapshotGCFrequency"`
 }
 
 // BackupRepositoryPhase represents the lifecycle phase of a BackupRepository.
@@ -70,6 +73,11 @@ type BackupRepositoryStatus struct {
 	// +optional
 	// +nullable
 	LastMaintenanceTime *metav1.Time `json:"lastMaintenanceTime,omitempty"`
+
+	// LastSnapshotGCTime is the last time snapshot GC was run.
+	// +optional
+	// +nullable
+	LastSnapshotGCTime *metav1.Time `json:"lastSnapshotGCTime,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runtime-controller client,

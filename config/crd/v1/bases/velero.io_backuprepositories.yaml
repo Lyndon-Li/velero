@@ -59,6 +59,10 @@ spec:
                 description: ResticIdentifier is the full restic-compatible string
                   for identifying this repository.
                 type: string
+              snapshotGCFrequency:
+                description: SnapshotGCFrequency is how often snapshot GC should be
+                  run.
+                type: string
               volumeNamespace:
                 description: VolumeNamespace is the namespace this backup repository
                   contains pod volume backups for.
@@ -67,6 +71,7 @@ spec:
             - backupStorageLocation
             - maintenanceFrequency
             - resticIdentifier
+            - snapshotGCFrequency
             - volumeNamespace
             type: object
           status:
@@ -75,6 +80,11 @@ spec:
               lastMaintenanceTime:
                 description: LastMaintenanceTime is the last time maintenance was
                   run.
+                format: date-time
+                nullable: true
+                type: string
+              lastSnapshotGCTime:
+                description: LastSnapshotGCTime is the last time snapshot GC was run.
                 format: date-time
                 nullable: true
                 type: string

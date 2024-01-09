@@ -60,6 +60,10 @@ type Provider interface {
 		volMode uploader.PersistentVolumeMode,
 		uploaderConfig map[string]string,
 		updater uploader.ProgressUpdater) error
+	// GetType returns the type of this uploader
+	GetType() string
+	// GCSnapshots tells uploader to remove all the expired snapshots in the repo
+	GCSnapshots(ctx context.Context) error
 	// Close which will close related repository
 	Close(ctx context.Context) error
 }
@@ -89,4 +93,32 @@ func NewUploaderProvider(
 	} else {
 		return NewResticUploaderProvider(repoIdentifier, bsl, credGetter, repoKeySelector, log)
 	}
+}
+
+// NewUploaderProviders initialize all uploader providers that works with Unified Repo
+func NewUploaderProviders(
+	ctx context.Context,
+	requesterType string,
+	backupRepo *velerov1api.BackupRepository,
+	credGetter *credentials.CredentialGetter,
+	log logrus.FieldLogger,
+) ([]Provider, error) {
+	if requesterType == "" {
+		return nil, errors.New("requester type is empty")
+	}
+
+	if credGetter.FromFile == nil {
+		return nil, errors.New("uninitialized FileStore credential is not supported")
+	}
+
+	providers := []Provider{}
+
+	kopiaProvider, err := NewKopiaUploaderProvider(requesterType, ctx, credGetter, backupRepo, log)
+	if err != nil {
+		return nil, err
+	}
+
+	providers = append(providers, kopiaProvider)
+
+	return providers, nil
 }

@@ -19,9 +19,13 @@ package provider
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/kopia/kopia/snapshot"
+	"github.com/kopia/kopia/snapshot/policy"
 	"github.com/kopia/kopia/snapshot/snapshotfs"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -136,6 +140,7 @@ func (kp *kopiaProvider) RunBackup(
 	})
 	repoWriter := kopia.NewShimRepo(kp.bkRepo)
 	kpUploader := snapshotfs.NewUploader(repoWriter)
+	kpUploader.CheckpointInterval = time.Second * 10
 	progress := new(kopia.Progress)
 	progress.InitThrottle(backupProgressCheckInterval)
 	progress.Updater = updater
@@ -248,6 +253,39 @@ func (kp *kopiaProvider) RunRestore(
 	output := fmt.Sprintf("Kopia restore finished, restore size %d, file count %d", size, fileCount)
 
 	log.Info(output)
+
+	return nil
+}
+
+func (kp *kopiaProvider) GetType() string {
+	return uploader.KopiaType
+}
+
+func (kp *kopiaProvider) GCSnapshots(ctx context.Context) error {
+	repoWriter := kopia.NewShimRepo(kp.bkRepo)
+
+	sources, err := snapshot.ListSources(ctx, repoWriter)
+	if err != nil {
+		return errors.Wrap(err, "error to list sources")
+	}
+
+	sort.Slice(sources, func(i, j int) bool {
+		return sources[i].String() < sources[j].String()
+	})
+
+	for _, src := range sources {
+		deleted, err := policy.ApplyRetentionPolicy(ctx, repoWriter, src, true)
+		if err != nil {
+			return errors.Wrapf(err, "error applying retention policy to %v", src)
+		}
+
+		if len(deleted) == 0 {
+			kp.log.Infof("Nothing to delete for %v.", src)
+			continue
+		}
+
+		kp.log.Infof("Deleted %v snapshots of %v...", len(deleted), src)
+	}
 
 	return nil
 }

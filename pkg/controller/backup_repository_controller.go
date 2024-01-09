@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -34,16 +35,21 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
+	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	repoconfig "github.com/vmware-tanzu/velero/pkg/repository/config"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+
+	uploaderProvider "github.com/vmware-tanzu/velero/pkg/uploader/provider"
 )
 
 const (
-	repoSyncPeriod           = 5 * time.Minute
-	defaultMaintainFrequency = 7 * 24 * time.Hour
+	repoSyncPeriod                    = 5 * time.Minute
+	defaultMaintainFrequency          = 7 * 24 * time.Hour
+	defaultSnapshotGCFrequency        = time.Hour
+	repoCtlRequestor           string = "backup-repository-controller"
 )
 
 type BackupRepoReconciler struct {
@@ -52,18 +58,22 @@ type BackupRepoReconciler struct {
 	logger               logrus.FieldLogger
 	clock                clocks.WithTickerAndDelayedExecution
 	maintenanceFrequency time.Duration
+	snapshotGCFrequency  time.Duration
 	repositoryManager    repository.Manager
+	credGetter           *credentials.CredentialGetter
 }
 
 func NewBackupRepoReconciler(namespace string, logger logrus.FieldLogger, client client.Client,
-	maintenanceFrequency time.Duration, repositoryManager repository.Manager) *BackupRepoReconciler {
+	maintenanceFrequency time.Duration, snapshotGCFrequency time.Duration, repositoryManager repository.Manager, credGetter *credentials.CredentialGetter) *BackupRepoReconciler {
 	c := &BackupRepoReconciler{
 		client,
 		namespace,
 		logger,
 		clocks.RealClock{},
 		maintenanceFrequency,
+		snapshotGCFrequency,
 		repositoryManager,
+		credGetter,
 	}
 
 	return c
@@ -186,6 +196,10 @@ func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 	switch backupRepo.Status.Phase {
 	case velerov1api.BackupRepositoryPhaseReady:
+		if err := r.gcUploaderSnapshotsIfDue(ctx, backupRepo, log); err != nil {
+			return ctrl.Result{}, err
+		}
+
 		return ctrl.Result{}, r.runMaintenanceIfDue(ctx, backupRepo, log)
 	case velerov1api.BackupRepositoryPhaseNotReady:
 		return ctrl.Result{}, r.checkNotReadyRepo(ctx, backupRepo, log)
@@ -225,6 +239,10 @@ func (r *BackupRepoReconciler) initializeRepo(ctx context.Context, req *velerov1
 			if rr.Spec.MaintenanceFrequency.Duration <= 0 {
 				rr.Spec.MaintenanceFrequency = metav1.Duration{Duration: r.getRepositoryMaintenanceFrequency(req)}
 			}
+
+			if rr.Spec.SnapshotGCFrequency.Duration <= 0 {
+				rr.Spec.SnapshotGCFrequency = metav1.Duration{Duration: r.getSnapshotGCFrequency()}
+			}
 		})
 	}
 
@@ -232,8 +250,8 @@ func (r *BackupRepoReconciler) initializeRepo(ctx context.Context, req *velerov1
 	if err := r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
 		rr.Spec.ResticIdentifier = repoIdentifier
 
-		if rr.Spec.MaintenanceFrequency.Duration <= 0 {
-			rr.Spec.MaintenanceFrequency = metav1.Duration{Duration: r.getRepositoryMaintenanceFrequency(req)}
+		if rr.Spec.SnapshotGCFrequency.Duration <= 0 {
+			rr.Spec.SnapshotGCFrequency = metav1.Duration{Duration: r.getSnapshotGCFrequency()}
 		}
 	}); err != nil {
 		return err
@@ -264,6 +282,15 @@ func (r *BackupRepoReconciler) getRepositoryMaintenanceFrequency(req *velerov1ap
 	}
 
 	return frequency
+}
+
+func (r *BackupRepoReconciler) getSnapshotGCFrequency() time.Duration {
+	if r.snapshotGCFrequency > 0 {
+		r.logger.WithField("frequency", r.snapshotGCFrequency).Info("Set user defined snapshot GC frequency")
+		return r.snapshotGCFrequency
+	}
+
+	return defaultSnapshotGCFrequency
 }
 
 // ensureRepo calls repo manager's PrepareRepo to ensure the repo is ready for use.
@@ -301,6 +328,48 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 
 func dueForMaintenance(req *velerov1api.BackupRepository, now time.Time) bool {
 	return req.Status.LastMaintenanceTime == nil || req.Status.LastMaintenanceTime.Add(req.Spec.MaintenanceFrequency.Duration).Before(now)
+}
+
+func (r *BackupRepoReconciler) gcUploaderSnapshotsIfDue(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
+	log.Debug("backupRepositoryController.gcUploaderSnapshotsIfDue")
+
+	now := r.clock.Now()
+
+	if !dueForSnapshotGC(req, now) {
+		log.Debug("not due for snapshot GC")
+		return nil
+	}
+
+	log.Info("Running snapshot GC on backup repository")
+
+	uploaders, err := uploaderProvider.NewUploaderProviders(ctx, repoCtlRequestor, req, r.credGetter, log)
+	if err != nil {
+		log.WithError(err).Warn("error initialize uploaders")
+		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
+			rr.Status.Message = errors.Wrap(err, "error initialize uploaders").Error()
+		})
+	}
+
+	errs := []string{}
+	for _, uploader := range uploaders {
+		if err := uploader.GCSnapshots(ctx); err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
+
+	if len(errs) > 0 {
+		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
+			rr.Status.Message = strings.Join(errs, ";")
+		})
+	}
+
+	return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
+		rr.Status.LastSnapshotGCTime = &metav1.Time{Time: now}
+	})
+}
+
+func dueForSnapshotGC(req *velerov1api.BackupRepository, now time.Time) bool {
+	return req.Status.LastSnapshotGCTime == nil || req.Status.LastSnapshotGCTime.Add(req.Spec.SnapshotGCFrequency.Duration).Before(now)
 }
 
 func (r *BackupRepoReconciler) checkNotReadyRepo(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {

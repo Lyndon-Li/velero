@@ -231,6 +231,14 @@ func (rp *resticProvider) RunRestore(
 	return err
 }
 
+func (rp *resticProvider) GetType() string {
+	return uploader.ResticType
+}
+
+func (rp *resticProvider) GCSnapshots(ctx context.Context) error {
+	return nil
+}
+
 func (rp *resticProvider) parseRestoreExtraFlags(uploaderCfg map[string]string) ([]string, error) {
 	extraFlags := []string{}
 	if len(uploaderCfg) == 0 {
