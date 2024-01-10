@@ -1,3 +1,19 @@
+/*
+Copyright the Velero contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package output
 
 import (
@@ -10,7 +26,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 
 	"github.com/vmware-tanzu/velero/internal/volume"
-	"github.com/vmware-tanzu/velero/pkg/features"
 	"github.com/vmware-tanzu/velero/pkg/util/results"
 
 	"github.com/stretchr/testify/assert"
@@ -279,7 +294,7 @@ func TestDescribeNativeSnapshotsInSF(t *testing.T) {
 				{
 					BackupMethod: volume.NativeSnapshot,
 					PVName:       "pv-1",
-					NativeSnapshotInfo: volume.NativeSnapshotInfo{
+					NativeSnapshotInfo: &volume.NativeSnapshotInfo{
 						SnapshotHandle: "snapshot-1",
 						VolumeType:     "ebs",
 						VolumeAZ:       "us-east-2",
@@ -299,7 +314,7 @@ func TestDescribeNativeSnapshotsInSF(t *testing.T) {
 				{
 					BackupMethod: volume.NativeSnapshot,
 					PVName:       "pv-1",
-					NativeSnapshotInfo: volume.NativeSnapshotInfo{
+					NativeSnapshotInfo: &volume.NativeSnapshotInfo{
 						SnapshotHandle: "snapshot-1",
 						VolumeType:     "ebs",
 						VolumeAZ:       "us-east-2",
@@ -331,36 +346,48 @@ func TestDescribeNativeSnapshotsInSF(t *testing.T) {
 }
 
 func TestDescribeCSISnapshotsInSF(t *testing.T) {
-	features.Enable(velerov1api.CSIFeatureFlag)
-	defer func() {
-		features.Disable(velerov1api.CSIFeatureFlag)
-	}()
-
 	testcases := []struct {
-		name         string
-		volumeInfo   []*volume.VolumeInfo
-		inputDetails bool
-		expect       map[string]interface{}
+		name             string
+		volumeInfo       []*volume.VolumeInfo
+		inputDetails     bool
+		expect           map[string]interface{}
+		legacyInfoSource bool
 	}{
+		{
+			name:       "empty info, not legacy",
+			volumeInfo: []*volume.VolumeInfo{},
+			expect: map[string]interface{}{
+				"csiSnapshots": "<none included>",
+			},
+		},
+		{
+			name:             "empty info, legacy",
+			volumeInfo:       []*volume.VolumeInfo{},
+			legacyInfoSource: true,
+			expect: map[string]interface{}{
+				"csiSnapshots": "<none included or not detectable>",
+			},
+		},
 		{
 			name: "no details, local snapshot",
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:          volume.CSISnapshot,
+					PVCNamespace:          "pvc-ns-1",
 					PVCName:               "pvc-1",
 					PreserveLocalSnapshot: true,
-					OperationID:           "fake-operation-1",
-					CSISnapshotInfo: volume.CSISnapshotInfo{
+					CSISnapshotInfo: &volume.CSISnapshotInfo{
 						SnapshotHandle: "snapshot-1",
 						Size:           1024,
 						Driver:         "fake-driver",
 						VSCName:        "vsc-1",
+						OperationID:    "fake-operation-1",
 					},
 				},
 			},
 			expect: map[string]interface{}{
 				"csiSnapshots": map[string]interface{}{
-					"pvc-1": map[string]interface{}{
+					"pvc-ns-1/pvc-1": map[string]interface{}{
 						"snapshot": "included, specify --details for more information",
 					},
 				},
@@ -371,21 +398,22 @@ func TestDescribeCSISnapshotsInSF(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:          volume.CSISnapshot,
+					PVCNamespace:          "pvc-ns-2",
 					PVCName:               "pvc-2",
 					PreserveLocalSnapshot: true,
-					OperationID:           "fake-operation-2",
-					CSISnapshotInfo: volume.CSISnapshotInfo{
+					CSISnapshotInfo: &volume.CSISnapshotInfo{
 						SnapshotHandle: "snapshot-2",
 						Size:           1024,
 						Driver:         "fake-driver",
 						VSCName:        "vsc-2",
+						OperationID:    "fake-operation-2",
 					},
 				},
 			},
 			inputDetails: true,
 			expect: map[string]interface{}{
 				"csiSnapshots": map[string]interface{}{
-					"pvc-2": map[string]interface{}{
+					"pvc-ns-2/pvc-2": map[string]interface{}{
 						"snapshot": map[string]interface{}{
 							"operationID":         "fake-operation-2",
 							"snapshotContentName": "vsc-2",
@@ -402,19 +430,20 @@ func TestDescribeCSISnapshotsInSF(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-3",
 					PVCName:           "pvc-3",
 					SnapshotDataMoved: true,
-					OperationID:       "fake-operation-3",
-					SnapshotDataMovementInfo: volume.SnapshotDataMovementInfo{
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
 						DataMover:      "velero",
 						UploaderType:   "fake-uploader",
 						SnapshotHandle: "fake-repo-id-3",
+						OperationID:    "fake-operation-3",
 					},
 				},
 			},
 			expect: map[string]interface{}{
 				"csiSnapshots": map[string]interface{}{
-					"pvc-3": map[string]interface{}{
+					"pvc-ns-3/pvc-3": map[string]interface{}{
 						"dataMovement": "included, specify --details for more information",
 					},
 				},
@@ -425,20 +454,21 @@ func TestDescribeCSISnapshotsInSF(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-4",
 					PVCName:           "pvc-4",
 					SnapshotDataMoved: true,
-					OperationID:       "fake-operation-4",
-					SnapshotDataMovementInfo: volume.SnapshotDataMovementInfo{
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
 						DataMover:      "velero",
 						UploaderType:   "fake-uploader",
 						SnapshotHandle: "fake-repo-id-4",
+						OperationID:    "fake-operation-4",
 					},
 				},
 			},
 			inputDetails: true,
 			expect: map[string]interface{}{
 				"csiSnapshots": map[string]interface{}{
-					"pvc-4": map[string]interface{}{
+					"pvc-ns-4/pvc-4": map[string]interface{}{
 						"dataMovement": map[string]interface{}{
 							"operationID":  "fake-operation-4",
 							"dataMover":    "velero",
@@ -453,19 +483,20 @@ func TestDescribeCSISnapshotsInSF(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-4",
 					PVCName:           "pvc-4",
 					SnapshotDataMoved: true,
-					OperationID:       "fake-operation-4",
-					SnapshotDataMovementInfo: volume.SnapshotDataMovementInfo{
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
 						UploaderType:   "fake-uploader",
 						SnapshotHandle: "fake-repo-id-4",
+						OperationID:    "fake-operation-4",
 					},
 				},
 			},
 			inputDetails: true,
 			expect: map[string]interface{}{
 				"csiSnapshots": map[string]interface{}{
-					"pvc-4": map[string]interface{}{
+					"pvc-ns-4/pvc-4": map[string]interface{}{
 						"dataMovement": map[string]interface{}{
 							"operationID":  "fake-operation-4",
 							"dataMover":    "velero",
@@ -480,7 +511,7 @@ func TestDescribeCSISnapshotsInSF(t *testing.T) {
 	for _, tc := range testcases {
 		t.Run(tc.name, func(tt *testing.T) {
 			output := make(map[string]interface{})
-			describeCSISnapshotsInSF(tc.inputDetails, tc.volumeInfo, output)
+			describeCSISnapshotsInSF(tc.inputDetails, tc.volumeInfo, output, tc.legacyInfoSource)
 			assert.True(tt, reflect.DeepEqual(output, tc.expect))
 		})
 	}

@@ -1,3 +1,19 @@
+/*
+Copyright the Velero contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package output
 
 import (
@@ -7,7 +23,6 @@ import (
 	"time"
 
 	"github.com/vmware-tanzu/velero/internal/volume"
-	"github.com/vmware-tanzu/velero/pkg/features"
 	"github.com/vmware-tanzu/velero/pkg/itemoperation"
 
 	"github.com/stretchr/testify/require"
@@ -320,7 +335,7 @@ func TestDescribeNativeSnapshots(t *testing.T) {
 				{
 					BackupMethod: volume.NativeSnapshot,
 					PVName:       "pv-1",
-					NativeSnapshotInfo: volume.NativeSnapshotInfo{
+					NativeSnapshotInfo: &volume.NativeSnapshotInfo{
 						SnapshotHandle: "snapshot-1",
 						VolumeType:     "ebs",
 						VolumeAZ:       "us-east-2",
@@ -338,7 +353,7 @@ func TestDescribeNativeSnapshots(t *testing.T) {
 				{
 					BackupMethod: volume.NativeSnapshot,
 					PVName:       "pv-1",
-					NativeSnapshotInfo: volume.NativeSnapshotInfo{
+					NativeSnapshotInfo: &volume.NativeSnapshotInfo{
 						SnapshotHandle: "snapshot-1",
 						VolumeType:     "ebs",
 						VolumeAZ:       "us-east-2",
@@ -373,35 +388,45 @@ func TestDescribeNativeSnapshots(t *testing.T) {
 }
 
 func TestCSISnapshots(t *testing.T) {
-	features.Enable(velerov1api.CSIFeatureFlag)
-	defer func() {
-		features.Disable(velerov1api.CSIFeatureFlag)
-	}()
-
 	testcases := []struct {
-		name         string
-		volumeInfo   []*volume.VolumeInfo
-		inputDetails bool
-		expect       string
+		name             string
+		volumeInfo       []*volume.VolumeInfo
+		inputDetails     bool
+		expect           string
+		legacyInfoSource bool
 	}{
+		{
+			name:       "empty info, not legacy",
+			volumeInfo: []*volume.VolumeInfo{},
+			expect: `  CSI Snapshots: <none included>
+`,
+		},
+		{
+			name:             "empty info, legacy",
+			volumeInfo:       []*volume.VolumeInfo{},
+			legacyInfoSource: true,
+			expect: `  CSI Snapshots: <none included or not detectable>
+`,
+		},
 		{
 			name: "no details, local snapshot",
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:          volume.CSISnapshot,
+					PVCNamespace:          "pvc-ns-1",
 					PVCName:               "pvc-1",
 					PreserveLocalSnapshot: true,
-					OperationID:           "fake-operation-1",
-					CSISnapshotInfo: volume.CSISnapshotInfo{
+					CSISnapshotInfo: &volume.CSISnapshotInfo{
 						SnapshotHandle: "snapshot-1",
 						Size:           1024,
 						Driver:         "fake-driver",
 						VSCName:        "vsc-1",
+						OperationID:    "fake-operation-1",
 					},
 				},
 			},
 			expect: `  CSI Snapshots:
-    pvc-1:
+    pvc-ns-1/pvc-1:
       Snapshot: included, specify --details for more information
 `,
 		},
@@ -410,20 +435,21 @@ func TestCSISnapshots(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:          volume.CSISnapshot,
+					PVCNamespace:          "pvc-ns-2",
 					PVCName:               "pvc-2",
 					PreserveLocalSnapshot: true,
-					OperationID:           "fake-operation-2",
-					CSISnapshotInfo: volume.CSISnapshotInfo{
+					CSISnapshotInfo: &volume.CSISnapshotInfo{
 						SnapshotHandle: "snapshot-2",
 						Size:           1024,
 						Driver:         "fake-driver",
 						VSCName:        "vsc-2",
+						OperationID:    "fake-operation-2",
 					},
 				},
 			},
 			inputDetails: true,
 			expect: `  CSI Snapshots:
-    pvc-2:
+    pvc-ns-2/pvc-2:
       Snapshot:
         Operation ID: fake-operation-2
         Snapshot Content Name: vsc-2
@@ -437,18 +463,19 @@ func TestCSISnapshots(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-3",
 					PVCName:           "pvc-3",
 					SnapshotDataMoved: true,
-					OperationID:       "fake-operation-3",
-					SnapshotDataMovementInfo: volume.SnapshotDataMovementInfo{
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
 						DataMover:      "velero",
 						UploaderType:   "fake-uploader",
 						SnapshotHandle: "fake-repo-id-3",
+						OperationID:    "fake-operation-3",
 					},
 				},
 			},
 			expect: `  CSI Snapshots:
-    pvc-3:
+    pvc-ns-3/pvc-3:
       Data Movement: included, specify --details for more information
 `,
 		},
@@ -457,19 +484,20 @@ func TestCSISnapshots(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-4",
 					PVCName:           "pvc-4",
 					SnapshotDataMoved: true,
-					OperationID:       "fake-operation-4",
-					SnapshotDataMovementInfo: volume.SnapshotDataMovementInfo{
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
 						DataMover:      "velero",
 						UploaderType:   "fake-uploader",
 						SnapshotHandle: "fake-repo-id-4",
+						OperationID:    "fake-operation-4",
 					},
 				},
 			},
 			inputDetails: true,
 			expect: `  CSI Snapshots:
-    pvc-4:
+    pvc-ns-4/pvc-4:
       Data Movement:
         Operation ID: fake-operation-4
         Data Mover: velero
@@ -481,18 +509,19 @@ func TestCSISnapshots(t *testing.T) {
 			volumeInfo: []*volume.VolumeInfo{
 				{
 					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-5",
 					PVCName:           "pvc-5",
 					SnapshotDataMoved: true,
-					OperationID:       "fake-operation-5",
-					SnapshotDataMovementInfo: volume.SnapshotDataMovementInfo{
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
 						UploaderType:   "fake-uploader",
 						SnapshotHandle: "fake-repo-id-5",
+						OperationID:    "fake-operation-5",
 					},
 				},
 			},
 			inputDetails: true,
 			expect: `  CSI Snapshots:
-    pvc-5:
+    pvc-ns-5/pvc-5:
       Data Movement:
         Operation ID: fake-operation-5
         Data Mover: velero
@@ -509,7 +538,7 @@ func TestCSISnapshots(t *testing.T) {
 				buf:    &bytes.Buffer{},
 			}
 			d.out.Init(d.buf, 0, 8, 2, ' ', 0)
-			describeCSISnapshots(d, tc.inputDetails, tc.volumeInfo)
+			describeCSISnapshots(d, tc.inputDetails, tc.volumeInfo, tc.legacyInfoSource)
 			d.out.Flush()
 			assert.Equal(t, tc.expect, d.buf.String())
 		})

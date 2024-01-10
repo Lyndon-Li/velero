@@ -31,7 +31,6 @@ import (
 	"github.com/vmware-tanzu/velero/internal/volume"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/cmd/util/downloadrequest"
-	"github.com/vmware-tanzu/velero/pkg/features"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/results"
 )
@@ -311,6 +310,7 @@ func describeBackupVolumesInSF(ctx context.Context, kbClient kbclient.Client, ba
 
 	nativeSnapshots := []*volume.VolumeInfo{}
 	csiSnapshots := []*volume.VolumeInfo{}
+	legacyInfoSource := false
 
 	buf := new(bytes.Buffer)
 	err := downloadrequest.Stream(ctx, kbClient, backup.Namespace, backup.Name, velerov1api.DownloadTargetKindBackupVolumeInfos, buf, downloadRequestTimeout, insecureSkipTLSVerify, caCertPath)
@@ -326,6 +326,8 @@ func describeBackupVolumesInSF(ctx context.Context, kbClient kbclient.Client, ba
 			backupVolumes["errorConcludeCSISnapshot"] = fmt.Sprintf("error concluding CSI snapshot info: %v", err)
 			return
 		}
+
+		legacyInfoSource = true
 	} else if err != nil {
 		backupVolumes["errorGetBackupVolumeInfo"] = fmt.Sprintf("error getting backup volume info: %v", err)
 		return
@@ -348,7 +350,7 @@ func describeBackupVolumesInSF(ctx context.Context, kbClient kbclient.Client, ba
 
 	describeNativeSnapshotsInSF(details, nativeSnapshots, backupVolumes)
 
-	describeCSISnapshotsInSF(details, csiSnapshots, backupVolumes)
+	describeCSISnapshotsInSF(details, csiSnapshots, backupVolumes, legacyInfoSource)
 
 	describePodVolumeBackupsInSF(podVolumeBackupCRs, details, backupVolumes)
 
@@ -382,13 +384,13 @@ func describNativeSnapshotInSF(details bool, info *volume.VolumeInfo, snapshotDe
 	}
 }
 
-func describeCSISnapshotsInSF(details bool, infos []*volume.VolumeInfo, backupVolumes map[string]interface{}) {
-	if !features.IsEnabled(velerov1api.CSIFeatureFlag) {
-		return
-	}
-
+func describeCSISnapshotsInSF(details bool, infos []*volume.VolumeInfo, backupVolumes map[string]interface{}, legacyInfoSource bool) {
 	if len(infos) == 0 {
-		backupVolumes["csiSnapshots"] = "<none included>"
+		if legacyInfoSource {
+			backupVolumes["csiSnapshots"] = "<none included or not detectable>"
+		} else {
+			backupVolumes["csiSnapshots"] = "<none included>"
+		}
 		return
 	}
 
@@ -405,7 +407,7 @@ func describeCSISnapshotInSF(details bool, info *volume.VolumeInfo, snapshotDeta
 	describeLocalSnapshotInSF(details, info, snapshotDetail)
 	describeDataMovementInSF(details, info, snapshotDetail)
 
-	snapshotDetails[info.PVCName] = snapshotDetail
+	snapshotDetails[fmt.Sprintf("%s/%s", info.PVCNamespace, info.PVCName)] = snapshotDetail
 }
 
 // describeVSCInSF describes CSI volume snapshot contents in structured format.
@@ -418,7 +420,7 @@ func describeLocalSnapshotInSF(details bool, info *volume.VolumeInfo, snapshotDe
 		localSnapshot := make(map[string]interface{})
 
 		if !info.SnapshotDataMoved {
-			localSnapshot["operationID"] = info.OperationID
+			localSnapshot["operationID"] = info.CSISnapshotInfo.OperationID
 		}
 
 		localSnapshot["snapshotContentName"] = info.CSISnapshotInfo.VSCName
@@ -439,7 +441,7 @@ func describeDataMovementInSF(details bool, info *volume.VolumeInfo, snapshotDet
 
 	if details {
 		dataMovement := make(map[string]interface{})
-		dataMovement["operationID"] = info.OperationID
+		dataMovement["operationID"] = info.SnapshotDataMovementInfo.OperationID
 
 		dataMover := "velero"
 		if info.SnapshotDataMovementInfo.DataMover != "" {
