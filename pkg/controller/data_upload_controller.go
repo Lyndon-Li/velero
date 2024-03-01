@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
@@ -56,7 +57,6 @@ import (
 )
 
 const (
-	dataUploadDownloadRequestor = "snapshot-data-upload-download"
 	acceptNodeLabelKey          = "velero.io/accepted-by"
 	DataUploadDownloadFinalizer = "velero.io/data-upload-download-finalizer"
 	preparingMonitorFrequency   = time.Minute
@@ -67,6 +67,7 @@ type DataUploadReconciler struct {
 	client              client.Client
 	kubeClient          kubernetes.Interface
 	csiSnapshotClient   snapshotter.SnapshotV1Interface
+	mgr                 manager.Manager
 	repoEnsurer         *repository.Ensurer
 	Clock               clocks.WithTickerAndDelayedExecution
 	credentialGetter    *credentials.CredentialGetter
@@ -79,11 +80,12 @@ type DataUploadReconciler struct {
 	metrics             *metrics.ServerMetrics
 }
 
-func NewDataUploadReconciler(client client.Client, kubeClient kubernetes.Interface, csiSnapshotClient snapshotter.SnapshotV1Interface,
+func NewDataUploadReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, csiSnapshotClient snapshotter.SnapshotV1Interface,
 	dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, clock clocks.WithTickerAndDelayedExecution,
 	cred *credentials.CredentialGetter, nodeName string, fs filesystem.Interface, preparingTimeout time.Duration, log logrus.FieldLogger, metrics *metrics.ServerMetrics) *DataUploadReconciler {
 	return &DataUploadReconciler{
 		client:              client,
+		mgr:                 mgr,
 		kubeClient:          kubeClient,
 		csiSnapshotClient:   csiSnapshotClient,
 		Clock:               clock,
@@ -241,8 +243,8 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 
-		fsBackup := r.dataPathMgr.GetAsyncBR(du.Name)
-		if fsBackup != nil {
+		msBackup := r.dataPathMgr.GetAsyncBR(du.Name)
+		if msBackup != nil {
 			log.Info("Cancellable data path is already started")
 			return ctrl.Result{}, nil
 		}
@@ -265,7 +267,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			OnProgress:  r.OnDataUploadProgress,
 		}
 
-		fsBackup, err = r.dataPathMgr.CreateFileSystemBR(du.Name, dataUploadDownloadRequestor, ctx, r.client, du.Namespace, callbacks, log)
+		msBackup, err = r.dataPathMgr.CreateMicroServiceBR(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, log)
 		if err != nil {
 			if err == datapath.ConcurrentLimitExceed {
 				log.Info("Data path instance is concurrent limited requeue later")
@@ -282,7 +284,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 
 		log.Info("Data upload is marked as in progress")
-		result, err := r.runCancelableDataUpload(ctx, fsBackup, du, res, log)
+		result, err := r.runCancelableDataUpload(ctx, msBackup, du, res, log)
 		if err != nil {
 			log.Errorf("Failed to run cancelable data path for %s with err %v", du.Name, err)
 			r.closeDataPath(ctx, du.Name)
@@ -293,8 +295,8 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if du.Spec.Cancel {
 			log.Info("Data upload is being canceled")
 
-			fsBackup := r.dataPathMgr.GetAsyncBR(du.Name)
-			if fsBackup == nil {
+			msBackup := r.dataPathMgr.GetAsyncBR(du.Name)
+			if msBackup == nil {
 				r.OnDataUploadCancelled(ctx, du.GetNamespace(), du.GetName())
 				return ctrl.Result{}, nil
 			}
@@ -306,7 +308,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 				log.WithError(err).Error("error updating data upload into canceling status")
 				return ctrl.Result{}, err
 			}
-			fsBackup.Cancel()
+			msBackup.Cancel()
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, nil
@@ -326,7 +328,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
-func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, fsBackup datapath.AsyncBR, du *velerov2alpha1api.DataUpload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
+func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, msBackup datapath.AsyncBR, du *velerov2alpha1api.DataUpload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
 	log.Info("Run cancelable dataUpload")
 	path, err := exposer.GetPodVolumeHostPath(ctx, res.ByPod.HostingPod, res.ByPod.VolumeName, r.client, r.fileSystem, log)
 	if err != nil {
@@ -334,7 +336,7 @@ func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, fsBa
 	}
 
 	log.WithField("path", path.ByPath).Debug("Found host path")
-	if err := fsBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, datamover.GetUploaderType(du.Spec.DataMover),
+	if err := msBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, datamover.GetUploaderType(du.Spec.DataMover),
 		velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
 		return r.errorOut(ctx, du, err, "error to initialize data path", log)
 	}
@@ -344,7 +346,7 @@ func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, fsBa
 		velerov1api.AsyncOperationIDLabel: du.Labels[velerov1api.AsyncOperationIDLabel],
 	}
 
-	if err := fsBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
+	if err := msBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
 		return r.errorOut(ctx, du, err, "error starting data path backup", log)
 	}
 
@@ -582,7 +584,7 @@ func (r *DataUploadReconciler) findDataUploadForPod(podObj client.Object) []reco
 			log.WithError(err).Warn("failed to cancel dataupload, and it will wait for prepare timeout")
 			return []reconcile.Request{}
 		}
-		log.Info("Exposed pod is in abnormal status and dataupload is marked as cancel")
+		log.Errorf("Exposed pod is in abnormal status(reason %s) and dataupload is marked as cancel", reason)
 	} else {
 		return []reconcile.Request{}
 	}

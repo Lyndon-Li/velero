@@ -149,7 +149,7 @@ func initDataDownloadReconcilerWithError(objects []runtime.Object, needError ...
 
 	dataPathMgr := datapath.NewManager(1)
 
-	return NewDataDownloadReconciler(fakeClient, fakeKubeClient, dataPathMgr, nil, &credentials.CredentialGetter{FromFile: credentialFileStore}, "test_node", time.Minute*5, velerotest.NewLogger(), metrics.NewServerMetrics()), nil
+	return NewDataDownloadReconciler(fakeClient, nil, fakeKubeClient, dataPathMgr, nil, &credentials.CredentialGetter{FromFile: credentialFileStore}, "test_node", time.Minute*5, velerotest.NewLogger(), metrics.NewServerMetrics()), nil
 }
 
 func TestDataDownloadReconcile(t *testing.T) {
@@ -395,7 +395,7 @@ func TestDataDownloadReconcile(t *testing.T) {
 
 			if test.needCreateFSBR {
 				if fsBR := r.dataPathMgr.GetAsyncBR(test.dd.Name); fsBR == nil {
-					_, err := r.dataPathMgr.CreateFileSystemBR(test.dd.Name, pVBRRequestor, ctx, r.client, velerov1api.DefaultNamespace, datapath.Callbacks{OnCancelled: r.OnDataDownloadCancelled}, velerotest.NewLogger())
+					_, err := r.dataPathMgr.CreateFileSystemBR(test.dd.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, velerov1api.DefaultNamespace, datapath.Callbacks{OnCancelled: r.OnDataDownloadCancelled}, velerotest.NewLogger())
 					require.NoError(t, err)
 				}
 			}

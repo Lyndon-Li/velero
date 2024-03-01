@@ -357,3 +357,31 @@ func MakePodPVCAttachment(volumeName string, volumeMode *corev1api.PersistentVol
 
 	return volumeMounts, volumeDevices
 }
+
+func GetPodVolumePath(pod *corev1api.Pod, index int) (string, error) {
+	if pod == nil {
+		return "", errors.New("pod is nil")
+	}
+
+	if len(pod.Spec.Volumes) <= index {
+		return "", errors.New("volume index overflow")
+	}
+
+	volumeName := pod.Spec.Volumes[index].Name
+
+	for _, c := range pod.Spec.Containers {
+		for _, v := range c.VolumeMounts {
+			if v.Name == volumeName {
+				return v.MountPath, nil
+			}
+		}
+
+		for _, v := range c.VolumeDevices {
+			if v.Name == volumeName {
+				return v.DevicePath, nil
+			}
+		}
+	}
+
+	return "", errors.Errorf("volume %s at index %v is not found", volumeName, index)
+}

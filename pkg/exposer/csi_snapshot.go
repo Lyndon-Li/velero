@@ -18,6 +18,7 @@ package exposer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -189,7 +190,7 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 		}
 	}()
 
-	backupPod, err := e.createBackupPod(ctx, ownerObject, backupPVC, csiExposeParam.HostingPodLabels)
+	backupPod, err := e.createBackupPod(ctx, ownerObject, backupPVC, csiExposeParam.OperationTimeout, csiExposeParam.HostingPodLabels)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup pod")
 	}
@@ -382,7 +383,7 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject co
 	return created, err
 }
 
-func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject corev1.ObjectReference, backupPVC *corev1.PersistentVolumeClaim, label map[string]string) (*corev1.Pod, error) {
+func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject corev1.ObjectReference, backupPVC *corev1.PersistentVolumeClaim, operationTimeout time.Duration, label map[string]string) (*corev1.Pod, error) {
 	podName := ownerObject.Name
 
 	volumeName := string(ownerObject.UID)
@@ -395,12 +396,36 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 
 	var gracePeriod int64 = 0
 	volumeMounts, volumeDevices := kube.MakePodPVCAttachment(volumeName, backupPVC.Spec.VolumeMode)
+	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
+
+	volumes := []corev1.Volume{{
+		Name: volumeName,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: backupPVC.Name,
+			},
+		},
+	}}
+	volumes = append(volumes, podInfo.volumes...)
 
 	if label == nil {
 		label = make(map[string]string)
 	}
-
 	label[podGroupLabel] = podGroupSnapshot
+
+	args := []string{
+		fmt.Sprintf("--this-pod=%s", podName),
+		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
+	}
+
+	if podInfo.logFormat != "" {
+		args = append(args, fmt.Sprintf("--log-format=%s", podInfo.logFormat))
+
+	}
+
+	if podInfo.logLevel != "" {
+		args = append(args, fmt.Sprintf("--log-level=%s", podInfo.logLevel))
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -435,21 +460,21 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 					Name:            containerName,
 					Image:           podInfo.image,
 					ImagePullPolicy: corev1.PullNever,
-					Command:         []string{"/velero-helper", "pause"},
-					VolumeMounts:    volumeMounts,
-					VolumeDevices:   volumeDevices,
+					Command: []string{
+						"/velero",
+						"data-mover",
+						"backup",
+					},
+					Args:          args,
+					VolumeMounts:  volumeMounts,
+					VolumeDevices: volumeDevices,
+					Env:           podInfo.env,
 				},
 			},
 			ServiceAccountName:            podInfo.serviceAccount,
 			TerminationGracePeriodSeconds: &gracePeriod,
-			Volumes: []corev1.Volume{{
-				Name: volumeName,
-				VolumeSource: corev1.VolumeSource{
-					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: backupPVC.Name,
-					},
-				},
-			}},
+			Volumes:                       volumes,
+			RestartPolicy:                 corev1.RestartPolicyNever,
 		},
 	}
 

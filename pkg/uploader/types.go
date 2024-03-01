@@ -35,6 +35,12 @@ const (
 	PersistentVolumeBlock PersistentVolumeMode = "Block"
 	// PersistentVolumeFilesystem means the volume will be or is formatted with a filesystem.
 	PersistentVolumeFilesystem PersistentVolumeMode = "Filesystem"
+
+	// Uploader requestor for data upload/data download
+	DataUploadDownloadRequestor = "snapshot-data-upload-download"
+
+	// Uploader requestor for PVB/PVR
+	PVBRRequestor string = "pod-volume-backup-restore"
 )
 
 // ValidateUploaderType validates if the input param is a valid uploader type.

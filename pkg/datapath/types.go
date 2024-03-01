@@ -32,14 +32,14 @@ type Result struct {
 
 // BackupResult represents the result of a backup
 type BackupResult struct {
-	SnapshotID    string
-	EmptySnapshot bool
-	Source        AccessPoint
+	SnapshotID    string      `json:"snapshotID"`
+	EmptySnapshot bool        `json:"emptySnapshot"`
+	Source        AccessPoint `json:"source,omitempty"`
 }
 
 // RestoreResult represents the result of a restore
 type RestoreResult struct {
-	Target AccessPoint
+	Target AccessPoint `json:"target,omitempty"`
 }
 
 // Callbacks defines the collection of callbacks during backup/restore
@@ -52,8 +52,8 @@ type Callbacks struct {
 
 // AccessPoint represents an access point that has been exposed to a data path instance
 type AccessPoint struct {
-	ByPath  string
-	VolMode uploader.PersistentVolumeMode
+	ByPath  string                        `json:"byPath"`
+	VolMode uploader.PersistentVolumeMode `json:"volumeMode"`
 }
 
 // AsyncBR is the interface for asynchronous data path methods

@@ -18,6 +18,7 @@ package kube
 import (
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/pkg/errors"
@@ -115,19 +116,71 @@ func EnsureDeletePod(ctx context.Context, podGetter corev1client.CoreV1Interface
 // IsPodUnrecoverable checks if the pod is in an abnormal state and could not be recovered
 // It could not cover all the cases but we could add more cases in the future
 func IsPodUnrecoverable(pod *corev1api.Pod, log logrus.FieldLogger) (bool, string) {
-	// Check the Phase field
-	if pod.Status.Phase == corev1api.PodFailed || pod.Status.Phase == corev1api.PodUnknown {
-		log.Warnf("Pod is in abnormal state %s", pod.Status.Phase)
-		return true, fmt.Sprintf("Pod is in abnormal state %s", pod.Status.Phase)
-	}
-
 	// Check the Status field
+	message := ""
 	for _, containerStatus := range pod.Status.ContainerStatuses {
 		// If the container's image state is ImagePullBackOff, it indicates an image pull failure
 		if containerStatus.State.Waiting != nil && (containerStatus.State.Waiting.Reason == "ImagePullBackOff" || containerStatus.State.Waiting.Reason == "ErrImageNeverPull") {
-			log.Warnf("Container %s in Pod %s/%s is in pull image failed with reason %s", containerStatus.Name, pod.Namespace, pod.Name, containerStatus.State.Waiting.Reason)
 			return true, fmt.Sprintf("Container %s in Pod %s/%s is in pull image failed with reason %s", containerStatus.Name, pod.Namespace, pod.Name, containerStatus.State.Waiting.Reason)
 		}
+
+		if containerStatus.State.Terminated != nil {
+			message += containerStatus.State.Terminated.Message + "/"
+		}
 	}
+
+	// Check the Phase field
+	if pod.Status.Phase == corev1api.PodFailed || pod.Status.Phase == corev1api.PodUnknown {
+		return true, fmt.Sprintf("Pod is in abnormal state [%s], message [%s]", pod.Status.Phase, message)
+	}
+
 	return false, ""
+}
+
+func CollectPodLogs(ctx context.Context, podGetter corev1client.CoreV1Interface, pod string, namespace string, container string, includePrevious bool, output io.Writer) error {
+	logIndicator := fmt.Sprintf("***************************begin pod logs[%s/%s]***************************\n", pod, container)
+	if _, err := output.Write([]byte(logIndicator)); err != nil {
+		return errors.Wrap(err, "error to write begin pod log indicator")
+	}
+
+	logOptions := &corev1api.PodLogOptions{
+		Container: container,
+	}
+
+	request := podGetter.Pods(namespace).GetLogs(pod, logOptions)
+	input, err := request.Stream(ctx)
+	if err != nil {
+		return errors.Wrap(err, "error to get input from request")
+	}
+
+	if _, err := io.Copy(output, input); err != nil {
+		return errors.Wrap(err, "error to copy input")
+	}
+
+	if !includePrevious {
+		return nil
+	}
+
+	logIndicator = "***************************previous logs***************************\n"
+	if _, err := output.Write([]byte(logIndicator)); err != nil {
+		return errors.Wrap(err, "error to write previous log indicator")
+	}
+
+	logOptions.Previous = true
+	request = podGetter.Pods(namespace).GetLogs(pod, logOptions)
+	input, err = request.Stream(ctx)
+	if err != nil {
+		return errors.Wrap(err, "error to get reader from request for previous log")
+	}
+
+	if _, err := io.Copy(output, input); err != nil {
+		return errors.Wrap(err, "error to copy input for previous log")
+	}
+
+	logIndicator = fmt.Sprintf("***************************end pod logs[%s/%s]***************************\n", pod, container)
+	if _, err := output.Write([]byte(logIndicator)); err != nil {
+		return errors.Wrap(err, "error to write end pod log indicator")
+	}
+
+	return nil
 }

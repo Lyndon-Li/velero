@@ -82,7 +82,7 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1.O
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", sourceNamespace, targetPVCName)
 	}
 
-	restorePod, err := e.createRestorePod(ctx, ownerObject, targetPVC, hostingPodLabels, selectedNode)
+	restorePod, err := e.createRestorePod(ctx, ownerObject, targetPVC, timeout, hostingPodLabels, selectedNode)
 	if err != nil {
 		return errors.Wrapf(err, "error to create restore pod")
 	}
@@ -262,7 +262,7 @@ func (e *genericRestoreExposer) RebindVolume(ctx context.Context, ownerObject co
 }
 
 func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObject corev1.ObjectReference, targetPVC *corev1.PersistentVolumeClaim,
-	label map[string]string, selectedNode string) (*corev1.Pod, error) {
+	operationTimeout time.Duration, label map[string]string, selectedNode string) (*corev1.Pod, error) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
 
@@ -276,6 +276,26 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 
 	var gracePeriod int64 = 0
 	volumeMounts, volumeDevices := kube.MakePodPVCAttachment(volumeName, targetPVC.Spec.VolumeMode)
+	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
+
+	volumes := []corev1.Volume{{
+		Name: volumeName,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: restorePVCName,
+			},
+		},
+	}}
+	volumes = append(volumes, podInfo.volumes...)
+
+	command := []string{"/velero", "data-mover", "restore", "this-pod", restorePodName, "resource-timeout", operationTimeout.String()}
+	if podInfo.logFormat != "" {
+		command = append(command, "log-format", podInfo.logFormat)
+	}
+
+	if podInfo.logLevel != "" {
+		command = append(command, "log-level", podInfo.logLevel)
+	}
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -298,22 +318,15 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 					Name:            containerName,
 					Image:           podInfo.image,
 					ImagePullPolicy: corev1.PullNever,
-					Command:         []string{"/velero-helper", "pause"},
+					Command:         command,
 					VolumeMounts:    volumeMounts,
 					VolumeDevices:   volumeDevices,
 				},
 			},
 			ServiceAccountName:            podInfo.serviceAccount,
 			TerminationGracePeriodSeconds: &gracePeriod,
-			Volumes: []corev1.Volume{{
-				Name: volumeName,
-				VolumeSource: corev1.VolumeSource{
-					PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-						ClaimName: restorePVCName,
-					},
-				},
-			}},
-			NodeName: selectedNode,
+			Volumes:                       volumes,
+			NodeName:                      selectedNode,
 		},
 	}
 

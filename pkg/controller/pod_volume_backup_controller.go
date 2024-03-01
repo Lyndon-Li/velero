@@ -44,8 +44,6 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 )
 
-const pVBRRequestor string = "pod-volume-backup-restore"
-
 // NewPodVolumeBackupReconciler creates the PodVolumeBackupReconciler instance
 func NewPodVolumeBackupReconciler(client client.Client, dataPathMgr *datapath.Manager, ensurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter,
 	nodeName string, scheme *runtime.Scheme, metrics *metrics.ServerMetrics, logger logrus.FieldLogger) *PodVolumeBackupReconciler {
@@ -123,7 +121,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		OnProgress:  r.OnDataPathProgress,
 	}
 
-	fsBackup, err := r.dataPathMgr.CreateFileSystemBR(pvb.Name, pVBRRequestor, ctx, r.Client, pvb.Namespace, callbacks, log)
+	fsBackup, err := r.dataPathMgr.CreateFileSystemBR(pvb.Name, uploader.DataUploadDownloadRequestor, ctx, r.Client, pvb.Namespace, callbacks, log)
 	if err != nil {
 		if err == datapath.ConcurrentLimitExceed {
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil

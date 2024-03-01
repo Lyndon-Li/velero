@@ -232,7 +232,7 @@ func initDataUploaderReconcilerWithError(needError ...error) (*DataUploadReconci
 	if err != nil {
 		return nil, err
 	}
-	return NewDataUploadReconciler(fakeClient, fakeKubeClient, fakeSnapshotClient.SnapshotV1(), dataPathMgr, nil,
+	return NewDataUploadReconciler(fakeClient, nil, fakeKubeClient, fakeSnapshotClient.SnapshotV1(), dataPathMgr, nil,
 		testclocks.NewFakeClock(now), &credentials.CredentialGetter{FromFile: credentialFileStore}, "test_node", fakeFS, time.Minute*5, velerotest.NewLogger(), metrics.NewServerMetrics()), nil
 }
 
@@ -501,7 +501,7 @@ func TestReconcile(t *testing.T) {
 
 			if test.du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
 				if fsBR := r.dataPathMgr.GetAsyncBR(test.du.Name); fsBR == nil {
-					_, err := r.dataPathMgr.CreateFileSystemBR(test.du.Name, pVBRRequestor, ctx, r.client, velerov1api.DefaultNamespace, datapath.Callbacks{OnCancelled: r.OnDataUploadCancelled}, velerotest.NewLogger())
+					_, err := r.dataPathMgr.CreateFileSystemBR(test.du.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, velerov1api.DefaultNamespace, datapath.Callbacks{OnCancelled: r.OnDataUploadCancelled}, velerotest.NewLogger())
 					require.NoError(t, err)
 				}
 			}

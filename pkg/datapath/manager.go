@@ -22,11 +22,14 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
 var ConcurrentLimitExceed error = errors.New("Concurrent number exceeds")
 var FSBRCreator = newFileSystemBR
+var MicroServiceBRCreator = newMicroServiceBR
 
 type Manager struct {
 	cocurrentNum int
@@ -54,6 +57,19 @@ func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx c
 	m.tracker[jobName] = FSBRCreator(jobName, requestorType, client, namespace, callbacks, log)
 
 	return m.tracker[jobName], nil
+}
+
+func (m *Manager) CreateMicroServiceBR(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, callbacks Callbacks, log logrus.FieldLogger) (AsyncBR, error) {
+	m.trackerLock.Lock()
+	defer m.trackerLock.Unlock()
+
+	if len(m.tracker) == m.cocurrentNum {
+		return nil, ConcurrentLimitExceed
+	}
+
+	m.tracker[taskName] = MicroServiceBRCreator(client, kubeClient, mgr, taskType, taskName, namespace, callbacks, log)
+
+	return m.tracker[taskName], nil
 }
 
 // RemoveAsyncBR removes a file system backup/restore data path instance
