@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	v1 "k8s.io/api/core/v1"
@@ -30,9 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
-	"sigs.k8s.io/controller-runtime/pkg/manager"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	"github.com/vmware-tanzu/velero/pkg/buildinfo"
@@ -48,6 +47,9 @@ import (
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
+
+	ctlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	ctlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type dataMoverBackupConfig struct {
@@ -101,14 +103,14 @@ type dataMoverBackup struct {
 	logger      logrus.FieldLogger
 	ctx         context.Context
 	cancelFunc  context.CancelFunc
-	mgr         manager.Manager
+	client      ctlclient.Client
+	cache       ctlcache.Cache
 	namespace   string
 	nodeName    string
 	config      dataMoverBackupConfig
 	kubeClient  kubernetes.Interface
 	dataPathMgr *datapath.Manager
 	thisPod     *v1.Pod
-	dataUpload  *velerov2alpha1api.DataUpload
 }
 
 func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, config dataMoverBackupConfig) (*dataMoverBackup, error) {
@@ -117,26 +119,33 @@ func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, confi
 	clientConfig, err := factory.ClientConfig()
 	if err != nil {
 		cancelFunc()
-		return nil, err
+		return nil, errors.Wrap(err, "error to create client config")
 	}
 
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
 	scheme := runtime.NewScheme()
+	if err := velerov1api.AddToScheme(scheme); err != nil {
+		cancelFunc()
+		return nil, errors.Wrap(err, "error to add velero v1 scheme")
+	}
+
 	if err := velerov2alpha1api.AddToScheme(scheme); err != nil {
 		cancelFunc()
-		return nil, err
+		return nil, errors.Wrap(err, "error to add velero v2alpha1 scheme")
 	}
+
 	if err := v1.AddToScheme(scheme); err != nil {
 		cancelFunc()
-		return nil, err
+		return nil, errors.Wrap(err, "error to add core v1 scheme")
 	}
 
 	nodeName := os.Getenv("NODE_NAME")
 
 	// use a field selector to filter to only pods scheduled on this node.
-	cacheOption := cache.Options{
-		SelectorsByObject: cache.SelectorsByObject{
+	cacheOption := ctlcache.Options{
+		Scheme: scheme,
+		SelectorsByObject: ctlcache.SelectorsByObject{
 			&v1.Pod{}: {
 				Field: fields.Set{"spec.nodeName": nodeName}.AsSelector(),
 			},
@@ -145,20 +154,27 @@ func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, confi
 			},
 		},
 	}
-	mgr, err := ctrl.NewManager(clientConfig, ctrl.Options{
-		Scheme:   scheme,
-		NewCache: cache.BuilderWithOptions(cacheOption),
+
+	cli, err := ctlclient.New(clientConfig, ctlclient.Options{
+		Scheme: scheme,
 	})
 	if err != nil {
 		cancelFunc()
-		return nil, err
+		return nil, errors.Wrap(err, "error to create client")
+	}
+
+	cache, err := ctlcache.New(clientConfig, cacheOption)
+	if err != nil {
+		cancelFunc()
+		return nil, errors.Wrap(err, "error to create client cache")
 	}
 
 	s := &dataMoverBackup{
 		logger:     logger,
 		ctx:        ctx,
 		cancelFunc: cancelFunc,
-		mgr:        mgr,
+		client:     cli,
+		cache:      cache,
 		config:     config,
 		namespace:  factory.Namespace(),
 		nodeName:   nodeName,
@@ -166,7 +182,8 @@ func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, confi
 
 	s.kubeClient, err = factory.KubeClient()
 	if err != nil {
-		return nil, err
+		cancelFunc()
+		return nil, errors.Wrap(err, "error to create kube client")
 	}
 
 	s.dataPathMgr = datapath.NewManager(1)
@@ -176,14 +193,17 @@ func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, confi
 
 func (s *dataMoverBackup) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
+	go s.cache.Start(s.ctx)
 
-	s.logger.Info("Starting micro service")
+	s.logger.Infof("Starting micro service in node %s", s.nodeName)
 
 	pod := &v1.Pod{}
-	if err := s.mgr.GetClient().Get(s.ctx, types.NamespacedName{
+	err := s.client.Get(s.ctx, types.NamespacedName{
 		Namespace: s.namespace,
 		Name:      s.config.thisPodName,
-	}, pod); err != nil {
+	}, pod)
+	if err != nil {
+		s.cancelFunc()
 		exitWithMessage(s.logger, false, "Failed to get this pod: %v", err)
 	}
 
@@ -192,47 +212,54 @@ func (s *dataMoverBackup) run() {
 
 	duName, exist := pod.Labels[velerov1api.DataUploadLabel]
 	if !exist {
+		s.cancelFunc()
 		exitWithMessage(s.logger, false, "This pod doesn't have dataupload info")
 	}
 
-	du := &velerov2alpha1api.DataUpload{}
-	if err := s.mgr.GetClient().Get(s.ctx, types.NamespacedName{
-		Namespace: s.namespace,
-		Name:      duName,
-	}, du); err != nil {
-		exitWithMessage(s.logger, false, "Failed to get DataUpload %s: %v", duName, err)
-	}
-
-	s.dataUpload = du
-	s.logger.Infof("Got DataUpload %s", du.Name)
+	s.logger.Infof("Got DataUpload %s", duName)
 
 	credentialFileStore, err := credentials.NewNamespacedFileStore(
-		s.mgr.GetClient(),
+		s.client,
 		s.namespace,
 		defaultCredentialsDirectory,
 		filesystem.NewFileSystem(),
 	)
 	if err != nil {
+		s.cancelFunc()
 		exitWithMessage(s.logger, false, "Failed to create credentials file store: %v", err)
 	}
 
-	credSecretStore, err := credentials.NewNamespacedSecretStore(s.mgr.GetClient(), s.namespace)
+	credSecretStore, err := credentials.NewNamespacedSecretStore(s.client, s.namespace)
 	if err != nil {
+		s.cancelFunc()
 		exitWithMessage(s.logger, false, "Failed to create secret file store: %v", err)
 	}
 
 	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
-	repoEnsurer := repository.NewEnsurer(s.mgr.GetClient(), s.logger, s.config.resourceTimeout)
+	repoEnsurer := repository.NewEnsurer(s.client, s.logger, s.config.resourceTimeout)
 
-	duService := datamover.NewBackupMicroService(s.ctx, s.mgr.GetClient(), s.kubeClient, s.dataUpload, s.thisPod, s.dataPathMgr,
+	duService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, duName, s.thisPod, s.dataPathMgr,
 		repoEnsurer, credentialGetter, s.logger)
 
-	s.logger.Info("Starting data upload")
+	duInformer, err := s.cache.GetInformer(s.ctx, &velerov2alpha1api.DataUpload{})
+	if err != nil {
+		s.cancelFunc()
+		exitWithMessage(s.logger, false, "Failed to get controller-runtime informer from manager for DataUpload: %v", err)
+	}
+
+	duService.SetupWatcher(s.ctx, duInformer)
+
+	s.logger.Infof("Starting data upload %s", duName)
 
 	result, err := duService.RunCancelableDataUpload(s.ctx)
 	if err != nil {
-		exitWithMessage(s.logger, false, "Failed to run data path: %v", err)
+		s.cancelFunc()
+		exitWithMessage(s.logger, false, "Failed to run data upload: %v", err)
 	}
+
+	s.logger.WithField("du", duName).Info("Data upload completed")
+
+	s.cancelFunc()
 
 	exitWithMessage(s.logger, true, result)
 }

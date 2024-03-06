@@ -25,13 +25,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/kubernetes"
-	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -40,10 +35,13 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+	cachetool "k8s.io/client-go/tools/cache"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 )
 
 // BackupMicroService process data mover backups inside the backup pod
 type BackupMicroService struct {
+	ctx              context.Context
 	client           client.Client
 	kubeClient       kubernetes.Interface
 	repoEnsurer      *repository.Ensurer
@@ -52,11 +50,11 @@ type BackupMicroService struct {
 	dataPathMgr      *datapath.Manager
 	eventRecorder    *kube.EventRecorder
 
-	dataUpload *velerov2alpha1api.DataUpload
-	thisPod    *corev1.Pod
+	dataUploadName string
+	thisPod        *corev1.Pod
 
 	resultSignal chan dataPathResult
-	startSignal  chan struct{}
+	startSignal  chan *velerov2alpha1api.DataUpload
 }
 
 type dataPathResult struct {
@@ -64,70 +62,33 @@ type dataPathResult struct {
 	result string
 }
 
-func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataUpload *velerov2alpha1api.DataUpload,
+func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataUploadName string,
 	thisPod *corev1.Pod, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *BackupMicroService {
 	return &BackupMicroService{
+		ctx:              ctx,
 		client:           client,
 		kubeClient:       kubeClient,
 		credentialGetter: cred,
 		logger:           log,
 		repoEnsurer:      repoEnsurer,
 		dataPathMgr:      dataPathMgr,
-		dataUpload:       dataUpload,
-		eventRecorder:    kube.NewEventRecorder(kubeClient, dataUpload.Name, thisPod.Spec.NodeName),
+		dataUploadName:   dataUploadName,
+		eventRecorder:    kube.NewEventRecorder(kubeClient, dataUploadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
 		resultSignal:     make(chan dataPathResult),
 	}
 }
 
-// +kubebuilder:rbac:groups=velero.io,resources=datauploads,verbs=get;list;watch
-// +kubebuilder:rbac:groups=velero.io,resources=datauploads/status,verbs=get
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list
-
-func (r *BackupMicroService) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := r.logger.WithFields(logrus.Fields{
-		"controller": "dataupload",
-		"dataupload": req.NamespacedName,
-	})
-
-	log.Infof("Reconcile %s", req.Name)
-	du := &velerov2alpha1api.DataUpload{}
-	if err := r.client.Get(ctx, req.NamespacedName, du); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Debug("Unable to find DataUpload")
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, errors.Wrap(err, "getting DataUpload")
-	}
-
-	if du.Spec.Cancel {
-		log.Info("Data upload is being canceled")
-
-		r.eventRecorder.Event(du, false, "Cancelling", "Cancelling for data upload %s", du.Name)
-
-		fsBackup := r.dataPathMgr.GetAsyncBR(du.Name)
-		if fsBackup == nil {
-			r.OnDataUploadCancelled(ctx, du.GetNamespace(), du.GetName())
-		} else {
-			fsBackup.Cancel()
-		}
-
-		return ctrl.Result{}, nil
-	} else {
-		log.Info("Data upload turns to InProgress")
-		r.startSignal <- struct{}{}
-	}
-
-	return ctrl.Result{}, nil
-}
-
 func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (string, error) {
 	log := r.logger.WithFields(logrus.Fields{
-		"dataupload": r.dataUpload.Name,
+		"dataupload": r.dataUploadName,
 	})
 
+	var du *velerov2alpha1api.DataUpload
+
 	select {
-	case <-r.startSignal:
+	case recv := <-r.startSignal:
+		du = recv
 		break
 	case <-time.After(time.Minute * 2):
 		log.Error("Timeout waiting for start signal")
@@ -135,8 +96,6 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 	}
 
 	log.Info("Run cancelable dataUpload")
-
-	du := r.dataUpload
 
 	path, err := kube.GetPodVolumePath(r.thisPod, 0)
 	if err != nil {
@@ -218,9 +177,9 @@ func (r *BackupMicroService) OnDataUploadFailed(ctx context.Context, namespace s
 	log := r.logger.WithField("dataupload", duName)
 	log.WithError(err).Error("Async fs backup data path failed")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUpload.Name, err)
+	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUploadName, err)
 	r.resultSignal <- dataPathResult{
-		err: errors.Wrapf(err, "Data path for data upload %s failed", r.dataUpload.Name),
+		err: errors.Wrapf(err, "Data path for data upload %s failed", r.dataUploadName),
 	}
 }
 
@@ -259,42 +218,44 @@ func (r *BackupMicroService) closeDataPath(ctx context.Context, duName string) {
 	r.dataPathMgr.RemoveAsyncBR(duName)
 }
 
-// SetupWithManager registers the BackupMicroService controller.
-func (r *BackupMicroService) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&velerov2alpha1api.DataUpload{},
-			builder.WithPredicates(predicate.Funcs{
-				UpdateFunc: func(ue event.UpdateEvent) bool {
-					oldObj := ue.ObjectOld.(*velerov2alpha1api.DataUpload)
-					newObj := ue.ObjectNew.(*velerov2alpha1api.DataUpload)
+// SetupWatcher start to watch the DataUpload.
+func (r *BackupMicroService) SetupWatcher(ctx context.Context, duInformer cache.Informer) {
+	duInformer.AddEventHandler(
+		cachetool.ResourceEventHandlerFuncs{
+			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
+				oldDu := oldObj.(*velerov2alpha1api.DataUpload)
+				newDu := newObj.(*velerov2alpha1api.DataUpload)
 
-					if newObj.Name != r.dataUpload.Name {
-						return false
-					}
+				if newDu.Name != r.dataUploadName {
+					return
+				}
 
-					if newObj.Status.Phase != velerov2alpha1api.DataUploadPhaseInProgress {
-						return false
-					}
+				if newDu.Status.Phase != velerov2alpha1api.DataUploadPhaseInProgress {
+					return
+				}
 
-					if oldObj.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared {
-						return true
-					}
+				if oldDu.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared {
+					r.logger.WithField("DataUpload", newDu.Name).Info("Data upload turns to InProgress")
+					r.startSignal <- newDu
+				}
 
-					if newObj.Spec.Cancel && !oldObj.Spec.Cancel {
-						return true
-					}
+				if newDu.Spec.Cancel && !oldDu.Spec.Cancel {
+					r.cancelDataUpload(newDu)
+				}
+			},
+		},
+	)
+}
 
-					return false
-				},
-				CreateFunc: func(event.CreateEvent) bool {
-					return false
-				},
-				DeleteFunc: func(de event.DeleteEvent) bool {
-					return false
-				},
-				GenericFunc: func(ge event.GenericEvent) bool {
-					return false
-				},
-			})).
-		Complete(r)
+func (r *BackupMicroService) cancelDataUpload(du *velerov2alpha1api.DataUpload) {
+	r.logger.WithField("DataUpload", du.Name).Info("Data upload is being canceled")
+
+	r.eventRecorder.Event(du, false, "Cancelling", "Cancelling for data upload %s", du.Name)
+
+	fsBackup := r.dataPathMgr.GetAsyncBR(du.Name)
+	if fsBackup == nil {
+		r.OnDataUploadCancelled(r.ctx, du.GetNamespace(), du.GetName())
+	} else {
+		fsBackup.Cancel()
+	}
 }
