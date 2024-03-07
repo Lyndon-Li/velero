@@ -161,7 +161,7 @@ func CollectPodLogs(ctx context.Context, podGetter corev1client.CoreV1Interface,
 	request := podGetter.Pods(namespace).GetLogs(pod, logOptions)
 	input, err := request.Stream(ctx)
 	if err != nil {
-		logIndicator += fmt.Sprintf("No present log retrieved, err %v\n", err)
+		logIndicator += fmt.Sprintf("No present log retrieved, err: %v\n", err)
 		input = nil
 	}
 
@@ -175,27 +175,25 @@ func CollectPodLogs(ctx context.Context, podGetter corev1client.CoreV1Interface,
 		}
 	}
 
-	if !includePrevious {
-		return nil
-	}
+	if includePrevious {
+		logIndicator = "***************************previous logs***************************\n"
 
-	logIndicator = "***************************previous logs***************************\n"
+		logOptions.Previous = true
+		request = podGetter.Pods(namespace).GetLogs(pod, logOptions)
+		input, err = request.Stream(ctx)
+		if err != nil {
+			logIndicator += fmt.Sprintf("No previous log retrieved, err: %v\n", err)
+			input = nil
+		}
 
-	logOptions.Previous = true
-	request = podGetter.Pods(namespace).GetLogs(pod, logOptions)
-	input, err = request.Stream(ctx)
-	if err != nil {
-		logIndicator += fmt.Sprintf("No previous log retrieved, err %v\n", err)
-		input = nil
-	}
+		if _, err := output.Write([]byte(logIndicator)); err != nil {
+			return errors.Wrap(err, "error to write previous pod log indicator")
+		}
 
-	if _, err := output.Write([]byte(logIndicator)); err != nil {
-		return errors.Wrap(err, "error to write previous pod log indicator")
-	}
-
-	if input != nil {
-		if _, err := io.Copy(output, input); err != nil {
-			return errors.Wrap(err, "error to copy input for previous log")
+		if input != nil {
+			if _, err := io.Copy(output, input); err != nil {
+				return errors.Wrap(err, "error to copy input for previous log")
+			}
 		}
 	}
 

@@ -73,10 +73,10 @@ func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient
 		repoEnsurer:      repoEnsurer,
 		dataPathMgr:      dataPathMgr,
 		dataUploadName:   dataUploadName,
-		eventRecorder:    kube.NewEventRecorder(kubeClient, dataUploadName, thisPod.Spec.NodeName),
+		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataUploadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
 		resultSignal:     make(chan dataPathResult),
-		//startSignal:      make(chan *velerov2alpha1api.DataUpload),
+		startSignal:      make(chan *velerov2alpha1api.DataUpload),
 	}
 }
 
@@ -205,6 +205,8 @@ func (r *BackupMicroService) OnDataUploadProgress(ctx context.Context, namespace
 		log.WithError(err).Errorf("Failed to marshal progress %v", progress)
 		return
 	}
+
+	log.Info("Sending event for progress")
 
 	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonProgress, string(progressBytes))
 }

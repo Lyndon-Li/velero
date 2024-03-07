@@ -23,20 +23,39 @@ import (
 	"k8s.io/client-go/kubernetes"
 	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
-
-	"github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned/scheme"
 )
 
 type EventRecorder struct {
 	recorder record.EventRecorder
 }
 
-func NewEventRecorder(kubeClient kubernetes.Interface, eventSource string, eventNode string) *EventRecorder {
+func NewEventRecorder(kubeClient kubernetes.Interface, scheme *runtime.Scheme, eventSource string, eventNode string) *EventRecorder {
 	res := EventRecorder{}
 
 	eventBroadcaster := record.NewBroadcaster()
+
+	record.NewBroadcasterWithCorrelatorOptions(record.CorrelatorOptions{
+		MaxEvents: 1,
+		// KeyFunc: func(event *v1.Event) (aggregateKey string, localKey string) {
+		// 	return strings.Join([]string{
+		// 		event.Source.Component,
+		// 		event.Source.Host,
+		// 		event.InvolvedObject.Kind,
+		// 		event.InvolvedObject.Namespace,
+		// 		event.InvolvedObject.Name,
+		// 		string(event.InvolvedObject.UID),
+		// 		event.InvolvedObject.APIVersion,
+		// 		event.Type,
+		// 		event.Reason,
+		// 		event.ReportingController,
+		// 		event.ReportingInstance,
+		// 	},
+		// 		""), event.Message
+		// },
+	})
+
 	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
-	res.recorder = eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{
+	res.recorder = eventBroadcaster.NewRecorder(scheme, v1.EventSource{
 		Component: eventSource,
 		Host:      eventNode,
 	})

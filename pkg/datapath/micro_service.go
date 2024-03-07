@@ -106,29 +106,31 @@ func (ms *microServiceBR) Init(ctx context.Context, bslName string, sourceNamesp
 		return errors.Wrap(err, "error getting pod informer")
 	}
 
-	ref := v1.ObjectReference{
-		Kind:       thisPod.Kind,
-		Namespace:  thisPod.Namespace,
-		Name:       thisPod.Name,
-		UID:        thisPod.UID,
-		APIVersion: thisPod.APIVersion,
-	}
-
 	eventInformer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				evt := obj.(*v1.Event)
-				if evt.InvolvedObject != ref {
+
+				ms.log.Infof("Received adding event %s/%s, message %s for object %v, count %v", evt.Namespace, evt.Name, evt.Message, evt.InvolvedObject, evt.Count)
+
+				if evt.InvolvedObject.UID != thisPod.UID {
 					return
 				}
+
+				ms.log.Infof("Pushed adding event %s/%s, message %s for object %v", evt.Namespace, evt.Name, evt.Message, evt.InvolvedObject)
 
 				ms.eventCh <- evt
 			},
 			UpdateFunc: func(_, obj interface{}) {
 				evt := obj.(*v1.Event)
-				if evt.InvolvedObject != ref {
+
+				ms.log.Infof("Received updating event %s/%s, message %s for object %v", evt.Namespace, evt.Name, evt.Message, evt.InvolvedObject)
+
+				if evt.InvolvedObject.UID != thisPod.UID {
 					return
 				}
+
+				ms.log.Infof("Pushed updating event %s/%s, message %s for object %v", evt.Namespace, evt.Name, evt.Message, evt.InvolvedObject)
 
 				ms.eventCh <- evt
 			},
@@ -139,15 +141,12 @@ func (ms *microServiceBR) Init(ctx context.Context, bslName string, sourceNamesp
 		cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(_, obj interface{}) {
 				pod := obj.(*v1.Pod)
-				ms.log.Infof("Got pod update for %s (%v), phase %s. Expecting %s (%v)", pod.Name, pod.UID, pod.Status.Phase, thisPod.Name, thisPod.UID)
 				if pod.UID != thisPod.UID {
 					return
 				}
 
-				ms.log.Infof("Got this pod update for %s, phase %s", pod.Name, pod.Status.Phase)
 				if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
 					ms.podCh <- pod
-					ms.log.Infof("Sent pod update for %s, phase %s", pod.Name, pod.Status.Phase)
 				}
 			},
 		},
@@ -201,7 +200,7 @@ func (ms *microServiceBR) startWatch() {
 				if evt.Reason == EventReasonProgress {
 					ms.callbacks.OnProgress(ms.ctx, ms.namespace, ms.taskName, getProgressFromMessage(evt.Message, ms.log))
 				} else {
-					ms.log.Infof("Received event for data mover %s.[reason %s, message %s]", ms.taskName, evt.Reason, evt.Message)
+					ms.log.Debugf("Received event for data mover %s.[reason %s, message %s]", ms.taskName, evt.Reason, evt.Message)
 				}
 			}
 		}
@@ -237,42 +236,6 @@ func (ms *microServiceBR) startWatch() {
 		}
 
 		ms.log.Info("Complete callback on pod termination")
-
-		// terminateLoop:
-		// 	for {
-		// 		select {
-		// 		case <-time.After(time.Second * 2):
-		// 			ms.log.Warn("Failed to wait quit event after pod terminates, get result from pod")
-
-		// 			if lastPod.Status.Phase == v1.PodSucceeded {
-		// 				ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, lastPod.Status.Message, ms.log))
-		// 			} else if lastPod.Status.Message == ErrCancelled {
-		// 				ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
-		// 			} else {
-		// 				ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(lastPod.Status.Message))
-		// 			}
-
-		// 			ms.log.Infof("Complete callback on pod termination message %s", lastPod.Status.Message)
-		// 			break terminateLoop
-		// 		case evt := <-ms.eventCh:
-		// 			terminiated := true
-		// 			switch evt.Reason {
-		// 			case EventReasonCompleted:
-		// 				ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, evt.Message, ms.log))
-		// 			case EventReasonFailed:
-		// 				ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(evt.Message))
-		// 			case EventReasonCancelled:
-		// 				ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
-		// 			default:
-		// 				terminiated = false
-		// 			}
-
-		// 			if terminiated {
-		// 				ms.log.Infof("Complete callback on event message %s", evt.Message)
-		// 				break terminateLoop
-		// 			}
-		// 		}
-		// 	}
 	}()
 }
 

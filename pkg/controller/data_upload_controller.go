@@ -948,4 +948,18 @@ func (r *DataUploadReconciler) ResumeDataPathBR() error {
 	// 		return r.errorOut(ctx, du, err, "error to create data path", log)
 	// 	}
 	// }
+
+	// 	if err := msBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, datamover.GetUploaderType(du.Spec.DataMover),
+	// 	velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
+	// 	return r.errorOut(ctx, du, err, "error to initialize data path", log)
+	// }
+	// log.WithField("path", path.ByPath).Info("fs init")
+
+	// tags := map[string]string{
+	// 	velerov1api.AsyncOperationIDLabel: du.Labels[velerov1api.AsyncOperationIDLabel],
+	// }
+
+	//	if err := msBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
+	//		return r.errorOut(ctx, du, err, "error starting data path backup", log)
+	//	}
 }

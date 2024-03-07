@@ -427,6 +427,8 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 		args = append(args, fmt.Sprintf("--log-level=%s", podInfo.logLevel))
 	}
 
+	userID := int64(0)
+
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
@@ -475,6 +477,9 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 			TerminationGracePeriodSeconds: &gracePeriod,
 			Volumes:                       volumes,
 			RestartPolicy:                 corev1.RestartPolicyNever,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser: &userID,
+			},
 		},
 	}
 

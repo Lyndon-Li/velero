@@ -68,10 +68,10 @@ func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClien
 		repoEnsurer:      repoEnsurer,
 		dataPathMgr:      dataPathMgr,
 		dataDownloadName: dataDownloadName,
-		eventRecorder:    kube.NewEventRecorder(kubeClient, dataDownloadName, thisPod.Spec.NodeName),
+		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataDownloadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
 		resultSignal:     make(chan dataPathResult),
-		//startSignal:      make(chan *velerov2alpha1api.DataDownload),
+		startSignal:      make(chan *velerov2alpha1api.DataDownload),
 	}
 }
 

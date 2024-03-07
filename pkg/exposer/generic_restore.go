@@ -265,9 +265,9 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	operationTimeout time.Duration, label map[string]string, selectedNode string) (*corev1.Pod, error) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
+	containerName := ownerObject.Name
 
 	volumeName := string(ownerObject.UID)
-	containerName := string(ownerObject.UID)
 
 	podInfo, err := getInheritedPodInfo(ctx, e.kubeClient, ownerObject.Namespace)
 	if err != nil {
@@ -288,14 +288,21 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	}}
 	volumes = append(volumes, podInfo.volumes...)
 
-	command := []string{"/velero", "data-mover", "restore", "this-pod", restorePodName, "resource-timeout", operationTimeout.String()}
+	args := []string{
+		fmt.Sprintf("--this-pod=%s", restorePodName),
+		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
+	}
+
 	if podInfo.logFormat != "" {
-		command = append(command, "log-format", podInfo.logFormat)
+		args = append(args, fmt.Sprintf("--log-format=%s", podInfo.logFormat))
+
 	}
 
 	if podInfo.logLevel != "" {
-		command = append(command, "log-level", podInfo.logLevel)
+		args = append(args, fmt.Sprintf("--log-level=%s", podInfo.logLevel))
 	}
+
+	userID := int64(0)
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -318,15 +325,25 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 					Name:            containerName,
 					Image:           podInfo.image,
 					ImagePullPolicy: corev1.PullNever,
-					Command:         command,
-					VolumeMounts:    volumeMounts,
-					VolumeDevices:   volumeDevices,
+					Command: []string{
+						"/velero",
+						"data-mover",
+						"restore",
+					},
+					Args:          args,
+					VolumeMounts:  volumeMounts,
+					VolumeDevices: volumeDevices,
+					Env:           podInfo.env,
 				},
 			},
 			ServiceAccountName:            podInfo.serviceAccount,
 			TerminationGracePeriodSeconds: &gracePeriod,
 			Volumes:                       volumes,
 			NodeName:                      selectedNode,
+			RestartPolicy:                 corev1.RestartPolicyNever,
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser: &userID,
+			},
 		},
 	}
 
