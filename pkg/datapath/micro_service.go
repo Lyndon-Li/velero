@@ -20,8 +20,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -47,10 +45,10 @@ const (
 
 	ErrCancelled = "data path is cancelled"
 
-	EventReasonCompleted = "Completed"
-	EventReasonFailed    = "Failed"
-	EventReasonCancelled = "Cancelled"
-	EventReasonProgress  = "Progress"
+	//EventReasonCompleted = "Completed"
+	//EventReasonFailed    = "Failed"
+	//EventReasonCancelled = "Cancelled"
+	EventReasonProgress = "Progress"
 )
 
 type microServiceBR struct {
@@ -77,6 +75,8 @@ func newMicroServiceBR(client client.Client, kubeClient kubernetes.Interface, mg
 		callbacks:  callbacks,
 		taskType:   taskType,
 		taskName:   taskName,
+		eventCh:    make(chan *v1.Event),
+		podCh:      make(chan *v1.Pod),
 		log:        log,
 	}
 
@@ -139,12 +139,15 @@ func (ms *microServiceBR) Init(ctx context.Context, bslName string, sourceNamesp
 		cache.ResourceEventHandlerFuncs{
 			UpdateFunc: func(_, obj interface{}) {
 				pod := obj.(*v1.Pod)
+				ms.log.Infof("Got pod update for %s (%v), phase %s. Expecting %s (%v)", pod.Name, pod.UID, pod.Status.Phase, thisPod.Name, thisPod.UID)
 				if pod.UID != thisPod.UID {
 					return
 				}
 
+				ms.log.Infof("Got this pod update for %s, phase %s", pod.Name, pod.Status.Phase)
 				if pod.Status.Phase == v1.PodSucceeded || pod.Status.Phase == v1.PodFailed {
 					ms.podCh <- pod
+					ms.log.Infof("Sent pod update for %s, phase %s", pod.Name, pod.Status.Phase)
 				}
 			},
 		},
@@ -189,7 +192,7 @@ func (ms *microServiceBR) startWatch() {
 		for {
 			select {
 			case <-ms.ctx.Done():
-				ms.log.Warn("micro service BR quits without waiting job")
+				ms.log.Warn("Micro service BR quits without waiting job")
 				break watchLoop
 			case pod := <-ms.podCh:
 				lastPod = pod
@@ -203,58 +206,73 @@ func (ms *microServiceBR) startWatch() {
 			}
 		}
 
-		ms.log.Info("Finish waiting backup pod, got lastPod %v", lastPod != nil)
+		terminateMessage := kube.GetPodTerminateMessage(lastPod, ms.taskName)
 
 		previousLog := false
-		if lastPod != nil && lastPod.Status.Phase == v1.PodFailed && lastPod.Status.Message != ErrCancelled {
+		if lastPod != nil && lastPod.Status.Phase == v1.PodFailed && terminateMessage != ErrCancelled {
 			previousLog = true
 		}
 
-		ms.log.Info("Recording data mover logs, include previous %v", previousLog)
+		ms.log.Infof("Recording data mover logs, include previous %v", previousLog)
 
 		if err := ms.redirectDataMoverLogs(previousLog); err != nil {
 			ms.log.WithError(err).Warn("Failed to collect data mover logs")
 		}
 
 		if lastPod == nil {
+			ms.log.Warn("Data mover watch loop is cancelled")
 			return
 		}
 
-	terminateLoop:
-		for {
-			select {
-			case <-time.After(time.Second * 2):
-				ms.log.Warn("Failed to wait quit event after pod terminates, get result from pod")
+		ms.log.Infof("Finish waiting backup pod, got lastPod, phase %s, message %s", lastPod.Status.Phase, terminateMessage)
 
-				if lastPod.Status.Phase == v1.PodSucceeded {
-					ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, lastPod.Status.Message, ms.log))
-				} else if lastPod.Status.Message == ErrCancelled {
-					ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
-				} else {
-					ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(lastPod.Status.Message))
-				}
-
-				ms.log.Infof("Complete callback on pod termination message %s", lastPod.Status.Message)
-				break terminateLoop
-			case evt := <-ms.eventCh:
-				terminiated := true
-				switch evt.Reason {
-				case EventReasonCompleted:
-					ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, evt.Message, ms.log))
-				case EventReasonFailed:
-					ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(evt.Message))
-				case EventReasonCancelled:
-					ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
-				default:
-					terminiated = false
-				}
-
-				if terminiated {
-					ms.log.Infof("Complete callback on event message %s", evt.Message)
-					break terminateLoop
-				}
+		if lastPod.Status.Phase == v1.PodSucceeded {
+			ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, terminateMessage, ms.log))
+		} else {
+			if terminateMessage == ErrCancelled {
+				ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
+			} else {
+				ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(terminateMessage))
 			}
 		}
+
+		ms.log.Info("Complete callback on pod termination")
+
+		// terminateLoop:
+		// 	for {
+		// 		select {
+		// 		case <-time.After(time.Second * 2):
+		// 			ms.log.Warn("Failed to wait quit event after pod terminates, get result from pod")
+
+		// 			if lastPod.Status.Phase == v1.PodSucceeded {
+		// 				ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, lastPod.Status.Message, ms.log))
+		// 			} else if lastPod.Status.Message == ErrCancelled {
+		// 				ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
+		// 			} else {
+		// 				ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(lastPod.Status.Message))
+		// 			}
+
+		// 			ms.log.Infof("Complete callback on pod termination message %s", lastPod.Status.Message)
+		// 			break terminateLoop
+		// 		case evt := <-ms.eventCh:
+		// 			terminiated := true
+		// 			switch evt.Reason {
+		// 			case EventReasonCompleted:
+		// 				ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, evt.Message, ms.log))
+		// 			case EventReasonFailed:
+		// 				ms.callbacks.OnFailed(ms.ctx, ms.namespace, ms.taskName, errors.New(evt.Message))
+		// 			case EventReasonCancelled:
+		// 				ms.callbacks.OnCancelled(ms.ctx, ms.namespace, ms.taskName)
+		// 			default:
+		// 				terminiated = false
+		// 			}
+
+		// 			if terminiated {
+		// 				ms.log.Infof("Complete callback on event message %s", evt.Message)
+		// 				break terminateLoop
+		// 			}
+		// 		}
+		// 	}
 	}()
 }
 
@@ -295,25 +313,25 @@ func (ms *microServiceBR) Cancel() {
 func (ms *microServiceBR) redirectDataMoverLogs(includePrevious bool) error {
 	ms.log.Infof("Starting to collect data mover pod log for %s", ms.taskName)
 
-	logFileName := os.TempDir()
-
-	logFile, err := os.CreateTemp(logFileName, "")
+	logFileDir := os.TempDir()
+	logFile, err := os.CreateTemp(logFileDir, "")
 	if err != nil {
-		return errors.Wrapf(err, "error to create temp file for data mover pod log under %s", logFileName)
+		return errors.Wrapf(err, "error to create temp file for data mover pod log under %s", logFileDir)
 	}
 
 	defer logFile.Close()
 
-	logFileName = filepath.Join(logFileName, logFile.Name())
-
-	ms.log.Info("Created log file %s", logFileName)
+	logFileName := logFile.Name()
+	ms.log.Infof("Created log file %s", logFileName)
 
 	err = kube.CollectPodLogs(ms.ctx, ms.kubeClient.CoreV1(), ms.taskName, ms.namespace, ms.taskName, includePrevious, logFile)
 	if err != nil {
 		return errors.Wrapf(err, "error to collect logs to %s for data mover pod %s", logFileName, ms.taskName)
 	}
 
-	ms.log.Info("Redirecting to log file %s", logFileName)
+	logFile.Close()
+
+	ms.log.Infof("Redirecting to log file %s", logFileName)
 
 	logger := ms.log.WithField(logging.LogSourceKey, logFileName)
 	logger.Logln(logging.ListeningLevel, logging.ListeningMessage)

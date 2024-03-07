@@ -137,11 +137,22 @@ func IsPodUnrecoverable(pod *corev1api.Pod, log logrus.FieldLogger) (bool, strin
 	return false, ""
 }
 
+func GetPodTerminateMessage(pod *corev1api.Pod, container string) string {
+	message := ""
+	for _, containerStatus := range pod.Status.ContainerStatuses {
+		if containerStatus.Name == container {
+			if containerStatus.State.Terminated != nil {
+				message = containerStatus.State.Terminated.Message
+			}
+			break
+		}
+	}
+
+	return message
+}
+
 func CollectPodLogs(ctx context.Context, podGetter corev1client.CoreV1Interface, pod string, namespace string, container string, includePrevious bool, output io.Writer) error {
 	logIndicator := fmt.Sprintf("***************************begin pod logs[%s/%s]***************************\n", pod, container)
-	if _, err := output.Write([]byte(logIndicator)); err != nil {
-		return errors.Wrap(err, "error to write begin pod log indicator")
-	}
 
 	logOptions := &corev1api.PodLogOptions{
 		Container: container,
@@ -150,11 +161,18 @@ func CollectPodLogs(ctx context.Context, podGetter corev1client.CoreV1Interface,
 	request := podGetter.Pods(namespace).GetLogs(pod, logOptions)
 	input, err := request.Stream(ctx)
 	if err != nil {
-		return errors.Wrap(err, "error to get input from request")
+		logIndicator += fmt.Sprintf("No present log retrieved, err %v\n", err)
+		input = nil
 	}
 
-	if _, err := io.Copy(output, input); err != nil {
-		return errors.Wrap(err, "error to copy input")
+	if _, err := output.Write([]byte(logIndicator)); err != nil {
+		return errors.Wrap(err, "error to write begin pod log indicator")
+	}
+
+	if input != nil {
+		if _, err := io.Copy(output, input); err != nil {
+			return errors.Wrap(err, "error to copy input")
+		}
 	}
 
 	if !includePrevious {
@@ -162,19 +180,23 @@ func CollectPodLogs(ctx context.Context, podGetter corev1client.CoreV1Interface,
 	}
 
 	logIndicator = "***************************previous logs***************************\n"
-	if _, err := output.Write([]byte(logIndicator)); err != nil {
-		return errors.Wrap(err, "error to write previous log indicator")
-	}
 
 	logOptions.Previous = true
 	request = podGetter.Pods(namespace).GetLogs(pod, logOptions)
 	input, err = request.Stream(ctx)
 	if err != nil {
-		return errors.Wrap(err, "error to get reader from request for previous log")
+		logIndicator += fmt.Sprintf("No previous log retrieved, err %v\n", err)
+		input = nil
 	}
 
-	if _, err := io.Copy(output, input); err != nil {
-		return errors.Wrap(err, "error to copy input for previous log")
+	if _, err := output.Write([]byte(logIndicator)); err != nil {
+		return errors.Wrap(err, "error to write previous pod log indicator")
+	}
+
+	if input != nil {
+		if _, err := io.Copy(output, input); err != nil {
+			return errors.Wrap(err, "error to copy input for previous log")
+		}
 	}
 
 	logIndicator = fmt.Sprintf("***************************end pod logs[%s/%s]***************************\n", pod, container)

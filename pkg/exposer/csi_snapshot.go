@@ -385,9 +385,9 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject co
 
 func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject corev1.ObjectReference, backupPVC *corev1.PersistentVolumeClaim, operationTimeout time.Duration, label map[string]string) (*corev1.Pod, error) {
 	podName := ownerObject.Name
+	containerName := ownerObject.Name
 
 	volumeName := string(ownerObject.UID)
-	containerName := string(ownerObject.UID)
 
 	podInfo, err := getInheritedPodInfo(ctx, e.kubeClient, ownerObject.Namespace)
 	if err != nil {

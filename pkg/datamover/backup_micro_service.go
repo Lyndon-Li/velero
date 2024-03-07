@@ -76,6 +76,7 @@ func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient
 		eventRecorder:    kube.NewEventRecorder(kubeClient, dataUploadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
 		resultSignal:     make(chan dataPathResult),
+		//startSignal:      make(chan *velerov2alpha1api.DataUpload),
 	}
 }
 
@@ -160,12 +161,11 @@ func (r *BackupMicroService) OnDataUploadCompleted(ctx context.Context, namespac
 		r.resultSignal <- dataPathResult{
 			err: errors.Wrapf(err, "Failed to marshal backup result %v", result.Backup),
 		}
-		return
-	}
-
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(backupBytes))
-	r.resultSignal <- dataPathResult{
-		result: string(backupBytes),
+	} else {
+		//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(backupBytes))
+		r.resultSignal <- dataPathResult{
+			result: string(backupBytes),
+		}
 	}
 
 	log.Info("Async fs backup data path completed")
@@ -177,7 +177,7 @@ func (r *BackupMicroService) OnDataUploadFailed(ctx context.Context, namespace s
 	log := r.logger.WithField("dataupload", duName)
 	log.WithError(err).Error("Async fs backup data path failed")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUploadName, err)
+	//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUploadName, err)
 	r.resultSignal <- dataPathResult{
 		err: errors.Wrapf(err, "Data path for data upload %s failed", r.dataUploadName),
 	}
@@ -189,7 +189,7 @@ func (r *BackupMicroService) OnDataUploadCancelled(ctx context.Context, namespac
 	log := r.logger.WithField("dataupload", duName)
 	log.Warn("Async fs backup data path canceled")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data upload %s cancelled", duName)
+	//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data upload %s cancelled", duName)
 	r.resultSignal <- dataPathResult{
 		err: errors.New(datapath.ErrCancelled),
 	}

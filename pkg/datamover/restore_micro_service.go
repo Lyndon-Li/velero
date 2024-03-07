@@ -71,6 +71,7 @@ func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClien
 		eventRecorder:    kube.NewEventRecorder(kubeClient, dataDownloadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
 		resultSignal:     make(chan dataPathResult),
+		//startSignal:      make(chan *velerov2alpha1api.DataDownload),
 	}
 }
 
@@ -151,12 +152,11 @@ func (r *RestoreMicroService) OnDataDownloadCompleted(ctx context.Context, names
 		r.resultSignal <- dataPathResult{
 			err: errors.Wrapf(err, "Failed to marshal restore result %v", result.Restore),
 		}
-		return
-	}
-
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(restoreBytes))
-	r.resultSignal <- dataPathResult{
-		result: string(restoreBytes),
+	} else {
+		//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(restoreBytes))
+		r.resultSignal <- dataPathResult{
+			result: string(restoreBytes),
+		}
 	}
 
 	log.Info("Async fs restore data path completed")
@@ -168,7 +168,7 @@ func (r *RestoreMicroService) OnDataDownloadFailed(ctx context.Context, namespac
 	log := r.logger.WithField("datadownload", ddName)
 	log.WithError(err).Error("Async fs restore data path failed")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data download %s failed, error %v", r.dataDownloadName, err)
+	//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data download %s failed, error %v", r.dataDownloadName, err)
 	r.resultSignal <- dataPathResult{
 		err: errors.Wrapf(err, "Data path for data download %s failed", r.dataDownloadName),
 	}
@@ -180,7 +180,7 @@ func (r *RestoreMicroService) OnDataDownloadCancelled(ctx context.Context, names
 	log := r.logger.WithField("datadownload", ddName)
 	log.Warn("Async fs restore data path canceled")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data download %s cancelled", ddName)
+	//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data download %s cancelled", ddName)
 	r.resultSignal <- dataPathResult{
 		err: errors.Errorf("Data path for data download %s cancelled", r.dataDownloadName),
 	}

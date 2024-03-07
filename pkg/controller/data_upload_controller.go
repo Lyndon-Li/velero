@@ -295,6 +295,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if du.Spec.Cancel {
 			log.Info("Data upload is being canceled")
 
+			// rebuild msBackup if get fails
 			msBackup := r.dataPathMgr.GetAsyncBR(du.Name)
 			if msBackup == nil {
 				r.OnDataUploadCancelled(ctx, du.GetNamespace(), du.GetName())
@@ -906,6 +907,14 @@ func (r *DataUploadReconciler) AttemptDataUploadResume(ctx context.Context, cli 
 				// the Prepared CR could be still handled by dataupload controller after node-agent restart
 				logger.WithField("dataupload", du.GetName()).Debug("find a dataupload with status prepared")
 			} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
+				err = r.ResumeDataPathBR()
+				if err == nil {
+					logger.WithField("dataupload", du.GetName()).Info("Resumed data pathfor du")
+					continue
+				}
+
+				logger.WithField("dataupload", du.GetName()).Warn("Failed to resume data path for du, have to cancel it")
+
 				err = UpdateDataUploadWithRetry(ctx, cli, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, logger.WithField("dataupload", du.Name),
 					func(dataUpload *velerov2alpha1api.DataUpload) {
 						dataUpload.Spec.Cancel = true
@@ -925,4 +934,18 @@ func (r *DataUploadReconciler) AttemptDataUploadResume(ctx context.Context, cli 
 	// so we need to mark the data upload as canceled for it may not be recoverable
 	r.CancelAcceptedDataupload(ctx, cli, ns)
 	return nil
+}
+
+func (r *DataUploadReconciler) ResumeDataPathBR() error {
+	return errors.New("not supported")
+
+	// msBackup, err = r.dataPathMgr.CreateMicroServiceBR(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, log)
+	// if err != nil {
+	// 	if err == datapath.ConcurrentLimitExceed {
+	// 		log.Info("Data path instance is concurrent limited requeue later")
+	// 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+	// 	} else {
+	// 		return r.errorOut(ctx, du, err, "error to create data path", log)
+	// 	}
+	// }
 }
