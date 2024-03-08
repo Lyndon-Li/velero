@@ -40,8 +40,8 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
-	"github.com/vmware-tanzu/velero/pkg/repository"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
 
@@ -99,11 +99,11 @@ type fakeFSBR struct {
 	clock  clock.WithTickerAndDelayedExecution
 }
 
-func (b *fakeFSBR) Init(ctx context.Context, bslName string, sourceNamespace string, uploaderType string, repositoryType string, repoIdentifier string, repositoryEnsurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter) error {
+func (b *fakeFSBR) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
 	return nil
 }
 
-func (b *fakeFSBR) StartBackup(source datapath.AccessPoint, realSource string, parentSnapshot string, forceFull bool, tags map[string]string, uploaderConfigs map[string]string) error {
+func (b *fakeFSBR) StartBackup(uploaderConfigs map[string]string, param interface{}) error {
 	pvb := b.pvb
 
 	original := b.pvb.DeepCopy()
@@ -115,7 +115,7 @@ func (b *fakeFSBR) StartBackup(source datapath.AccessPoint, realSource string, p
 	return nil
 }
 
-func (b *fakeFSBR) StartRestore(snapshotID string, target datapath.AccessPoint, uploaderConfigs map[string]string) error {
+func (b *fakeFSBR) StartRestore(snapshotID string, uploaderConfigs map[string]string) error {
 	return nil
 }
 

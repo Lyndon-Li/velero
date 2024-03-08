@@ -211,6 +211,8 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 
 	backupPodName := ownerObject.Name
 	backupPVCName := ownerObject.Name
+
+	containerName := string(ownerObject.UID)
 	volumeName := string(ownerObject.UID)
 
 	curLog := e.log.WithFields(logrus.Fields{
@@ -253,7 +255,11 @@ func (e *csiSnapshotExposer) GetExposed(ctx context.Context, ownerObject corev1.
 
 	curLog.WithField("pod", pod.Name).Infof("Backup volume is found in pod at index %v", i)
 
-	return &ExposeResult{ByPod: ExposeByPod{HostingPod: pod, VolumeName: volumeName}}, nil
+	return &ExposeResult{ByPod: ExposeByPod{
+		HostingPod:       pod,
+		HostingContainer: containerName,
+		VolumeName:       volumeName,
+	}}, nil
 }
 
 func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject corev1.ObjectReference, vsName string, sourceNamespace string) {
@@ -385,8 +391,8 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject co
 
 func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject corev1.ObjectReference, backupPVC *corev1.PersistentVolumeClaim, operationTimeout time.Duration, label map[string]string) (*corev1.Pod, error) {
 	podName := ownerObject.Name
-	containerName := ownerObject.Name
 
+	containerName := string(ownerObject.UID)
 	volumeName := string(ownerObject.UID)
 
 	podInfo, err := getInheritedPodInfo(ctx, e.kubeClient, ownerObject.Namespace)
@@ -415,6 +421,8 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 
 	args := []string{
 		fmt.Sprintf("--this-pod=%s", podName),
+		fmt.Sprintf("--this-container=%s", containerName),
+		fmt.Sprintf("--this-volume=%s", volumeName),
 		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
 	}
 

@@ -243,8 +243,8 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 
-		msBackup := r.dataPathMgr.GetAsyncBR(du.Name)
-		if msBackup != nil {
+		asyncBR := r.dataPathMgr.GetAsyncBR(du.Name)
+		if asyncBR != nil {
 			log.Info("Cancellable data path is already started")
 			return ctrl.Result{}, nil
 		}
@@ -267,7 +267,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			OnProgress:  r.OnDataUploadProgress,
 		}
 
-		msBackup, err = r.dataPathMgr.CreateMicroServiceBR(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, log)
+		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, false, log)
 		if err != nil {
 			if err == datapath.ConcurrentLimitExceed {
 				log.Info("Data path instance is concurrent limited requeue later")
@@ -284,7 +284,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 
 		log.Info("Data upload is marked as in progress")
-		result, err := r.runCancelableDataUpload(ctx, msBackup, du, res, log)
+		result, err := r.runCancelableDataUpload(ctx, asyncBR, du, res, log)
 		if err != nil {
 			log.Errorf("Failed to run cancelable data path for %s with err %v", du.Name, err)
 			r.closeDataPath(ctx, du.Name)
@@ -329,29 +329,18 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 }
 
-func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, msBackup datapath.AsyncBR, du *velerov2alpha1api.DataUpload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
+func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, asyncBR datapath.AsyncBR, du *velerov2alpha1api.DataUpload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
 	log.Info("Run cancelable dataUpload")
-	path, err := exposer.GetPodVolumeHostPath(ctx, res.ByPod.HostingPod, res.ByPod.VolumeName, r.client, r.fileSystem, log)
-	if err != nil {
-		return r.errorOut(ctx, du, err, "error exposing host path for pod volume", log)
-	}
 
-	log.WithField("path", path.ByPath).Debug("Found host path")
-	if err := msBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, datamover.GetUploaderType(du.Spec.DataMover),
-		velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
+	if err := asyncBR.Init(ctx, res, nil); err != nil {
 		return r.errorOut(ctx, du, err, "error to initialize data path", log)
 	}
-	log.WithField("path", path.ByPath).Info("fs init")
 
-	tags := map[string]string{
-		velerov1api.AsyncOperationIDLabel: du.Labels[velerov1api.AsyncOperationIDLabel],
-	}
-
-	if err := msBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
+	if err := asyncBR.StartBackup(du.Spec.DataMoverConfig, nil); err != nil {
 		return r.errorOut(ctx, du, err, "error starting data path backup", log)
 	}
 
-	log.WithField("path", path.ByPath).Info("Async fs backup data path started")
+	log.Info("AsyncBR started")
 	return ctrl.Result{}, nil
 }
 
@@ -938,6 +927,8 @@ func (r *DataUploadReconciler) AttemptDataUploadResume(ctx context.Context, cli 
 
 func (r *DataUploadReconciler) ResumeDataPathBR() error {
 	return errors.New("not supported")
+
+	/// the concurrent num may be changed when node-agent restarts, so CreateMicroServiceBR should not limit the concurrency in the resume case
 
 	// msBackup, err = r.dataPathMgr.CreateMicroServiceBR(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, log)
 	// if err != nil {

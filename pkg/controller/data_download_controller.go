@@ -235,9 +235,9 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 
-		msRestore := r.dataPathMgr.GetAsyncBR(dd.Name)
+		asyncBR := r.dataPathMgr.GetAsyncBR(dd.Name)
 
-		if msRestore != nil {
+		if asyncBR != nil {
 			log.Info("Cancellable data path is already started")
 			return ctrl.Result{}, nil
 		}
@@ -260,7 +260,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			OnProgress:  r.OnDataDownloadProgress,
 		}
 
-		msRestore, err = r.dataPathMgr.CreateMicroServiceBR(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore, dd.Name, dd.Namespace, callbacks, log)
+		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore, dd.Name, dd.Namespace, callbacks, false, log)
 		if err != nil {
 			if err == datapath.ConcurrentLimitExceed {
 				log.Info("Data path instance is concurrent limited requeue later")
@@ -279,7 +279,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		log.Info("Data download is marked as in progress")
 
-		reconcileResult, err := r.runCancelableDataPath(ctx, msRestore, dd, result, log)
+		reconcileResult, err := r.runCancelableDataPath(ctx, asyncBR, dd, result, log)
 		if err != nil {
 			log.Errorf("Failed to run cancelable data path for %s with err %v", dd.Name, err)
 			r.closeDataPath(ctx, dd.Name)
@@ -323,24 +323,16 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 }
 
-func (r *DataDownloadReconciler) runCancelableDataPath(ctx context.Context, msRestore datapath.AsyncBR, dd *velerov2alpha1api.DataDownload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
-	path, err := exposer.GetPodVolumeHostPath(ctx, res.ByPod.HostingPod, res.ByPod.VolumeName, r.client, r.fileSystem, log)
-	if err != nil {
-		return r.errorOut(ctx, dd, err, "error exposing host path for pod volume", log)
+func (r *DataDownloadReconciler) runCancelableDataPath(ctx context.Context, asyncBR datapath.AsyncBR, dd *velerov2alpha1api.DataDownload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
+	if err := asyncBR.Init(ctx, res, nil); err != nil {
+		return r.errorOut(ctx, dd, err, "error to initialize asyncBR", log)
 	}
 
-	log.WithField("path", path.ByPath).Debug("Found host path")
-	if err := msRestore.Init(ctx, dd.Spec.BackupStorageLocation, dd.Spec.SourceNamespace, datamover.GetUploaderType(dd.Spec.DataMover),
-		velerov1api.BackupRepositoryTypeKopia, "", r.repositoryEnsurer, r.credentialGetter); err != nil {
-		return r.errorOut(ctx, dd, err, "error to initialize data path", log)
-	}
-	log.WithField("path", path.ByPath).Info("fs init")
-
-	if err := msRestore.StartRestore(dd.Spec.SnapshotID, path, dd.Spec.DataMoverConfig); err != nil {
-		return r.errorOut(ctx, dd, err, fmt.Sprintf("error starting data path %s restore", path.ByPath), log)
+	if err := asyncBR.StartRestore(dd.Spec.SnapshotID, dd.Spec.DataMoverConfig); err != nil {
+		return r.errorOut(ctx, dd, err, "error starting asyncBR restore", log)
 	}
 
-	log.WithField("path", path.ByPath).Info("Async fs restore data path started")
+	log.Info("asyncBR restore started")
 	return ctrl.Result{}, nil
 }
 

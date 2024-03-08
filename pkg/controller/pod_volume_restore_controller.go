@@ -135,23 +135,27 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return c.errorOut(ctx, pvr, err, "error to update status to in progress", log)
 	}
 
-	volumePath, err := exposer.GetPodVolumeHostPath(ctx, pod, pvr.Spec.Volume, c.Client, c.fileSystem, log)
-	if err != nil {
-		return c.errorOut(ctx, pvr, err, "error exposing host path for pod volume", log)
-	}
-
-	log.WithField("path", volumePath.ByPath).Debugf("Found host path")
-
-	if err := fsRestore.Init(ctx, pvr.Spec.BackupStorageLocation, pvr.Spec.SourceNamespace, pvr.Spec.UploaderType,
-		podvolume.GetPvrRepositoryType(pvr), pvr.Spec.RepoIdentifier, c.repositoryEnsurer, c.credentialGetter); err != nil {
+	if err := fsRestore.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
+		HostingPod: pod,
+		VolumeName: pvr.Spec.Volume,
+	}}, &datapath.FSBRInitParam{
+		BSLName:           pvr.Spec.BackupStorageLocation,
+		SourceNamespace:   pvr.Spec.SourceNamespace,
+		UploaderType:      pvr.Spec.UploaderType,
+		RepositoryType:    podvolume.GetPvrRepositoryType(pvr),
+		RepoIdentifier:    pvr.Spec.RepoIdentifier,
+		RepositoryEnsurer: c.repositoryEnsurer,
+		CredentialGetter:  c.credentialGetter,
+		HostMode:          true,
+	}); err != nil {
 		return c.errorOut(ctx, pvr, err, "error to initialize data path", log)
 	}
 
-	if err := fsRestore.StartRestore(pvr.Spec.SnapshotID, volumePath, pvr.Spec.UploaderSettings); err != nil {
+	if err := fsRestore.StartRestore(pvr.Spec.SnapshotID, pvr.Spec.UploaderSettings); err != nil {
 		return c.errorOut(ctx, pvr, err, "error starting data path restore", log)
 	}
 
-	log.WithField("path", volumePath.ByPath).Info("Async fs restore data path started")
+	log.Info("Async fs restore data path started")
 
 	return ctrl.Result{}, nil
 }

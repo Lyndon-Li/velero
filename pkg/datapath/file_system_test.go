@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/uploader/provider"
 	providerMock "github.com/vmware-tanzu/velero/pkg/uploader/provider/mocks"
@@ -84,7 +85,7 @@ func TestAsyncBackup(t *testing.T) {
 				Backup: BackupResult{
 					SnapshotID:    "fake-snapshot",
 					EmptySnapshot: false,
-					Source:        AccessPoint{ByPath: "fake-path"},
+					Source:        exposer.AccessPoint{ByPath: "fake-path"},
 				},
 			},
 			path: "fake-path",
@@ -100,7 +101,7 @@ func TestAsyncBackup(t *testing.T) {
 			fs.initialized = true
 			fs.callbacks = test.callbacks
 
-			err := fs.StartBackup(AccessPoint{ByPath: test.path}, "", "", false, nil, map[string]string{})
+			err := fs.StartBackup(map[string]string{}, &FSBRInitParam{})
 			require.Equal(t, nil, err)
 
 			<-finish
@@ -166,7 +167,7 @@ func TestAsyncRestore(t *testing.T) {
 			},
 			result: Result{
 				Restore: RestoreResult{
-					Target: AccessPoint{ByPath: "fake-path"},
+					Target: exposer.AccessPoint{ByPath: "fake-path"},
 				},
 			},
 			path:     "fake-path",
@@ -183,7 +184,7 @@ func TestAsyncRestore(t *testing.T) {
 			fs.initialized = true
 			fs.callbacks = test.callbacks
 
-			err := fs.StartRestore(test.snapshot, AccessPoint{ByPath: test.path}, map[string]string{})
+			err := fs.StartRestore(test.snapshot, map[string]string{})
 			require.Equal(t, nil, err)
 
 			<-finish

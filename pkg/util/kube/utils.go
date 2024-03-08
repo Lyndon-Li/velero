@@ -154,6 +154,24 @@ func GetVolumeDirectory(ctx context.Context, log logrus.FieldLogger, pod *corev1
 	return pvc.Spec.VolumeName, nil
 }
 
+func GetVolumeDirectoryInPod(pod *corev1api.Pod, volumeName string) (string, error) {
+	for _, c := range pod.Spec.Containers {
+		for _, v := range c.VolumeMounts {
+			if v.Name == volumeName {
+				return v.MountPath, nil
+			}
+		}
+
+		for _, v := range c.VolumeDevices {
+			if v.Name == volumeName {
+				return v.DevicePath, nil
+			}
+		}
+	}
+
+	return "", errors.Errorf("volume %s is not found", volumeName)
+}
+
 // GetVolumeMode gets the uploader.PersistentVolumeMode of the volume.
 func GetVolumeMode(ctx context.Context, log logrus.FieldLogger, pod *corev1api.Pod, volumeName string, cli client.Client) (
 	uploader.PersistentVolumeMode, error) {

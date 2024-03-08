@@ -25,31 +25,31 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
 var getVolumeDirectory = kube.GetVolumeDirectory
+var getVolumeDirectoryInPod = kube.GetVolumeDirectoryInPod
 var getVolumeMode = kube.GetVolumeMode
 var singlePathMatch = kube.SinglePathMatch
 
 // GetPodVolumeHostPath returns a path that can be accessed from the host for a given volume of a pod
 func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, volumeName string,
-	cli ctrlclient.Client, fs filesystem.Interface, log logrus.FieldLogger) (datapath.AccessPoint, error) {
+	cli ctrlclient.Client, fs filesystem.Interface, log logrus.FieldLogger) (AccessPoint, error) {
 	logger := log.WithField("pod name", pod.Name).WithField("pod UID", pod.GetUID()).WithField("volume", volumeName)
 
 	volDir, err := getVolumeDirectory(ctx, logger, pod, volumeName, cli)
 	if err != nil {
-		return datapath.AccessPoint{}, errors.Wrapf(err, "error getting volume directory name for volume %s in pod %s", volumeName, pod.Name)
+		return AccessPoint{}, errors.Wrapf(err, "error getting volume directory name for volume %s in pod %s", volumeName, pod.Name)
 	}
 
 	logger.WithField("volDir", volDir).Info("Got volume dir")
 
 	volMode, err := getVolumeMode(ctx, logger, pod, volumeName, cli)
 	if err != nil {
-		return datapath.AccessPoint{}, errors.Wrapf(err, "error getting volume mode for volume %s in pod %s", volumeName, pod.Name)
+		return AccessPoint{}, errors.Wrapf(err, "error getting volume mode for volume %s in pod %s", volumeName, pod.Name)
 	}
 
 	volSubDir := "volumes"
@@ -62,13 +62,35 @@ func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, volumeName strin
 
 	path, err := singlePathMatch(pathGlob, fs, logger)
 	if err != nil {
-		return datapath.AccessPoint{}, errors.Wrapf(err, "error identifying unique volume path on host for volume %s in pod %s", volumeName, pod.Name)
+		return AccessPoint{}, errors.Wrapf(err, "error identifying unique volume path on host for volume %s in pod %s", volumeName, pod.Name)
 	}
 
 	logger.WithField("path", path).Info("Found path matching glob")
 
-	return datapath.AccessPoint{
+	return AccessPoint{
 		ByPath:  path,
+		VolMode: volMode,
+	}, nil
+}
+
+// GetPodVolumePath returns a path that can be accessed inside the pod for a given volume
+func GetPodVolumePath(ctx context.Context, pod *corev1.Pod, volumeName string, cli ctrlclient.Client, log logrus.FieldLogger) (AccessPoint, error) {
+	logger := log.WithField("pod name", pod.Name).WithField("pod UID", pod.GetUID()).WithField("volume", volumeName)
+
+	volDir, err := getVolumeDirectoryInPod(pod, volumeName)
+	if err != nil {
+		return AccessPoint{}, errors.Wrapf(err, "error getting volume directory name for volume %s in pod %s", volumeName, pod.Name)
+	}
+
+	logger.WithField("volDir", volDir).Info("Got volume dir")
+
+	volMode, err := getVolumeMode(ctx, logger, pod, volumeName, cli)
+	if err != nil {
+		return AccessPoint{}, errors.Wrapf(err, "error getting volume mode for volume %s in pod %s", volumeName, pod.Name)
+	}
+
+	return AccessPoint{
+		ByPath:  volDir,
 		VolMode: volMode,
 	}, nil
 }

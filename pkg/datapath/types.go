@@ -19,8 +19,7 @@ package datapath
 import (
 	"context"
 
-	"github.com/vmware-tanzu/velero/internal/credentials"
-	"github.com/vmware-tanzu/velero/pkg/repository"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 )
 
@@ -32,14 +31,14 @@ type Result struct {
 
 // BackupResult represents the result of a backup
 type BackupResult struct {
-	SnapshotID    string      `json:"snapshotID"`
-	EmptySnapshot bool        `json:"emptySnapshot"`
-	Source        AccessPoint `json:"source,omitempty"`
+	SnapshotID    string              `json:"snapshotID"`
+	EmptySnapshot bool                `json:"emptySnapshot"`
+	Source        exposer.AccessPoint `json:"source,omitempty"`
 }
 
 // RestoreResult represents the result of a restore
 type RestoreResult struct {
-	Target AccessPoint `json:"target,omitempty"`
+	Target exposer.AccessPoint `json:"target,omitempty"`
 }
 
 // Callbacks defines the collection of callbacks during backup/restore
@@ -50,22 +49,16 @@ type Callbacks struct {
 	OnProgress  func(context.Context, string, string, *uploader.Progress)
 }
 
-// AccessPoint represents an access point that has been exposed to a data path instance
-type AccessPoint struct {
-	ByPath  string                        `json:"byPath"`
-	VolMode uploader.PersistentVolumeMode `json:"volumeMode"`
-}
-
 // AsyncBR is the interface for asynchronous data path methods
 type AsyncBR interface {
 	// Init initializes an asynchronous data path instance
-	Init(ctx context.Context, bslName string, sourceNamespace string, uploaderType string, repositoryType string, repoIdentifier string, repositoryEnsurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter) error
+	Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error
 
 	// StartBackup starts an asynchronous data path instance for backup
-	StartBackup(source AccessPoint, realSource string, parentSnapshot string, forceFull bool, tags map[string]string, dataMoverConfig map[string]string) error
+	StartBackup(dataMoverConfig map[string]string, param interface{}) error
 
 	// StartRestore starts an asynchronous data path instance for restore
-	StartRestore(snapshotID string, target AccessPoint, dataMoverConfig map[string]string) error
+	StartRestore(snapshotID string, dataMoverConfig map[string]string) error
 
 	// Cancel cancels an asynchronous data path instance
 	Cancel()

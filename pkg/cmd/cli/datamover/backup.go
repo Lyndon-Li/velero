@@ -54,6 +54,8 @@ import (
 
 type dataMoverBackupConfig struct {
 	thisPodName     string
+	thisContainer   string
+	thisVolume      string
 	resourceTimeout time.Duration
 }
 
@@ -88,6 +90,8 @@ func NewBackupCommand(f client.Factory) *cobra.Command {
 	command.Flags().Var(logLevelFlag, "log-level", fmt.Sprintf("The level at which to log. Valid values are %s.", strings.Join(logLevelFlag.AllowedValues(), ", ")))
 	command.Flags().Var(formatFlag, "log-format", fmt.Sprintf("The format for log output. Valid values are %s.", strings.Join(formatFlag.AllowedValues(), ", ")))
 	command.Flags().StringVar(&config.thisPodName, "this-pod", config.thisPodName, "The pod name where the data mover backup is running")
+	command.Flags().StringVar(&config.thisContainer, "this-container", config.thisContainer, "The container name where the data mover backup is running")
+	command.Flags().StringVar(&config.thisVolume, "this-volume", config.thisVolume, "The volume name that holds the snapshot data")
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 
 	return command
@@ -238,7 +242,7 @@ func (s *dataMoverBackup) run() {
 	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
 	repoEnsurer := repository.NewEnsurer(s.client, s.logger, s.config.resourceTimeout)
 
-	duService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, duName, s.thisPod, s.dataPathMgr,
+	duService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, duName, s.namespace, s.thisPod, s.config.thisContainer, s.config.thisVolume, s.dataPathMgr,
 		repoEnsurer, credentialGetter, s.logger)
 
 	duInformer, err := s.cache.GetInformer(s.ctx, &velerov2alpha1api.DataUpload{})

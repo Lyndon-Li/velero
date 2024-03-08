@@ -25,6 +25,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -32,11 +34,14 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 	cachetool "k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // BackupMicroService process data mover backups inside the backup pod
@@ -50,11 +55,13 @@ type BackupMicroService struct {
 	dataPathMgr      *datapath.Manager
 	eventRecorder    *kube.EventRecorder
 
+	namespace      string
 	dataUploadName string
 	thisPod        *corev1.Pod
+	thisContainer  string
+	thisVolume     string
 
 	resultSignal chan dataPathResult
-	startSignal  chan *velerov2alpha1api.DataUpload
 }
 
 type dataPathResult struct {
@@ -62,8 +69,8 @@ type dataPathResult struct {
 	result string
 }
 
-func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataUploadName string,
-	thisPod *corev1.Pod, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *BackupMicroService {
+func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataUploadName string, namespace string,
+	thisPod *corev1.Pod, thisContainer string, thisVolume string, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *BackupMicroService {
 	return &BackupMicroService{
 		ctx:              ctx,
 		client:           client,
@@ -72,11 +79,13 @@ func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient
 		logger:           log,
 		repoEnsurer:      repoEnsurer,
 		dataPathMgr:      dataPathMgr,
+		namespace:        namespace,
 		dataUploadName:   dataUploadName,
 		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataUploadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
+		thisContainer:    thisContainer,
+		thisVolume:       thisVolume,
 		resultSignal:     make(chan dataPathResult),
-		startSignal:      make(chan *velerov2alpha1api.DataUpload),
 	}
 }
 
@@ -85,23 +94,33 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 		"dataupload": r.dataUploadName,
 	})
 
-	var du *velerov2alpha1api.DataUpload
+	du := &velerov2alpha1api.DataUpload{}
+	err := wait.PollImmediateWithContext(ctx, 500*time.Millisecond, time.Minute*2, func(ctx context.Context) (bool, error) {
+		err := r.client.Get(ctx, types.NamespacedName{
+			Namespace: r.namespace,
+			Name:      r.dataUploadName,
+		}, du)
 
-	select {
-	case recv := <-r.startSignal:
-		du = recv
-		break
-	case <-time.After(time.Minute * 2):
-		log.Error("Timeout waiting for start signal")
-		return "", errors.New("timeout waiting for start signal")
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+
+		if err != nil {
+			return true, errors.Wrapf(err, "error to get du %s", r.dataUploadName)
+		}
+
+		if du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
+			return true, nil
+		} else {
+			return false, nil
+		}
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to wait du")
+		return "", errors.Wrap(err, "error waiting for du")
 	}
 
 	log.Info("Run cancelable dataUpload")
-
-	path, err := kube.GetPodVolumePath(r.thisPod, 0)
-	if err != nil {
-		return "", errors.New("error getting path for pod volume")
-	}
 
 	callbacks := datapath.Callbacks{
 		OnCompleted: r.OnDataUploadCompleted,
@@ -115,22 +134,37 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 		return "", errors.Wrap(err, "error to create data path")
 	}
 
-	log.WithField("path", path).Debug("Found volume path")
-	if err := fsBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, GetUploaderType(du.Spec.DataMover),
-		velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
+	log.Debug("Found volume path")
+	if err := fsBackup.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
+		HostingPod:       r.thisPod,
+		HostingContainer: r.thisContainer,
+		VolumeName:       r.thisVolume,
+	}}, &datapath.FSBRInitParam{
+		BSLName:           du.Spec.BackupStorageLocation,
+		SourceNamespace:   du.Spec.SourceNamespace,
+		UploaderType:      GetUploaderType(du.Spec.DataMover),
+		RepositoryType:    velerov1api.BackupRepositoryTypeKopia,
+		RepositoryEnsurer: r.repoEnsurer,
+		CredentialGetter:  r.credentialGetter,
+	}); err != nil {
 		return "", errors.Wrap(err, "error to initialize data path")
 	}
-	log.WithField("path", path).Info("fs init")
+	log.Info("fs init")
 
 	tags := map[string]string{
 		velerov1api.AsyncOperationIDLabel: du.Labels[velerov1api.AsyncOperationIDLabel],
 	}
 
-	if err := fsBackup.StartBackup(datapath.AccessPoint{ByPath: path}, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
+	if err := fsBackup.StartBackup(du.Spec.DataMoverConfig, &datapath.FSBRStartParam{
+		RealSource:     fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC),
+		ParentSnapshot: "",
+		ForceFull:      false,
+		Tags:           tags,
+	}); err != nil {
 		return "", errors.Wrap(err, "error starting data path backup")
 	}
 
-	log.WithField("path", path).Info("Async fs backup data path started")
+	log.Info("Async fs backup data path started")
 
 	result := ""
 	select {
@@ -144,7 +178,7 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 	}
 
 	if err != nil {
-		log.WithField("path", path).WithError(err).Error("Async fs backup was not completed")
+		log.WithError(err).Error("Async fs backup was not completed")
 	}
 
 	return result, err
@@ -234,11 +268,6 @@ func (r *BackupMicroService) SetupWatcher(ctx context.Context, duInformer cache.
 
 				if newDu.Status.Phase != velerov2alpha1api.DataUploadPhaseInProgress {
 					return
-				}
-
-				if oldDu.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared {
-					r.logger.WithField("DataUpload", newDu.Name).Info("Data upload turns to InProgress")
-					r.startSignal <- newDu
 				}
 
 				if newDu.Spec.Cancel && !oldDu.Spec.Cancel {

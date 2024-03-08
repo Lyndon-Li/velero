@@ -149,15 +149,19 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.errorOut(ctx, &pvb, err, fmt.Sprintf("getting pod %s/%s", pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name), log)
 	}
 
-	path, err := exposer.GetPodVolumeHostPath(ctx, &pod, pvb.Spec.Volume, r.Client, r.fileSystem, log)
-	if err != nil {
-		return r.errorOut(ctx, &pvb, err, "error exposing host path for pod volume", log)
-	}
-
-	log.WithField("path", path.ByPath).Debugf("Found host path")
-
-	if err := fsBackup.Init(ctx, pvb.Spec.BackupStorageLocation, pvb.Spec.Pod.Namespace, pvb.Spec.UploaderType,
-		podvolume.GetPvbRepositoryType(&pvb), pvb.Spec.RepoIdentifier, r.repositoryEnsurer, r.credentialGetter); err != nil {
+	if err := fsBackup.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
+		HostingPod: &pod,
+		VolumeName: pvb.Spec.Volume,
+	}}, &datapath.FSBRInitParam{
+		BSLName:           pvb.Spec.BackupStorageLocation,
+		SourceNamespace:   pvb.Spec.Pod.Namespace,
+		UploaderType:      pvb.Spec.UploaderType,
+		RepositoryType:    podvolume.GetPvbRepositoryType(&pvb),
+		RepoIdentifier:    pvb.Spec.RepoIdentifier,
+		RepositoryEnsurer: r.repositoryEnsurer,
+		CredentialGetter:  r.credentialGetter,
+		HostMode:          true,
+	}); err != nil {
 		return r.errorOut(ctx, &pvb, err, "error to initialize data path", log)
 	}
 
@@ -176,11 +180,16 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	if err := fsBackup.StartBackup(path, "", parentSnapshotID, false, pvb.Spec.Tags, pvb.Spec.UploaderSettings); err != nil {
+	if err := fsBackup.StartBackup(pvb.Spec.UploaderSettings, &datapath.FSBRStartParam{
+		RealSource:     "",
+		ParentSnapshot: parentSnapshotID,
+		ForceFull:      false,
+		Tags:           pvb.Spec.Tags,
+	}); err != nil {
 		return r.errorOut(ctx, &pvb, err, "error starting data path backup", log)
 	}
 
-	log.WithField("path", path.ByPath).Info("Async fs backup data path started")
+	log.Info("Async fs backup data path started")
 
 	return ctrl.Result{}, nil
 }

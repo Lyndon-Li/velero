@@ -29,7 +29,7 @@ import (
 
 var ConcurrentLimitExceed error = errors.New("Concurrent number exceeds")
 var FSBRCreator = newFileSystemBR
-var MicroServiceBRCreator = newMicroServiceBR
+var MicroServiceBRWatcherCreator = newMicroServiceBRWatcher
 
 type Manager struct {
 	cocurrentNum int
@@ -50,7 +50,7 @@ func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx c
 	m.trackerLock.Lock()
 	defer m.trackerLock.Unlock()
 
-	if len(m.tracker) == m.cocurrentNum {
+	if len(m.tracker) >= m.cocurrentNum {
 		return nil, ConcurrentLimitExceed
 	}
 
@@ -59,15 +59,18 @@ func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx c
 	return m.tracker[jobName], nil
 }
 
-func (m *Manager) CreateMicroServiceBR(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, callbacks Callbacks, log logrus.FieldLogger) (AsyncBR, error) {
+func (m *Manager) CreateMicroServiceBRWatcher(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager,
+	taskType string, taskName string, namespace string, callbacks Callbacks, resume bool, log logrus.FieldLogger) (AsyncBR, error) {
 	m.trackerLock.Lock()
 	defer m.trackerLock.Unlock()
 
-	if len(m.tracker) == m.cocurrentNum {
-		return nil, ConcurrentLimitExceed
+	if resume {
+		if len(m.tracker) >= m.cocurrentNum {
+			return nil, ConcurrentLimitExceed
+		}
 	}
 
-	m.tracker[taskName] = MicroServiceBRCreator(client, kubeClient, mgr, taskType, taskName, namespace, callbacks, log)
+	m.tracker[taskName] = MicroServiceBRWatcherCreator(client, kubeClient, mgr, taskType, taskName, namespace, callbacks, log)
 
 	return m.tracker[taskName], nil
 }

@@ -29,8 +29,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/vmware-tanzu/velero/internal/credentials"
-	"github.com/vmware-tanzu/velero/pkg/repository"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 
@@ -51,23 +50,26 @@ const (
 	EventReasonProgress = "Progress"
 )
 
-type microServiceBR struct {
-	ctx        context.Context
-	cancel     context.CancelFunc
-	log        logrus.FieldLogger
-	client     client.Client
-	kubeClient kubernetes.Interface
-	mgr        manager.Manager
-	namespace  string
-	callbacks  Callbacks
-	taskName   string
-	taskType   string
-	eventCh    chan *v1.Event
-	podCh      chan *v1.Pod
+type microServiceBRWatcher struct {
+	ctx           context.Context
+	cancel        context.CancelFunc
+	log           logrus.FieldLogger
+	client        client.Client
+	kubeClient    kubernetes.Interface
+	mgr           manager.Manager
+	namespace     string
+	callbacks     Callbacks
+	taskName      string
+	taskType      string
+	thisPod       string
+	thisContainer string
+	thisVolume    string
+	eventCh       chan *v1.Event
+	podCh         chan *v1.Pod
 }
 
-func newMicroServiceBR(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
-	ms := &microServiceBR{
+func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
+	ms := &microServiceBRWatcher{
 		mgr:        mgr,
 		client:     client,
 		kubeClient: kubeClient,
@@ -83,15 +85,17 @@ func newMicroServiceBR(client client.Client, kubeClient kubernetes.Interface, mg
 	return ms
 }
 
-func (ms *microServiceBR) Init(ctx context.Context, bslName string, sourceNamespace string, uploaderType string, repositoryType string,
-	repoIdentifier string, repositoryEnsurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter) error {
+func (ms *microServiceBRWatcher) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
+	ms.thisPod = res.ByPod.HostingPod.Name
+	ms.thisContainer = res.ByPod.HostingContainer
+	ms.thisVolume = res.ByPod.VolumeName
 
 	ms.ctx, ms.cancel = context.WithCancel(ctx)
 
 	thisPod := &v1.Pod{}
 	if err := ms.client.Get(ms.ctx, types.NamespacedName{
 		Namespace: ms.namespace,
-		Name:      ms.taskName,
+		Name:      ms.thisPod,
 	}, thisPod); err != nil {
 		return errors.Wrap(err, "error getting job pod")
 	}
@@ -111,7 +115,8 @@ func (ms *microServiceBR) Init(ctx context.Context, bslName string, sourceNamesp
 			AddFunc: func(obj interface{}) {
 				evt := obj.(*v1.Event)
 
-				ms.log.Infof("Received adding event %s/%s, message %s for object %v, count %v", evt.Namespace, evt.Name, evt.Message, evt.InvolvedObject, evt.Count)
+				ms.log.Infof("Received adding event %s/%s, message %s for object %v, count %v, type %s, reason %s, report controller %s, report instance %s", evt.Namespace, evt.Name,
+					evt.Message, evt.InvolvedObject, evt.Count, evt.Type, evt.Reason, evt.ReportingController, evt.ReportingInstance)
 
 				if evt.InvolvedObject.UID != thisPod.UID {
 					return
@@ -162,7 +167,7 @@ func (ms *microServiceBR) Init(ctx context.Context, bslName string, sourceNamesp
 	return nil
 }
 
-func (ms *microServiceBR) Close(ctx context.Context) {
+func (ms *microServiceBRWatcher) Close(ctx context.Context) {
 	if ms.cancel != nil {
 		ms.cancel()
 		ms.cancel = nil
@@ -171,17 +176,17 @@ func (ms *microServiceBR) Close(ctx context.Context) {
 	ms.log.WithField("taskType", ms.taskType).WithField("taskName", ms.taskName).Info("MicroServiceBR is closed")
 }
 
-func (ms *microServiceBR) StartBackup(source AccessPoint, realSource string, parentSnapshot string, forceFull bool, tags map[string]string, uploaderConfig map[string]string) error {
+func (ms *microServiceBRWatcher) StartBackup(uploaderConfig map[string]string, param interface{}) error {
 	ms.startWatch()
 	return nil
 }
 
-func (ms *microServiceBR) StartRestore(snapshotID string, target AccessPoint, uploaderConfigs map[string]string) error {
+func (ms *microServiceBRWatcher) StartRestore(snapshotID string, uploaderConfigs map[string]string) error {
 	ms.startWatch()
 	return nil
 }
 
-func (ms *microServiceBR) startWatch() {
+func (ms *microServiceBRWatcher) startWatch() {
 	go func() {
 		ms.log.Info("Start watching backup pod")
 
@@ -205,7 +210,7 @@ func (ms *microServiceBR) startWatch() {
 			}
 		}
 
-		terminateMessage := kube.GetPodTerminateMessage(lastPod, ms.taskName)
+		terminateMessage := kube.GetPodTerminateMessage(lastPod, ms.thisContainer)
 
 		previousLog := false
 		if lastPod != nil && lastPod.Status.Phase == v1.PodFailed && terminateMessage != ErrCancelled {
@@ -269,12 +274,12 @@ func getProgressFromMessage(message string, logger logrus.FieldLogger) *uploader
 	return progress
 }
 
-func (ms *microServiceBR) Cancel() {
+func (ms *microServiceBRWatcher) Cancel() {
 	ms.log.WithField("taskType", ms.taskType).WithField("taskName", ms.taskName).Info("MicroServiceBR is canceled")
 }
 
-func (ms *microServiceBR) redirectDataMoverLogs(includePrevious bool) error {
-	ms.log.Infof("Starting to collect data mover pod log for %s", ms.taskName)
+func (ms *microServiceBRWatcher) redirectDataMoverLogs(includePrevious bool) error {
+	ms.log.Infof("Starting to collect data mover pod log for %s", ms.thisPod)
 
 	logFileDir := os.TempDir()
 	logFile, err := os.CreateTemp(logFileDir, "")
@@ -287,9 +292,9 @@ func (ms *microServiceBR) redirectDataMoverLogs(includePrevious bool) error {
 	logFileName := logFile.Name()
 	ms.log.Infof("Created log file %s", logFileName)
 
-	err = kube.CollectPodLogs(ms.ctx, ms.kubeClient.CoreV1(), ms.taskName, ms.namespace, ms.taskName, includePrevious, logFile)
+	err = kube.CollectPodLogs(ms.ctx, ms.kubeClient.CoreV1(), ms.thisPod, ms.namespace, ms.thisContainer, includePrevious, logFile)
 	if err != nil {
-		return errors.Wrapf(err, "error to collect logs to %s for data mover pod %s", logFileName, ms.taskName)
+		return errors.Wrapf(err, "error to collect logs to %s for data mover pod %s", logFileName, ms.thisPod)
 	}
 
 	logFile.Close()
@@ -299,7 +304,7 @@ func (ms *microServiceBR) redirectDataMoverLogs(includePrevious bool) error {
 	logger := ms.log.WithField(logging.LogSourceKey, logFileName)
 	logger.Logln(logging.ListeningLevel, logging.ListeningMessage)
 
-	ms.log.Infof("Completed to collect data mover pod log for %s", ms.taskName)
+	ms.log.Infof("Completed to collect data mover pod log for %s", ms.thisPod)
 
 	return nil
 }

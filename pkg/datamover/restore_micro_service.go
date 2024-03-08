@@ -24,6 +24,9 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -31,6 +34,7 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -50,15 +54,17 @@ type RestoreMicroService struct {
 	dataPathMgr      *datapath.Manager
 	eventRecorder    *kube.EventRecorder
 
+	namespace        string
 	dataDownloadName string
 	thisPod          *corev1.Pod
+	thisContainer    string
+	thisVolume       string
 
 	resultSignal chan dataPathResult
-	startSignal  chan *velerov2alpha1api.DataDownload
 }
 
-func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataDownloadName string,
-	thisPod *corev1.Pod, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *RestoreMicroService {
+func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataDownloadName string, namespace string,
+	thisPod *corev1.Pod, thisContainer string, thisVolume string, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *RestoreMicroService {
 	return &RestoreMicroService{
 		ctx:              ctx,
 		client:           client,
@@ -67,11 +73,13 @@ func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClien
 		logger:           log,
 		repoEnsurer:      repoEnsurer,
 		dataPathMgr:      dataPathMgr,
+		namespace:        namespace,
 		dataDownloadName: dataDownloadName,
 		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataDownloadName, thisPod.Spec.NodeName),
 		thisPod:          thisPod,
+		thisContainer:    thisContainer,
+		thisVolume:       thisVolume,
 		resultSignal:     make(chan dataPathResult),
-		startSignal:      make(chan *velerov2alpha1api.DataDownload),
 	}
 }
 
@@ -80,23 +88,32 @@ func (r *RestoreMicroService) RunCancelableDataDownload(ctx context.Context) (st
 		"datadownload": r.dataDownloadName,
 	})
 
-	var dd *velerov2alpha1api.DataDownload
+	dd := &velerov2alpha1api.DataDownload{}
+	err := wait.PollImmediateWithContext(ctx, 500*time.Millisecond, time.Minute*2, func(ctx context.Context) (bool, error) {
+		err := r.client.Get(ctx, types.NamespacedName{
+			Namespace: r.namespace,
+			Name:      r.dataDownloadName,
+		}, dd)
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
 
-	select {
-	case recv := <-r.startSignal:
-		dd = recv
-		break
-	case <-time.After(time.Minute * 2):
-		log.Error("Timeout waiting for start signal")
-		return "", errors.New("timeout waiting for start signal")
+		if err != nil {
+			return true, errors.Wrapf(err, "error to get dd %s", r.dataDownloadName)
+		}
+
+		if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseInProgress {
+			return true, nil
+		} else {
+			return false, nil
+		}
+	})
+	if err != nil {
+		log.WithError(err).Error("Failed to wait dd")
+		return "", errors.Wrap(err, "error waiting for dd")
 	}
 
 	log.Info("Run cancelable dataDownload")
-
-	path, err := kube.GetPodVolumePath(r.thisPod, 0)
-	if err != nil {
-		return "", errors.New("error getting path for pod volume")
-	}
 
 	callbacks := datapath.Callbacks{
 		OnCompleted: r.OnDataDownloadCompleted,
@@ -110,18 +127,28 @@ func (r *RestoreMicroService) RunCancelableDataDownload(ctx context.Context) (st
 		return "", errors.Wrap(err, "error to create data path")
 	}
 
-	log.WithField("path", path).Debug("Found volume path")
-	if err := fsRestore.Init(ctx, dd.Spec.BackupStorageLocation, dd.Spec.SourceNamespace, GetUploaderType(dd.Spec.DataMover),
-		velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
+	log.Debug("Found volume path")
+	if err := fsRestore.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
+		HostingPod:       r.thisPod,
+		HostingContainer: r.thisContainer,
+		VolumeName:       r.thisVolume,
+	}}, &datapath.FSBRInitParam{
+		BSLName:           dd.Spec.BackupStorageLocation,
+		SourceNamespace:   dd.Spec.SourceNamespace,
+		UploaderType:      GetUploaderType(dd.Spec.DataMover),
+		RepositoryType:    velerov1api.BackupRepositoryTypeKopia,
+		RepositoryEnsurer: r.repoEnsurer,
+		CredentialGetter:  r.credentialGetter,
+	}); err != nil {
 		return "", errors.Wrap(err, "error to initialize data path")
 	}
-	log.WithField("path", path).Info("fs init")
+	log.Info("fs init")
 
-	if err := fsRestore.StartRestore(dd.Spec.SnapshotID, datapath.AccessPoint{ByPath: path}, dd.Spec.DataMoverConfig); err != nil {
+	if err := fsRestore.StartRestore(dd.Spec.SnapshotID, dd.Spec.DataMoverConfig); err != nil {
 		return "", errors.Wrap(err, "error starting data path restore")
 	}
 
-	log.WithField("path", path).Info("Async fs restore data path started")
+	log.Info("Async fs restore data path started")
 
 	result := ""
 	select {
@@ -135,7 +162,7 @@ func (r *RestoreMicroService) RunCancelableDataDownload(ctx context.Context) (st
 	}
 
 	if err != nil {
-		log.WithField("path", path).WithError(err).Error("Async fs restore was not completed")
+		log.WithError(err).Error("Async fs restore was not completed")
 	}
 
 	return result, err
@@ -223,11 +250,6 @@ func (r *RestoreMicroService) SetupWatcher(ctx context.Context, duInformer cache
 
 				if newDd.Status.Phase != velerov2alpha1api.DataDownloadPhaseInProgress {
 					return
-				}
-
-				if oldDd.Status.Phase == velerov2alpha1api.DataDownloadPhasePrepared {
-					r.logger.WithField("DataDownload", newDd.Name).Info("Data download turns to InProgress")
-					r.startSignal <- newDd
 				}
 
 				if newDd.Spec.Cancel && !oldDd.Spec.Cancel {
