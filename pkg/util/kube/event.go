@@ -17,6 +17,7 @@ package kube
 
 import (
 	"fmt"
+	"time"
 
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -26,21 +27,22 @@ import (
 )
 
 type EventRecorder struct {
-	recorder record.EventRecorder
+	broadcaster record.EventBroadcaster
+	recorder    record.EventRecorder
 }
 
 func NewEventRecorder(kubeClient kubernetes.Interface, scheme *runtime.Scheme, eventSource string, eventNode string) *EventRecorder {
 	res := EventRecorder{}
 
-	eventBroadcaster := record.NewBroadcasterWithCorrelatorOptions(record.CorrelatorOptions{
+	res.broadcaster = record.NewBroadcasterWithCorrelatorOptions(record.CorrelatorOptions{
 		MaxEvents: 1,
 		MessageFunc: func(event *v1.Event) string {
 			return event.Message
 		},
 	})
 
-	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
-	res.recorder = eventBroadcaster.NewRecorder(scheme, v1.EventSource{
+	res.broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
+	res.recorder = res.broadcaster.NewRecorder(scheme, v1.EventSource{
 		Component: eventSource,
 		Host:      eventNode,
 	})
@@ -57,4 +59,10 @@ func (er *EventRecorder) Event(object runtime.Object, warning bool, reason strin
 	message := fmt.Sprintf(messagefmt, a...)
 
 	er.recorder.Event(object, eventType, reason, message)
+}
+
+func (er *EventRecorder) Shutdown() {
+	// StartEventWatcher doesn't wait for writing all buffered events to API server when Shutdown is called, so have to hardcode a sleep time
+	time.Sleep(2 * time.Second)
+	er.broadcaster.Shutdown()
 }

@@ -165,6 +165,7 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 	}
 
 	log.Info("Async fs backup data path started")
+	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonStarted, "Data path for %s started", du.Name)
 
 	result := ""
 	select {
@@ -184,6 +185,10 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 	return result, err
 }
 
+func (r *BackupMicroService) Shutdown() {
+	r.eventRecorder.Shutdown()
+}
+
 func (r *BackupMicroService) OnDataUploadCompleted(ctx context.Context, namespace string, duName string, result datapath.Result) {
 	defer r.closeDataPath(ctx, duName)
 
@@ -196,13 +201,13 @@ func (r *BackupMicroService) OnDataUploadCompleted(ctx context.Context, namespac
 			err: errors.Wrapf(err, "Failed to marshal backup result %v", result.Backup),
 		}
 	} else {
-		//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(backupBytes))
+		r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(backupBytes))
 		r.resultSignal <- dataPathResult{
 			result: string(backupBytes),
 		}
 	}
 
-	log.Info("Async fs backup data path completed")
+	log.Info("Async fs backup completed")
 }
 
 func (r *BackupMicroService) OnDataUploadFailed(ctx context.Context, namespace string, duName string, err error) {
@@ -211,7 +216,7 @@ func (r *BackupMicroService) OnDataUploadFailed(ctx context.Context, namespace s
 	log := r.logger.WithField("dataupload", duName)
 	log.WithError(err).Error("Async fs backup data path failed")
 
-	//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUploadName, err)
+	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUploadName, err)
 	r.resultSignal <- dataPathResult{
 		err: errors.Wrapf(err, "Data path for data upload %s failed", r.dataUploadName),
 	}
@@ -223,7 +228,7 @@ func (r *BackupMicroService) OnDataUploadCancelled(ctx context.Context, namespac
 	log := r.logger.WithField("dataupload", duName)
 	log.Warn("Async fs backup data path canceled")
 
-	//r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data upload %s cancelled", duName)
+	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data upload %s cancelled", duName)
 	r.resultSignal <- dataPathResult{
 		err: errors.New(datapath.ErrCancelled),
 	}
@@ -240,7 +245,7 @@ func (r *BackupMicroService) OnDataUploadProgress(ctx context.Context, namespace
 		return
 	}
 
-	log.Info("Sending event for progress")
+	log.Infof("Sending event for progress %v (%s)", progress, string(progressBytes))
 
 	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonProgress, string(progressBytes))
 }

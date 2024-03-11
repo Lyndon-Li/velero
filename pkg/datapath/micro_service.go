@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -44,28 +45,31 @@ const (
 
 	ErrCancelled = "data path is cancelled"
 
-	//EventReasonCompleted = "Completed"
-	//EventReasonFailed    = "Failed"
-	//EventReasonCancelled = "Cancelled"
-	EventReasonProgress = "Progress"
+	EventReasonStarted   = "Data-Path-Started"
+	EventReasonCompleted = "Data-Path-Completed"
+	EventReasonFailed    = "Data-Path-Failed"
+	EventReasonCancelled = "Data-Path-Cancelled"
+	EventReasonProgress  = "Data-Path-Progress"
 )
 
 type microServiceBRWatcher struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	log           logrus.FieldLogger
-	client        client.Client
-	kubeClient    kubernetes.Interface
-	mgr           manager.Manager
-	namespace     string
-	callbacks     Callbacks
-	taskName      string
-	taskType      string
-	thisPod       string
-	thisContainer string
-	thisVolume    string
-	eventCh       chan *v1.Event
-	podCh         chan *v1.Pod
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	log                 logrus.FieldLogger
+	client              client.Client
+	kubeClient          kubernetes.Interface
+	mgr                 manager.Manager
+	namespace           string
+	callbacks           Callbacks
+	taskName            string
+	taskType            string
+	thisPod             string
+	thisContainer       string
+	thisVolume          string
+	eventCh             chan *v1.Event
+	podCh               chan *v1.Pod
+	startedFromEvent    bool
+	terminatedFromEvent bool
 }
 
 func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
@@ -77,7 +81,7 @@ func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interf
 		callbacks:  callbacks,
 		taskType:   taskType,
 		taskName:   taskName,
-		eventCh:    make(chan *v1.Event),
+		eventCh:    make(chan *v1.Event, 10),
 		podCh:      make(chan *v1.Pod),
 		log:        log,
 	}
@@ -188,7 +192,7 @@ func (ms *microServiceBRWatcher) StartRestore(snapshotID string, uploaderConfigs
 
 func (ms *microServiceBRWatcher) startWatch() {
 	go func() {
-		ms.log.Info("Start watching backup pod")
+		ms.log.Info("Start watching data path pod")
 
 		var lastPod *v1.Pod
 
@@ -202,12 +206,24 @@ func (ms *microServiceBRWatcher) startWatch() {
 				lastPod = pod
 				break watchLoop
 			case evt := <-ms.eventCh:
-				if evt.Reason == EventReasonProgress {
-					ms.callbacks.OnProgress(ms.ctx, ms.namespace, ms.taskName, getProgressFromMessage(evt.Message, ms.log))
-				} else {
-					ms.log.Debugf("Received event for data mover %s.[reason %s, message %s]", ms.taskName, evt.Reason, evt.Message)
-				}
+				ms.onEvent(evt)
 			}
+		}
+
+		ms.log.Infof("Watch loop ends, got lastPod %v", lastPod != nil)
+
+	epilogLoop:
+		for ms.startedFromEvent && !ms.terminatedFromEvent {
+			select {
+			case <-time.After(time.Minute):
+				break epilogLoop
+			case evt := <-ms.eventCh:
+				ms.onEvent(evt)
+			}
+		}
+
+		if ms.startedFromEvent && !ms.terminatedFromEvent {
+			ms.log.Warn("Data path pod started but termination event is not received")
 		}
 
 		terminateMessage := kube.GetPodTerminateMessage(lastPod, ms.thisContainer)
@@ -217,18 +233,18 @@ func (ms *microServiceBRWatcher) startWatch() {
 			previousLog = true
 		}
 
-		ms.log.Infof("Recording data mover logs, include previous %v", previousLog)
+		ms.log.Infof("Recording data path pod logs, include previous %v", previousLog)
 
 		if err := ms.redirectDataMoverLogs(previousLog); err != nil {
 			ms.log.WithError(err).Warn("Failed to collect data mover logs")
 		}
 
 		if lastPod == nil {
-			ms.log.Warn("Data mover watch loop is cancelled")
+			ms.log.Warn("Data path pod watch loop is cancelled")
 			return
 		}
 
-		ms.log.Infof("Finish waiting backup pod, got lastPod, phase %s, message %s", lastPod.Status.Phase, terminateMessage)
+		ms.log.Infof("Finish waiting data path pod, got lastPod, phase %s, message %s", lastPod.Status.Phase, terminateMessage)
 
 		if lastPod.Status.Phase == v1.PodSucceeded {
 			ms.callbacks.OnCompleted(ms.ctx, ms.namespace, ms.taskName, getResultFromMessage(ms.taskType, terminateMessage, ms.log))
@@ -240,8 +256,29 @@ func (ms *microServiceBRWatcher) startWatch() {
 			}
 		}
 
-		ms.log.Info("Complete callback on pod termination")
+		ms.log.Info("Complete callback on data path pod termination")
 	}()
+}
+
+func (ms *microServiceBRWatcher) onEvent(evt *v1.Event) {
+	switch evt.Reason {
+	case EventReasonStarted:
+		ms.startedFromEvent = true
+		ms.log.Infof("Received data path start message %s", evt.Message)
+	case EventReasonProgress:
+		ms.callbacks.OnProgress(ms.ctx, ms.namespace, ms.taskName, getProgressFromMessage(evt.Message, ms.log))
+	case EventReasonCompleted:
+		ms.log.Infof("Received data path completed message %v", getResultFromMessage(ms.taskType, evt.Message, ms.log))
+		ms.terminatedFromEvent = true
+	case EventReasonCancelled:
+		ms.log.Infof("Received data path cancelled message %s", evt.Message)
+		ms.terminatedFromEvent = true
+	case EventReasonFailed:
+		ms.log.Infof("Received data path failed message %s", evt.Message)
+		ms.terminatedFromEvent = true
+	default:
+		ms.log.Debugf("Received event for data mover %s.[reason %s, message %s]", ms.taskName, evt.Reason, evt.Message)
+	}
 }
 
 func getResultFromMessage(taskType string, message string, logger logrus.FieldLogger) Result {

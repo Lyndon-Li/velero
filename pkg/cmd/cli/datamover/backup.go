@@ -242,7 +242,7 @@ func (s *dataMoverBackup) run() {
 	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
 	repoEnsurer := repository.NewEnsurer(s.client, s.logger, s.config.resourceTimeout)
 
-	duService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, duName, s.namespace, s.thisPod, s.config.thisContainer, s.config.thisVolume, s.dataPathMgr,
+	dpService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, duName, s.namespace, s.thisPod, s.config.thisContainer, s.config.thisVolume, s.dataPathMgr,
 		repoEnsurer, credentialGetter, s.logger)
 
 	duInformer, err := s.cache.GetInformer(s.ctx, &velerov2alpha1api.DataUpload{})
@@ -251,17 +251,21 @@ func (s *dataMoverBackup) run() {
 		exitWithMessage(s.logger, false, "Failed to get controller-runtime informer from manager for DataUpload: %v", err)
 	}
 
-	duService.SetupWatcher(s.ctx, duInformer)
+	dpService.SetupWatcher(s.ctx, duInformer)
 
-	s.logger.Infof("Starting data upload %s", duName)
+	s.logger.Infof("Starting data path service %s", duName)
 
-	result, err := duService.RunCancelableDataUpload(s.ctx)
+	result, err := dpService.RunCancelableDataUpload(s.ctx)
 	if err != nil {
 		s.cancelFunc()
-		exitWithMessage(s.logger, false, "Failed to run data upload: %v", err)
+		exitWithMessage(s.logger, false, "Failed to run data path service: %v", err)
 	}
 
-	s.logger.WithField("du", duName).Info("Data upload completed")
+	s.logger.WithField("du", duName).Info("Data path service completed")
+
+	dpService.Shutdown()
+
+	s.logger.WithField("du", duName).Info("Data path service is shut down")
 
 	s.cancelFunc()
 

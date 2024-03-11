@@ -17,9 +17,10 @@ limitations under the License.
 package kube
 
 import (
+	"context"
 	"testing"
-	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -36,7 +37,7 @@ func TestEvent(t *testing.T) {
 	err := corev1.AddToScheme(scheme)
 	require.NoError(t, err)
 
-	recorder := NewEventRecorder(client, scheme, "source-1", "node-1")
+	recorder := NewEventRecorder(client, scheme, "source-1", "fake-node")
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -52,5 +53,8 @@ func TestEvent(t *testing.T) {
 	recorder.Event(pod, false, "Progress", "progress-1")
 	recorder.Event(pod, false, "Progress", "progress-2")
 
-	time.Sleep(time.Hour)
+	items, err := client.CoreV1().Events("fake-ns").List(context.Background(), metav1.ListOptions{})
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, len(items.Items))
 }
