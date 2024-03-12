@@ -82,7 +82,7 @@ func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interf
 		taskType:   taskType,
 		taskName:   taskName,
 		eventCh:    make(chan *v1.Event, 10),
-		podCh:      make(chan *v1.Pod),
+		podCh:      make(chan *v1.Pod, 2),
 		log:        log,
 	}
 
@@ -118,10 +118,6 @@ func (ms *microServiceBRWatcher) Init(ctx context.Context, res *exposer.ExposeRe
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				evt := obj.(*v1.Event)
-
-				ms.log.Infof("Received adding event %s/%s, message %s for object %v, count %v, type %s, reason %s, report controller %s, report instance %s", evt.Namespace, evt.Name,
-					evt.Message, evt.InvolvedObject, evt.Count, evt.Type, evt.Reason, evt.ReportingController, evt.ReportingInstance)
-
 				if evt.InvolvedObject.UID != thisPod.UID {
 					return
 				}
@@ -132,9 +128,6 @@ func (ms *microServiceBRWatcher) Init(ctx context.Context, res *exposer.ExposeRe
 			},
 			UpdateFunc: func(_, obj interface{}) {
 				evt := obj.(*v1.Event)
-
-				ms.log.Infof("Received updating event %s/%s, message %s for object %v", evt.Namespace, evt.Name, evt.Message, evt.InvolvedObject)
-
 				if evt.InvolvedObject.UID != thisPod.UID {
 					return
 				}
@@ -181,12 +174,39 @@ func (ms *microServiceBRWatcher) Close(ctx context.Context) {
 }
 
 func (ms *microServiceBRWatcher) StartBackup(uploaderConfig map[string]string, param interface{}) error {
+	if err := ms.reEnsureThisPod(); err != nil {
+		return err
+	}
+
 	ms.startWatch()
+
 	return nil
 }
 
 func (ms *microServiceBRWatcher) StartRestore(snapshotID string, uploaderConfigs map[string]string) error {
+	if err := ms.reEnsureThisPod(); err != nil {
+		return err
+	}
+
 	ms.startWatch()
+
+	return nil
+}
+
+func (ms *microServiceBRWatcher) reEnsureThisPod() error {
+	thisPod := &v1.Pod{}
+	if err := ms.client.Get(ms.ctx, types.NamespacedName{
+		Namespace: ms.namespace,
+		Name:      ms.thisPod,
+	}, thisPod); err != nil {
+		return errors.Wrapf(err, "error getting this pod %s", ms.thisPod)
+	}
+
+	if thisPod.Status.Phase == v1.PodSucceeded || thisPod.Status.Phase == v1.PodFailed {
+		ms.podCh <- thisPod
+		ms.log.WithField("this pod", ms.thisPod).Infof("This pod comes to terminital status %s before watch start", thisPod.Status.Phase)
+	}
+
 	return nil
 }
 
@@ -200,7 +220,6 @@ func (ms *microServiceBRWatcher) startWatch() {
 		for {
 			select {
 			case <-ms.ctx.Done():
-				ms.log.Warn("Micro service BR quits without waiting job")
 				break watchLoop
 			case pod := <-ms.podCh:
 				lastPod = pod
@@ -210,7 +229,12 @@ func (ms *microServiceBRWatcher) startWatch() {
 			}
 		}
 
-		ms.log.Infof("Watch loop ends, got lastPod %v", lastPod != nil)
+		//ms.log.Infof("Watch loop ends, got lastPod %v", lastPod != nil)
+
+		if lastPod == nil {
+			ms.log.Warn("Data path pod watch loop is cancelled")
+			return
+		}
 
 	epilogLoop:
 		for ms.startedFromEvent && !ms.terminatedFromEvent {
@@ -229,7 +253,7 @@ func (ms *microServiceBRWatcher) startWatch() {
 		terminateMessage := kube.GetPodTerminateMessage(lastPod, ms.thisContainer)
 
 		previousLog := false
-		if lastPod != nil && lastPod.Status.Phase == v1.PodFailed && terminateMessage != ErrCancelled {
+		if lastPod.Status.Phase == v1.PodFailed && terminateMessage != ErrCancelled {
 			previousLog = true
 		}
 
@@ -237,11 +261,6 @@ func (ms *microServiceBRWatcher) startWatch() {
 
 		if err := ms.redirectDataMoverLogs(previousLog); err != nil {
 			ms.log.WithError(err).Warn("Failed to collect data mover logs")
-		}
-
-		if lastPod == nil {
-			ms.log.Warn("Data path pod watch loop is cancelled")
-			return
 		}
 
 		ms.log.Infof("Finish waiting data path pod, got lastPod, phase %s, message %s", lastPod.Status.Phase, terminateMessage)

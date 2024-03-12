@@ -16,7 +16,6 @@ limitations under the License.
 package kube
 
 import (
-	"fmt"
 	"time"
 
 	v1 "k8s.io/api/core/v1"
@@ -50,15 +49,17 @@ func NewEventRecorder(kubeClient kubernetes.Interface, scheme *runtime.Scheme, e
 	return &res
 }
 
-func (er *EventRecorder) Event(object runtime.Object, warning bool, reason string, messagefmt string, a ...any) {
+func (er *EventRecorder) Event(object runtime.Object, warning bool, reason string, message string, a ...any) {
 	eventType := v1.EventTypeNormal
 	if warning {
 		eventType = v1.EventTypeWarning
 	}
 
-	message := fmt.Sprintf(messagefmt, a...)
-
-	er.recorder.Event(object, eventType, reason, message)
+	if len(a) > 0 {
+		er.recorder.Eventf(object, eventType, reason, message, a)
+	} else {
+		er.recorder.Event(object, eventType, reason, message)
+	}
 }
 
 func (er *EventRecorder) Shutdown() {

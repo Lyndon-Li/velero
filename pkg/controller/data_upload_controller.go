@@ -612,51 +612,6 @@ func (r *DataUploadReconciler) FindDataUploadsByPod(ctx context.Context, cli cli
 	return dataUploads, nil
 }
 
-func (r *DataUploadReconciler) findAcceptDataUploadsByNodeLabel(ctx context.Context, cli client.Client, ns string) ([]velerov2alpha1api.DataUpload, error) {
-	dataUploads := &velerov2alpha1api.DataUploadList{}
-	if err := cli.List(ctx, dataUploads, &client.ListOptions{Namespace: ns}); err != nil {
-		r.logger.WithError(errors.WithStack(err)).Error("failed to list datauploads")
-		return nil, errors.Wrapf(err, "failed to list datauploads")
-	}
-
-	var result []velerov2alpha1api.DataUpload
-	for _, du := range dataUploads.Items {
-		if du.Status.Phase != velerov2alpha1api.DataUploadPhaseAccepted {
-			continue
-		}
-		if du.Labels[acceptNodeLabelKey] == r.nodeName {
-			result = append(result, du)
-		}
-	}
-	return result, nil
-}
-
-func (r *DataUploadReconciler) CancelAcceptedDataupload(ctx context.Context, cli client.Client, ns string) {
-	r.logger.Infof("Reset accepted dataupload for node %s", r.nodeName)
-	dataUploads, err := r.findAcceptDataUploadsByNodeLabel(ctx, cli, ns)
-	if err != nil {
-		r.logger.WithError(err).Error("failed to find dataupload")
-		return
-	}
-
-	for _, du := range dataUploads {
-		if du.Spec.Cancel {
-			continue
-		}
-		err = UpdateDataUploadWithRetry(ctx, cli, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, r.logger.WithField("dataupload", du.Name),
-			func(dataUpload *velerov2alpha1api.DataUpload) {
-				dataUpload.Spec.Cancel = true
-				dataUpload.Status.Message = fmt.Sprintf("found a dataupload with status %q during the node-agent starting, mark it as cancel", du.Status.Phase)
-			})
-
-		r.logger.WithField("dataupload", du.GetName()).Warn(du.Status.Message)
-		if err != nil {
-			r.logger.WithError(errors.WithStack(err)).Errorf("failed to mark dataupload %q cancel", du.GetName())
-			continue
-		}
-	}
-}
-
 func (r *DataUploadReconciler) prepareDataUpload(du *velerov2alpha1api.DataUpload) {
 	du.Status.Phase = velerov2alpha1api.DataUploadPhasePrepared
 	du.Status.Node = r.nodeName
@@ -784,9 +739,9 @@ func (r *DataUploadReconciler) exclusiveUpdateDataUpload(ctx context.Context, du
 }
 
 func (r *DataUploadReconciler) closeDataPath(ctx context.Context, duName string) {
-	fsBackup := r.dataPathMgr.GetAsyncBR(duName)
-	if fsBackup != nil {
-		fsBackup.Close(ctx)
+	asyncBR := r.dataPathMgr.GetAsyncBR(duName)
+	if asyncBR != nil {
+		asyncBR.Close(ctx)
 	}
 
 	r.dataPathMgr.RemoveAsyncBR(duName)
@@ -887,70 +842,116 @@ func UpdateDataUploadWithRetry(ctx context.Context, client client.Client, namesp
 }
 
 func (r *DataUploadReconciler) AttemptDataUploadResume(ctx context.Context, cli client.Client, logger *logrus.Entry, ns string) error {
-	if dataUploads, err := r.FindDataUploadsByPod(ctx, cli, ns); err != nil {
-		return errors.Wrap(err, "failed to find data uploads")
-	} else {
-		for _, du := range dataUploads {
-			if du.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared {
-				// keep doing nothing let controller re-download the data
-				// the Prepared CR could be still handled by dataupload controller after node-agent restart
-				logger.WithField("dataupload", du.GetName()).Debug("find a dataupload with status prepared")
-			} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
-				err = r.ResumeDataPathBR()
-				if err == nil {
-					logger.WithField("dataupload", du.GetName()).Info("Resumed data pathfor du")
-					continue
-				}
+	dataUploads := &velerov2alpha1api.DataUploadList{}
+	if err := cli.List(ctx, dataUploads, &client.ListOptions{Namespace: ns}); err != nil {
+		r.logger.WithError(errors.WithStack(err)).Error("failed to list datauploads")
+		return errors.Wrapf(err, "error to list datauploads")
+	}
 
-				logger.WithField("dataupload", du.GetName()).Warn("Failed to resume data path for du, have to cancel it")
+	for i := range dataUploads.Items {
+		du := &dataUploads.Items[i]
+		if du.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared {
+			// keep doing nothing let controller re-download the data
+			// the Prepared CR could be still handled by dataupload controller after node-agent restart
+			logger.WithField("dataupload", du.GetName()).Debug("find a dataupload with status prepared")
+		} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
+			err := r.resumeCancellableDataPath(ctx, du, logger)
+			if err == nil {
+				continue
+			}
 
-				err = UpdateDataUploadWithRetry(ctx, cli, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, logger.WithField("dataupload", du.Name),
-					func(dataUpload *velerov2alpha1api.DataUpload) {
-						dataUpload.Spec.Cancel = true
-						dataUpload.Status.Message = fmt.Sprintf("found a dataupload with status %q during the node-agent starting, mark it as cancel", du.Status.Phase)
-					})
+			logger.WithField("dataupload", du.GetName()).WithError(err).Warn("Failed to resume data path for du, have to cancel it")
 
-				if err != nil {
-					logger.WithError(errors.WithStack(err)).Errorf("failed to mark dataupload %q into canceled", du.GetName())
-					continue
-				}
-				logger.WithField("dataupload", du.GetName()).Debug("mark dataupload into canceled")
+			err = UpdateDataUploadWithRetry(ctx, cli, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, logger.WithField("dataupload", du.Name),
+				func(dataUpload *velerov2alpha1api.DataUpload) {
+					dataUpload.Spec.Cancel = true
+					dataUpload.Status.Message = fmt.Sprintf("found a dataupload with status %q during the node-agent starting, mark it as cancel", du.Status.Phase)
+				})
+
+			if err != nil {
+				logger.WithError(errors.WithStack(err)).Errorf("failed to mark dataupload %q into canceled", du.GetName())
+				continue
+			}
+			logger.WithField("dataupload", du.GetName()).Debug("mark dataupload into canceled")
+		} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
+			if du.Labels[acceptNodeLabelKey] != r.nodeName {
+				continue
+			}
+
+			if du.Spec.Cancel {
+				continue
+			}
+			err := UpdateDataUploadWithRetry(ctx, cli, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, r.logger.WithField("dataupload", du.Name),
+				func(dataUpload *velerov2alpha1api.DataUpload) {
+					dataUpload.Spec.Cancel = true
+					dataUpload.Status.Message = fmt.Sprintf("found a dataupload with status %q during the node-agent starting, mark it as cancel", du.Status.Phase)
+				})
+
+			r.logger.WithField("dataupload", du.GetName()).Warn(du.Status.Message)
+			if err != nil {
+				r.logger.WithError(errors.WithStack(err)).Errorf("failed to mark dataupload %q cancel", du.GetName())
+				continue
 			}
 		}
 	}
 
-	//If the data upload is in Accepted status, the volume snapshot may be deleted and the exposed pod may not be created
-	// so we need to mark the data upload as canceled for it may not be recoverable
-	r.CancelAcceptedDataupload(ctx, cli, ns)
 	return nil
 }
 
-func (r *DataUploadReconciler) ResumeDataPathBR() error {
-	return errors.New("not supported")
+func (r *DataUploadReconciler) resumeCancellableDataPath(ctx context.Context, du *velerov2alpha1api.DataUpload, log logrus.FieldLogger) error {
+	log.Info("Resume cancelable dataUpload")
 
-	/// the concurrent num may be changed when node-agent restarts, so CreateMicroServiceBR should not limit the concurrency in the resume case
+	ep, ok := r.snapshotExposerList[du.Spec.SnapshotType]
+	if !ok {
+		return errors.Errorf("error to find exposer for du %s", du.Name)
+	}
 
-	// msBackup, err = r.dataPathMgr.CreateMicroServiceBR(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, log)
-	// if err != nil {
-	// 	if err == datapath.ConcurrentLimitExceed {
-	// 		log.Info("Data path instance is concurrent limited requeue later")
-	// 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-	// 	} else {
-	// 		return r.errorOut(ctx, du, err, "error to create data path", log)
-	// 	}
-	// }
+	waitExposePara := r.setupWaitExposePara(du)
+	res, err := ep.GetExposed(ctx, getOwnerObject(du), du.Spec.OperationTimeout.Duration, waitExposePara)
+	if err != nil {
+		return errors.Wrapf(err, "error to get exposed snapshot for du %s", du.Name)
+	}
 
-	// 	if err := msBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, datamover.GetUploaderType(du.Spec.DataMover),
-	// 	velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
-	// 	return r.errorOut(ctx, du, err, "error to initialize data path", log)
-	// }
-	// log.WithField("path", path.ByPath).Info("fs init")
+	if res == nil {
+		if du.Status.Node == r.nodeName {
+			log.WithField("du", du.Name).WithField("current node", r.nodeName).Info("DU should be resumed by this node, but the expose info has missed")
+			return errors.New("expose info missed")
+		}
 
-	// tags := map[string]string{
-	// 	velerov1api.AsyncOperationIDLabel: du.Labels[velerov1api.AsyncOperationIDLabel],
-	// }
+		log.WithField("du", du.Name).WithField("current node", r.nodeName).Infof("DU should be resumed by another node %s", du.Status.Node)
+		return nil
+	}
 
-	//	if err := msBackup.StartBackup(path, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
-	//		return r.errorOut(ctx, du, err, "error starting data path backup", log)
-	//	}
+	callbacks := datapath.Callbacks{
+		OnCompleted: r.OnDataUploadCompleted,
+		OnFailed:    r.OnDataUploadFailed,
+		OnCancelled: r.OnDataUploadCancelled,
+		OnProgress:  r.OnDataUploadProgress,
+	}
+
+	asyncBR, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, du.Name, du.Namespace, callbacks, true, log)
+	if err != nil {
+		return errors.Wrapf(err, "error to create asyncBR watcher for du %s", du.Name)
+	}
+
+	resumeComplete := false
+	defer func() {
+		if !resumeComplete {
+			r.closeDataPath(ctx, du.Name)
+		}
+	}()
+
+	if err := asyncBR.Init(ctx, res, nil); err != nil {
+		return errors.Wrapf(err, "error to init asyncBR watcher")
+	}
+
+	if err := asyncBR.StartBackup(du.Spec.DataMoverConfig, nil); err != nil {
+		return errors.Wrapf(err, "error to resume asyncBR watcher")
+	}
+
+	resumeComplete = true
+
+	log.Infof("asyncBR is resumed for du %s", du.Name)
+
+	return nil
 }

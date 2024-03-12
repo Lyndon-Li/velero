@@ -217,9 +217,9 @@ func (r *RestoreMicroService) OnDataDownloadCancelled(ctx context.Context, names
 	}
 }
 
-func (r *RestoreMicroService) OnDataDownloadProgress(ctx context.Context, namespace string, duName string, progress *uploader.Progress) {
+func (r *RestoreMicroService) OnDataDownloadProgress(ctx context.Context, namespace string, ddName string, progress *uploader.Progress) {
 	log := r.logger.WithFields(logrus.Fields{
-		"datadownload": duName,
+		"datadownload": ddName,
 	})
 
 	progressBytes, err := json.Marshal(progress)
@@ -241,8 +241,8 @@ func (r *RestoreMicroService) closeDataPath(ctx context.Context, ddName string) 
 }
 
 // SetupWatcher start to watch the DataDownload.
-func (r *RestoreMicroService) SetupWatcher(ctx context.Context, duInformer cache.Informer) {
-	duInformer.AddEventHandler(
+func (r *RestoreMicroService) SetupWatcher(ctx context.Context, ddInformer cache.Informer) {
+	ddInformer.AddEventHandler(
 		cachetool.ResourceEventHandlerFuncs{
 			UpdateFunc: func(oldObj interface{}, newObj interface{}) {
 				oldDd := oldObj.(*velerov2alpha1api.DataDownload)
