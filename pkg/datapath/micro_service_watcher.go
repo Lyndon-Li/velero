@@ -252,14 +252,9 @@ func (ms *microServiceBRWatcher) startWatch() {
 
 		terminateMessage := kube.GetPodTerminateMessage(lastPod, ms.thisContainer)
 
-		previousLog := false
-		if lastPod.Status.Phase == v1.PodFailed && terminateMessage != ErrCancelled {
-			previousLog = true
-		}
+		ms.log.Info("Recording data path pod logs")
 
-		ms.log.Infof("Recording data path pod logs, include previous %v", previousLog)
-
-		if err := ms.redirectDataMoverLogs(previousLog); err != nil {
+		if err := ms.redirectDataMoverLogs(); err != nil {
 			ms.log.WithError(err).Warn("Failed to collect data mover logs")
 		}
 
@@ -334,7 +329,7 @@ func (ms *microServiceBRWatcher) Cancel() {
 	ms.log.WithField("taskType", ms.taskType).WithField("taskName", ms.taskName).Info("MicroServiceBR is canceled")
 }
 
-func (ms *microServiceBRWatcher) redirectDataMoverLogs(includePrevious bool) error {
+func (ms *microServiceBRWatcher) redirectDataMoverLogs() error {
 	ms.log.Infof("Starting to collect data mover pod log for %s", ms.thisPod)
 
 	logFileDir := os.TempDir()
@@ -348,7 +343,7 @@ func (ms *microServiceBRWatcher) redirectDataMoverLogs(includePrevious bool) err
 	logFileName := logFile.Name()
 	ms.log.Infof("Created log file %s", logFileName)
 
-	err = kube.CollectPodLogs(ms.ctx, ms.kubeClient.CoreV1(), ms.thisPod, ms.namespace, ms.thisContainer, includePrevious, logFile)
+	err = kube.CollectPodLogs(ms.ctx, ms.kubeClient.CoreV1(), ms.thisPod, ms.namespace, ms.thisContainer, false, logFile)
 	if err != nil {
 		return errors.Wrapf(err, "error to collect logs to %s for data mover pod %s", logFileName, ms.thisPod)
 	}
