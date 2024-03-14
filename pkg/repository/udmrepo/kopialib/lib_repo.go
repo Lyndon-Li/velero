@@ -547,7 +547,7 @@ func (lt *logThrottle) shouldLog() bool {
 }
 
 func openKopiaRepo(ctx context.Context, configFile string, password string) (repo.Repository, error) {
-	r, err := kopiaRepoOpen(ctx, configFile, password, &repo.Options{})
+	r, err := kopiaRepoOpen(ctx, configFile, password, &repo.Options{DisableInternalLog: true})
 	if os.IsNotExist(err) {
 		return nil, errors.Wrap(err, "error to open repo, repo doesn't exist")
 	}

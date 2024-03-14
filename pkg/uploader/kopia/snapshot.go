@@ -436,7 +436,7 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *Progress,
 	}
 
 	stat, err := restoreEntryFunc(kopiaCtx, rep, output, rootEntry, restore.Options{
-		Parallel:               runtime.NumCPU(),
+		Parallel:               16,
 		RestoreDirEntryAtDepth: math.MaxInt32,
 		Cancel:                 cancleCh,
 		ProgressCallback: func(ctx context.Context, stats restore.Stats) {
