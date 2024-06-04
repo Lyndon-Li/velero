@@ -72,10 +72,6 @@ type kopiaObjectWriter struct {
 	rawWriter object.Writer
 }
 
-type openOptions struct {
-	allowIndexWriteOnLoad bool
-}
-
 const (
 	defaultLogInterval             = time.Second * 10
 	defaultMaintainCheckPeriod     = time.Hour
@@ -119,7 +115,7 @@ func (ks *kopiaRepoService) Open(ctx context.Context, repoOption udmrepo.RepoOpt
 
 	repoCtx := kopia.SetupKopiaLog(ctx, ks.logger)
 
-	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, nil)
+	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +160,7 @@ func (ks *kopiaRepoService) Maintain(ctx context.Context, repoOption udmrepo.Rep
 
 	ks.logger.Info("Start to open repo for maintenance, allow index write on load")
 
-	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, nil)
+	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword)
 	if err != nil {
 		return err
 	}
@@ -179,7 +175,7 @@ func (ks *kopiaRepoService) Maintain(ctx context.Context, repoOption udmrepo.Rep
 	}()
 
 	km := kopiaMaintenance{
-		mode:      maintenance.ModeAuto,
+		mode:      maintenance.ModeQuick,
 		startTime: time.Now(),
 		throttle: logThrottle{
 			interval: defaultLogInterval,
@@ -554,13 +550,8 @@ func (lt *logThrottle) shouldLog() bool {
 	return false
 }
 
-func openKopiaRepo(ctx context.Context, configFile string, password string, options *openOptions) (repo.Repository, error) {
-	allowIndexWriteOnLoad := false
-	if options != nil {
-		allowIndexWriteOnLoad = options.allowIndexWriteOnLoad
-	}
-
-	r, err := kopiaRepoOpen(ctx, configFile, password, &repo.Options{AllowWriteOnIndexLoad: allowIndexWriteOnLoad})
+func openKopiaRepo(ctx context.Context, configFile string, password string) (repo.Repository, error) {
+	r, err := kopiaRepoOpen(ctx, configFile, password, nil)
 	if os.IsNotExist(err) {
 		return nil, errors.Wrap(err, "error to open repo, repo doesn't exist")
 	}
@@ -573,7 +564,7 @@ func openKopiaRepo(ctx context.Context, configFile string, password string, opti
 }
 
 func writeInitParameters(ctx context.Context, repoOption udmrepo.RepoOptions, logger logrus.FieldLogger) error {
-	r, err := openKopiaRepo(ctx, repoOption.ConfigFilePath, repoOption.RepoPassword, nil)
+	r, err := openKopiaRepo(ctx, repoOption.ConfigFilePath, repoOption.RepoPassword)
 	if err != nil {
 		return err
 	}
