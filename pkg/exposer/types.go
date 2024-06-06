@@ -17,7 +17,6 @@ limitations under the License.
 package exposer
 
 import (
-	"github.com/vmware-tanzu/velero/pkg/uploader"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -39,10 +38,4 @@ type ExposeByPod struct {
 	HostingPod       *corev1.Pod
 	HostingContainer string
 	VolumeName       string
-}
-
-// AccessPoint represents an access point that has been exposed to a data path instance
-type AccessPoint struct {
-	ByPath  string                        `json:"byPath"`
-	VolMode uploader.PersistentVolumeMode `json:"volumeMode"`
 }

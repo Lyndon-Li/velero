@@ -21,19 +21,18 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 )
 
 func TestManager(t *testing.T) {
 	m := NewManager(2)
 
-	async_job_1, err := m.CreateFileSystemBR("job-1", "test", context.TODO(), nil, "velero", exposer.AccessPoint{}, Callbacks{}, nil)
+	async_job_1, err := m.CreateFileSystemBR("job-1", "test", context.TODO(), nil, "velero", AccessPoint{}, Callbacks{}, nil)
 	assert.NoError(t, err)
 
-	_, err = m.CreateFileSystemBR("job-2", "test", context.TODO(), nil, "velero", exposer.AccessPoint{}, Callbacks{}, nil)
+	_, err = m.CreateFileSystemBR("job-2", "test", context.TODO(), nil, "velero", AccessPoint{}, Callbacks{}, nil)
 	assert.NoError(t, err)
 
-	_, err = m.CreateFileSystemBR("job-3", "test", context.TODO(), nil, "velero", exposer.AccessPoint{}, Callbacks{}, nil)
+	_, err = m.CreateFileSystemBR("job-3", "test", context.TODO(), nil, "velero", AccessPoint{}, Callbacks{}, nil)
 	assert.Equal(t, ConcurrentLimitExceed, err)
 
 	ret := m.GetAsyncBR("job-0")

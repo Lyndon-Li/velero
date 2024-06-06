@@ -25,7 +25,6 @@ import (
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	repoProvider "github.com/vmware-tanzu/velero/pkg/repository/provider"
@@ -68,10 +67,10 @@ type fileSystemBR struct {
 	callbacks        Callbacks
 	jobName          string
 	requestorType    string
-	sourceTargetPath exposer.AccessPoint
+	sourceTargetPath AccessPoint
 }
 
-func newFileSystemBR(jobName string, requestorType string, client client.Client, namespace string, sourceTargetPath exposer.AccessPoint, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
+func newFileSystemBR(jobName string, requestorType string, client client.Client, namespace string, sourceTargetPath AccessPoint, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
 	fs := &fileSystemBR{
 		jobName:          jobName,
 		requestorType:    requestorType,

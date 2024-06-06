@@ -492,7 +492,7 @@ func TestReconcile(t *testing.T) {
 				r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, velerotest.NewLogger())}
 			}
 
-			datapath.MicroServiceBRWatcherCreator = func(kbclient.Client, kubernetes.Interface, manager.Manager, string, string, string, *exposer.ExposeResult, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+			datapath.MicroServiceBRWatcherCreator = func(kbclient.Client, kubernetes.Interface, manager.Manager, string, string, string, string, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
 				return &fakeDataUploadFSBR{
 					du:         test.du,
 					kubeClient: r.client,
@@ -502,7 +502,7 @@ func TestReconcile(t *testing.T) {
 
 			if test.du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
 				if fsBR := r.dataPathMgr.GetAsyncBR(test.du.Name); fsBR == nil {
-					_, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, nil, nil, datapath.TaskTypeBackup, test.du.Name, velerov1api.DefaultNamespace, &exposer.ExposeResult{}, datapath.Callbacks{OnCancelled: r.OnDataUploadCancelled}, false, velerotest.NewLogger())
+					_, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, nil, nil, datapath.TaskTypeBackup, test.du.Name, velerov1api.DefaultNamespace, "", "", datapath.Callbacks{OnCancelled: r.OnDataUploadCancelled}, false, velerotest.NewLogger())
 					require.NoError(t, err)
 				}
 			}

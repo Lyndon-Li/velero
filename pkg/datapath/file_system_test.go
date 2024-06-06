@@ -25,7 +25,6 @@ import (
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/uploader/provider"
 	providerMock "github.com/vmware-tanzu/velero/pkg/uploader/provider/mocks"
@@ -85,7 +84,7 @@ func TestAsyncBackup(t *testing.T) {
 				Backup: BackupResult{
 					SnapshotID:    "fake-snapshot",
 					EmptySnapshot: false,
-					Source:        exposer.AccessPoint{ByPath: "fake-path"},
+					Source:        AccessPoint{ByPath: "fake-path"},
 				},
 			},
 			path: "fake-path",
@@ -94,7 +93,7 @@ func TestAsyncBackup(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			fs := newFileSystemBR("job-1", "test", nil, "velero", exposer.AccessPoint{ByPath: test.path}, Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
+			fs := newFileSystemBR("job-1", "test", nil, "velero", AccessPoint{ByPath: test.path}, Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
 			mockProvider := providerMock.NewProvider(t)
 			mockProvider.On("RunBackup", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(test.result.Backup.SnapshotID, test.result.Backup.EmptySnapshot, test.err)
 			fs.uploaderProv = mockProvider
@@ -167,7 +166,7 @@ func TestAsyncRestore(t *testing.T) {
 			},
 			result: Result{
 				Restore: RestoreResult{
-					Target: exposer.AccessPoint{ByPath: "fake-path"},
+					Target: AccessPoint{ByPath: "fake-path"},
 				},
 			},
 			path:     "fake-path",
@@ -177,7 +176,7 @@ func TestAsyncRestore(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			fs := newFileSystemBR("job-1", "test", nil, "velero", exposer.AccessPoint{}, Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
+			fs := newFileSystemBR("job-1", "test", nil, "velero", AccessPoint{}, Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
 			mockProvider := providerMock.NewProvider(t)
 			mockProvider.On("RunRestore", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(test.err)
 			fs.uploaderProv = mockProvider

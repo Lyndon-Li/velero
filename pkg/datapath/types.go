@@ -19,7 +19,6 @@ package datapath
 import (
 	"context"
 
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 )
 
@@ -31,14 +30,20 @@ type Result struct {
 
 // BackupResult represents the result of a backup
 type BackupResult struct {
-	SnapshotID    string              `json:"snapshotID"`
-	EmptySnapshot bool                `json:"emptySnapshot"`
-	Source        exposer.AccessPoint `json:"source,omitempty"`
+	SnapshotID    string      `json:"snapshotID"`
+	EmptySnapshot bool        `json:"emptySnapshot"`
+	Source        AccessPoint `json:"source,omitempty"`
 }
 
 // RestoreResult represents the result of a restore
 type RestoreResult struct {
-	Target exposer.AccessPoint `json:"target,omitempty"`
+	Target AccessPoint `json:"target,omitempty"`
+}
+
+// AccessPoint represents an access point that has been exposed to a data path instance
+type AccessPoint struct {
+	ByPath  string                        `json:"byPath"`
+	VolMode uploader.PersistentVolumeMode `json:"volumeMode"`
 }
 
 // Callbacks defines the collection of callbacks during backup/restore

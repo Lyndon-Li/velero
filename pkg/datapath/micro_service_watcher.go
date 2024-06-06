@@ -30,7 +30,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 
@@ -65,14 +64,13 @@ type microServiceBRWatcher struct {
 	taskType            string
 	thisPod             string
 	thisContainer       string
-	thisVolume          string
 	eventCh             chan *v1.Event
 	podCh               chan *v1.Pod
 	startedFromEvent    bool
 	terminatedFromEvent bool
 }
 
-func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, res *exposer.ExposeResult, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
+func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, podName string, containerName string, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
 	ms := &microServiceBRWatcher{
 		mgr:           mgr,
 		client:        client,
@@ -81,9 +79,8 @@ func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interf
 		callbacks:     callbacks,
 		taskType:      taskType,
 		taskName:      taskName,
-		thisPod:       res.ByPod.HostingPod.Name,
-		thisContainer: res.ByPod.HostingContainer,
-		thisVolume:    res.ByPod.VolumeName,
+		thisPod:       podName,
+		thisContainer: containerName,
 		eventCh:       make(chan *v1.Event, 10),
 		podCh:         make(chan *v1.Pod, 2),
 		log:           log,

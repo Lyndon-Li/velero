@@ -352,7 +352,7 @@ func TestDataDownloadReconcile(t *testing.T) {
 				r.dataPathMgr = datapath.NewManager(1)
 			}
 
-			datapath.MicroServiceBRWatcherCreator = func(kbclient.Client, kubernetes.Interface, manager.Manager, string, string, string, *exposer.ExposeResult, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+			datapath.MicroServiceBRWatcherCreator = func(kbclient.Client, kubernetes.Interface, manager.Manager, string, string, string, string, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
 				fsBR := datapathmockes.NewAsyncBR(t)
 				if test.mockCancel {
 					fsBR.On("Cancel").Return()
@@ -399,7 +399,7 @@ func TestDataDownloadReconcile(t *testing.T) {
 
 			if test.needCreateFSBR {
 				if fsBR := r.dataPathMgr.GetAsyncBR(test.dd.Name); fsBR == nil {
-					_, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, nil, nil, datapath.TaskTypeRestore, test.dd.Name, velerov1api.DefaultNamespace, &exposer.ExposeResult{}, datapath.Callbacks{OnCancelled: r.OnDataDownloadCancelled}, false, velerotest.NewLogger())
+					_, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, nil, nil, datapath.TaskTypeRestore, test.dd.Name, velerov1api.DefaultNamespace, "", "", datapath.Callbacks{OnCancelled: r.OnDataDownloadCancelled}, false, velerotest.NewLogger())
 					require.NoError(t, err)
 				}
 			}

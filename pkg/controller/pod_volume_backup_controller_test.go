@@ -40,7 +40,6 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
@@ -343,7 +342,7 @@ func TestPVBReconcile(t *testing.T) {
 				test.dataMgr = datapath.NewManager(1)
 			}
 
-			datapath.FSBRCreator = func(string, string, kbclient.Client, string, exposer.AccessPoint, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+			datapath.FSBRCreator = func(string, string, kbclient.Client, string, datapath.AccessPoint, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
 				return &fakeFSBR{
 					pvb:    test.pvb,
 					client: fakeClient,

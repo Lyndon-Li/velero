@@ -22,7 +22,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -47,7 +46,7 @@ func NewManager(cocurrentNum int) *Manager {
 }
 
 // CreateFileSystemBR creates a new file system backup/restore data path instance
-func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx context.Context, client client.Client, namespace string, sourceTargetPath exposer.AccessPoint, callbacks Callbacks, log logrus.FieldLogger) (AsyncBR, error) {
+func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx context.Context, client client.Client, namespace string, sourceTargetPath AccessPoint, callbacks Callbacks, log logrus.FieldLogger) (AsyncBR, error) {
 	m.trackerLock.Lock()
 	defer m.trackerLock.Unlock()
 
@@ -61,7 +60,7 @@ func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx c
 }
 
 func (m *Manager) CreateMicroServiceBRWatcher(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager,
-	taskType string, taskName string, namespace string, res *exposer.ExposeResult, callbacks Callbacks, resume bool, log logrus.FieldLogger) (AsyncBR, error) {
+	taskType string, taskName string, namespace string, podName string, containerName string, callbacks Callbacks, resume bool, log logrus.FieldLogger) (AsyncBR, error) {
 	m.trackerLock.Lock()
 	defer m.trackerLock.Unlock()
 
@@ -71,7 +70,7 @@ func (m *Manager) CreateMicroServiceBRWatcher(ctx context.Context, client client
 		}
 	}
 
-	m.tracker[taskName] = MicroServiceBRWatcherCreator(client, kubeClient, mgr, taskType, taskName, namespace, res, callbacks, log)
+	m.tracker[taskName] = MicroServiceBRWatcherCreator(client, kubeClient, mgr, taskType, taskName, namespace, podName, containerName, callbacks, log)
 
 	return m.tracker[taskName], nil
 }

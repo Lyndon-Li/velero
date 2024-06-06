@@ -260,7 +260,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			OnProgress:  r.OnDataDownloadProgress,
 		}
 
-		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore, dd.Name, dd.Namespace, result, callbacks, false, log)
+		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore, dd.Name, dd.Namespace, result.ByPod.HostingPod.Name, result.ByPod.HostingContainer, callbacks, false, log)
 		if err != nil {
 			if err == datapath.ConcurrentLimitExceed {
 				log.Info("Data path instance is concurrent limited requeue later")
@@ -833,7 +833,7 @@ func (r *DataDownloadReconciler) resumeCancellableDataPath(ctx context.Context, 
 		OnProgress:  r.OnDataDownloadProgress,
 	}
 
-	asyncBR, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, dd.Name, dd.Namespace, res, callbacks, true, log)
+	asyncBR, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, dd.Name, dd.Namespace, res.ByPod.HostingPod.Name, res.ByPod.HostingContainer, callbacks, true, log)
 	if err != nil {
 		return errors.Wrapf(err, "error to create asyncBR watcher for dd %s", dd.Name)
 	}
