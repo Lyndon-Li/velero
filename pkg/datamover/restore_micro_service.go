@@ -23,7 +23,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -56,15 +55,14 @@ type RestoreMicroService struct {
 
 	namespace        string
 	dataDownloadName string
-	thisPod          *corev1.Pod
-	thisContainer    string
-	thisVolume       string
+	dataDownload     *velerov2alpha1api.DataDownload
+	sourceTargetPath exposer.AccessPoint
 
 	resultSignal chan dataPathResult
 }
 
-func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataDownloadName string, namespace string,
-	thisPod *corev1.Pod, thisContainer string, thisVolume string, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *RestoreMicroService {
+func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataDownloadName string, namespace string, nodeName string,
+	sourceTargetPath exposer.AccessPoint, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *RestoreMicroService {
 	return &RestoreMicroService{
 		ctx:              ctx,
 		client:           client,
@@ -75,10 +73,8 @@ func NewRestoreMicroService(ctx context.Context, client client.Client, kubeClien
 		dataPathMgr:      dataPathMgr,
 		namespace:        namespace,
 		dataDownloadName: dataDownloadName,
-		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataDownloadName, thisPod.Spec.NodeName),
-		thisPod:          thisPod,
-		thisContainer:    thisContainer,
-		thisVolume:       thisVolume,
+		sourceTargetPath: sourceTargetPath,
+		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataDownloadName, nodeName),
 		resultSignal:     make(chan dataPathResult),
 	}
 }
@@ -113,6 +109,8 @@ func (r *RestoreMicroService) RunCancelableDataDownload(ctx context.Context) (st
 		return "", errors.Wrap(err, "error waiting for dd")
 	}
 
+	r.dataDownload = dd
+
 	log.Info("Run cancelable dataDownload")
 
 	callbacks := datapath.Callbacks{
@@ -122,17 +120,13 @@ func (r *RestoreMicroService) RunCancelableDataDownload(ctx context.Context) (st
 		OnProgress:  r.OnDataDownloadProgress,
 	}
 
-	fsRestore, err := r.dataPathMgr.CreateFileSystemBR(dd.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, dd.Namespace, callbacks, log)
+	fsRestore, err := r.dataPathMgr.CreateFileSystemBR(dd.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, dd.Namespace, r.sourceTargetPath, callbacks, log)
 	if err != nil {
 		return "", errors.Wrap(err, "error to create data path")
 	}
 
 	log.Debug("Found volume path")
-	if err := fsRestore.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
-		HostingPod:       r.thisPod,
-		HostingContainer: r.thisContainer,
-		VolumeName:       r.thisVolume,
-	}}, &datapath.FSBRInitParam{
+	if err := fsRestore.Init(ctx, &datapath.FSBRInitParam{
 		BSLName:           dd.Spec.BackupStorageLocation,
 		SourceNamespace:   dd.Spec.SourceNamespace,
 		UploaderType:      GetUploaderType(dd.Spec.DataMover),
@@ -184,7 +178,7 @@ func (r *RestoreMicroService) OnDataDownloadCompleted(ctx context.Context, names
 			err: errors.Wrapf(err, "Failed to marshal restore result %v", result.Restore),
 		}
 	} else {
-		r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(restoreBytes))
+		r.eventRecorder.Event(r.dataDownload, false, datapath.EventReasonCompleted, string(restoreBytes))
 		r.resultSignal <- dataPathResult{
 			result: string(restoreBytes),
 		}
@@ -199,7 +193,7 @@ func (r *RestoreMicroService) OnDataDownloadFailed(ctx context.Context, namespac
 	log := r.logger.WithField("datadownload", ddName)
 	log.WithError(err).Error("Async fs restore data path failed")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data download %s failed, error %v", r.dataDownloadName, err)
+	r.eventRecorder.Event(r.dataDownload, false, datapath.EventReasonFailed, "Data path for data download %s failed, error %v", r.dataDownloadName, err)
 	r.resultSignal <- dataPathResult{
 		err: errors.Wrapf(err, "Data path for data download %s failed", r.dataDownloadName),
 	}
@@ -211,7 +205,7 @@ func (r *RestoreMicroService) OnDataDownloadCancelled(ctx context.Context, names
 	log := r.logger.WithField("datadownload", ddName)
 	log.Warn("Async fs restore data path canceled")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data download %s cancelled", ddName)
+	r.eventRecorder.Event(r.dataDownload, false, datapath.EventReasonCancelled, "Data path for data download %s cancelled", ddName)
 	r.resultSignal <- dataPathResult{
 		err: errors.Errorf("Data path for data download %s cancelled", r.dataDownloadName),
 	}
@@ -228,7 +222,7 @@ func (r *RestoreMicroService) OnDataDownloadProgress(ctx context.Context, namesp
 		return
 	}
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonProgress, string(progressBytes))
+	r.eventRecorder.Event(r.dataDownload, false, datapath.EventReasonProgress, string(progressBytes))
 }
 
 func (r *RestoreMicroService) closeDataPath(ctx context.Context, ddName string) {

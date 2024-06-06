@@ -24,7 +24,6 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -55,11 +54,11 @@ type BackupMicroService struct {
 	dataPathMgr      *datapath.Manager
 	eventRecorder    *kube.EventRecorder
 
-	namespace      string
-	dataUploadName string
-	thisPod        *corev1.Pod
-	thisContainer  string
-	thisVolume     string
+	namespace        string
+	dataUploadName   string
+	dataUpload       *velerov2alpha1api.DataUpload
+	sourceTargetPath exposer.AccessPoint
+	nodeName         string
 
 	resultSignal chan dataPathResult
 }
@@ -69,8 +68,8 @@ type dataPathResult struct {
 	result string
 }
 
-func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataUploadName string, namespace string,
-	thisPod *corev1.Pod, thisContainer string, thisVolume string, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *BackupMicroService {
+func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, dataUploadName string, namespace string, nodeName string,
+	sourceTargetPath exposer.AccessPoint, dataPathMgr *datapath.Manager, repoEnsurer *repository.Ensurer, cred *credentials.CredentialGetter, log logrus.FieldLogger) *BackupMicroService {
 	return &BackupMicroService{
 		ctx:              ctx,
 		client:           client,
@@ -81,10 +80,8 @@ func NewBackupMicroService(ctx context.Context, client client.Client, kubeClient
 		dataPathMgr:      dataPathMgr,
 		namespace:        namespace,
 		dataUploadName:   dataUploadName,
-		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataUploadName, thisPod.Spec.NodeName),
-		thisPod:          thisPod,
-		thisContainer:    thisContainer,
-		thisVolume:       thisVolume,
+		sourceTargetPath: sourceTargetPath,
+		eventRecorder:    kube.NewEventRecorder(kubeClient, client.Scheme(), dataUploadName, nodeName),
 		resultSignal:     make(chan dataPathResult),
 	}
 }
@@ -120,6 +117,8 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 		return "", errors.Wrap(err, "error waiting for du")
 	}
 
+	r.dataUpload = du
+
 	log.Info("Run cancelable dataUpload")
 
 	callbacks := datapath.Callbacks{
@@ -129,17 +128,13 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 		OnProgress:  r.OnDataUploadProgress,
 	}
 
-	fsBackup, err := r.dataPathMgr.CreateFileSystemBR(du.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, du.Namespace, callbacks, log)
+	fsBackup, err := r.dataPathMgr.CreateFileSystemBR(du.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, du.Namespace, r.sourceTargetPath, callbacks, log)
 	if err != nil {
 		return "", errors.Wrap(err, "error to create data path")
 	}
 
 	log.Debug("Found volume path")
-	if err := fsBackup.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
-		HostingPod:       r.thisPod,
-		HostingContainer: r.thisContainer,
-		VolumeName:       r.thisVolume,
-	}}, &datapath.FSBRInitParam{
+	if err := fsBackup.Init(ctx, &datapath.FSBRInitParam{
 		BSLName:           du.Spec.BackupStorageLocation,
 		SourceNamespace:   du.Spec.SourceNamespace,
 		UploaderType:      GetUploaderType(du.Spec.DataMover),
@@ -165,7 +160,7 @@ func (r *BackupMicroService) RunCancelableDataUpload(ctx context.Context) (strin
 	}
 
 	log.Info("Async fs backup data path started")
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonStarted, "Data path for %s started", du.Name)
+	r.eventRecorder.Event(du, false, datapath.EventReasonStarted, "Data path for %s started", du.Name)
 
 	result := ""
 	select {
@@ -201,7 +196,7 @@ func (r *BackupMicroService) OnDataUploadCompleted(ctx context.Context, namespac
 			err: errors.Wrapf(err, "Failed to marshal backup result %v", result.Backup),
 		}
 	} else {
-		r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCompleted, string(backupBytes))
+		r.eventRecorder.Event(r.dataUpload, false, datapath.EventReasonCompleted, string(backupBytes))
 		r.resultSignal <- dataPathResult{
 			result: string(backupBytes),
 		}
@@ -216,9 +211,9 @@ func (r *BackupMicroService) OnDataUploadFailed(ctx context.Context, namespace s
 	log := r.logger.WithField("dataupload", duName)
 	log.WithError(err).Error("Async fs backup data path failed")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUploadName, err)
+	r.eventRecorder.Event(r.dataUpload, false, datapath.EventReasonFailed, "Data path for data upload %s failed, error %v", r.dataUpload.Name, err)
 	r.resultSignal <- dataPathResult{
-		err: errors.Wrapf(err, "Data path for data upload %s failed", r.dataUploadName),
+		err: errors.Wrapf(err, "Data path for data upload %s failed", r.dataUpload.Name),
 	}
 }
 
@@ -228,7 +223,7 @@ func (r *BackupMicroService) OnDataUploadCancelled(ctx context.Context, namespac
 	log := r.logger.WithField("dataupload", duName)
 	log.Warn("Async fs backup data path canceled")
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonCancelled, "Data path for data upload %s cancelled", duName)
+	r.eventRecorder.Event(r.dataUpload, false, datapath.EventReasonCancelled, "Data path for data upload %s cancelled", duName)
 	r.resultSignal <- dataPathResult{
 		err: errors.New(datapath.ErrCancelled),
 	}
@@ -247,7 +242,7 @@ func (r *BackupMicroService) OnDataUploadProgress(ctx context.Context, namespace
 
 	log.Infof("Sending event for progress %v (%s)", progress, string(progressBytes))
 
-	r.eventRecorder.Event(r.thisPod, false, datapath.EventReasonProgress, string(progressBytes))
+	r.eventRecorder.Event(r.dataUpload, false, datapath.EventReasonProgress, string(progressBytes))
 }
 
 func (r *BackupMicroService) closeDataPath(ctx context.Context, duName string) {
@@ -267,7 +262,7 @@ func (r *BackupMicroService) SetupWatcher(ctx context.Context, duInformer cache.
 				oldDu := oldObj.(*velerov2alpha1api.DataUpload)
 				newDu := newObj.(*velerov2alpha1api.DataUpload)
 
-				if newDu.Name != r.dataUploadName {
+				if newDu.Name != r.dataUpload.Name {
 					return
 				}
 

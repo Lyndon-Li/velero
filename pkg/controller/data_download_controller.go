@@ -260,7 +260,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			OnProgress:  r.OnDataDownloadProgress,
 		}
 
-		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore, dd.Name, dd.Namespace, callbacks, false, log)
+		asyncBR, err = r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeRestore, dd.Name, dd.Namespace, result, callbacks, false, log)
 		if err != nil {
 			if err == datapath.ConcurrentLimitExceed {
 				log.Info("Data path instance is concurrent limited requeue later")
@@ -279,7 +279,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		log.Info("Data download is marked as in progress")
 
-		reconcileResult, err := r.runCancelableDataPath(ctx, asyncBR, dd, result, log)
+		reconcileResult, err := r.runCancelableDataPath(ctx, asyncBR, dd, log)
 		if err != nil {
 			log.Errorf("Failed to run cancelable data path for %s with err %v", dd.Name, err)
 			r.closeDataPath(ctx, dd.Name)
@@ -323,8 +323,8 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 }
 
-func (r *DataDownloadReconciler) runCancelableDataPath(ctx context.Context, asyncBR datapath.AsyncBR, dd *velerov2alpha1api.DataDownload, res *exposer.ExposeResult, log logrus.FieldLogger) (reconcile.Result, error) {
-	if err := asyncBR.Init(ctx, res, nil); err != nil {
+func (r *DataDownloadReconciler) runCancelableDataPath(ctx context.Context, asyncBR datapath.AsyncBR, dd *velerov2alpha1api.DataDownload, log logrus.FieldLogger) (reconcile.Result, error) {
+	if err := asyncBR.Init(ctx, nil); err != nil {
 		return r.errorOut(ctx, dd, err, "error to initialize asyncBR", log)
 	}
 
@@ -833,7 +833,7 @@ func (r *DataDownloadReconciler) resumeCancellableDataPath(ctx context.Context, 
 		OnProgress:  r.OnDataDownloadProgress,
 	}
 
-	asyncBR, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, dd.Name, dd.Namespace, callbacks, true, log)
+	asyncBR, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, r.kubeClient, r.mgr, datapath.TaskTypeBackup, dd.Name, dd.Namespace, res, callbacks, true, log)
 	if err != nil {
 		return errors.Wrapf(err, "error to create asyncBR watcher for dd %s", dd.Name)
 	}
@@ -845,7 +845,7 @@ func (r *DataDownloadReconciler) resumeCancellableDataPath(ctx context.Context, 
 		}
 	}()
 
-	if err := asyncBR.Init(ctx, res, nil); err != nil {
+	if err := asyncBR.Init(ctx, nil); err != nil {
 		return errors.Wrapf(err, "error to init asyncBR watcher")
 	}
 

@@ -112,6 +112,11 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	log.Info("Restore starting")
 
+	path, err := exposer.GetPodVolumeHostPath(ctx, pod, pvr.Spec.Volume, c.Client, c.fileSystem, log)
+	if err != nil {
+		return c.errorOut(ctx, pvr, err, fmt.Sprintf("error exposing host path for pod volume %s/%s", pod.Name, pvr.Spec.Volume), log)
+	}
+
 	callbacks := datapath.Callbacks{
 		OnCompleted: c.OnDataPathCompleted,
 		OnFailed:    c.OnDataPathFailed,
@@ -119,7 +124,7 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		OnProgress:  c.OnDataPathProgress,
 	}
 
-	fsRestore, err := c.dataPathMgr.CreateFileSystemBR(pvr.Name, uploader.DataUploadDownloadRequestor, ctx, c.Client, pvr.Namespace, callbacks, log)
+	fsRestore, err := c.dataPathMgr.CreateFileSystemBR(pvr.Name, uploader.DataUploadDownloadRequestor, ctx, c.Client, pvr.Namespace, path, callbacks, log)
 	if err != nil {
 		if err == datapath.ConcurrentLimitExceed {
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
@@ -135,10 +140,7 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return c.errorOut(ctx, pvr, err, "error to update status to in progress", log)
 	}
 
-	if err := fsRestore.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
-		HostingPod: pod,
-		VolumeName: pvr.Spec.Volume,
-	}}, &datapath.FSBRInitParam{
+	if err := fsRestore.Init(ctx, &datapath.FSBRInitParam{
 		BSLName:           pvr.Spec.BackupStorageLocation,
 		SourceNamespace:   pvr.Spec.SourceNamespace,
 		UploaderType:      pvr.Spec.UploaderType,

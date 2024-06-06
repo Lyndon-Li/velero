@@ -94,20 +94,20 @@ func TestAsyncBackup(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			fs := newFileSystemBR("job-1", "test", nil, "velero", Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
+			fs := newFileSystemBR("job-1", "test", nil, "velero", exposer.AccessPoint{ByPath: test.path}, Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
 			mockProvider := providerMock.NewProvider(t)
 			mockProvider.On("RunBackup", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(test.result.Backup.SnapshotID, test.result.Backup.EmptySnapshot, test.err)
 			fs.uploaderProv = mockProvider
 			fs.initialized = true
 			fs.callbacks = test.callbacks
 
-			err := fs.StartBackup(map[string]string{}, &FSBRInitParam{})
+			err := fs.StartBackup(map[string]string{}, &FSBRStartParam{})
 			require.Equal(t, nil, err)
 
 			<-finish
 
-			assert.Equal(t, asyncErr, test.err)
-			assert.Equal(t, asyncResult, test.result)
+			assert.Equal(t, test.err, asyncErr)
+			assert.Equal(t, test.result, asyncResult)
 		})
 	}
 
@@ -177,7 +177,7 @@ func TestAsyncRestore(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			fs := newFileSystemBR("job-1", "test", nil, "velero", Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
+			fs := newFileSystemBR("job-1", "test", nil, "velero", exposer.AccessPoint{}, Callbacks{}, velerotest.NewLogger()).(*fileSystemBR)
 			mockProvider := providerMock.NewProvider(t)
 			mockProvider.On("RunRestore", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(test.err)
 			fs.uploaderProv = mockProvider

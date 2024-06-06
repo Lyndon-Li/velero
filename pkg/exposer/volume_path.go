@@ -31,7 +31,6 @@ import (
 )
 
 var getVolumeDirectory = kube.GetVolumeDirectory
-var getVolumeDirectoryInPod = kube.GetVolumeDirectoryInPod
 var getVolumeMode = kube.GetVolumeMode
 var singlePathMatch = kube.SinglePathMatch
 
@@ -69,28 +68,6 @@ func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, volumeName strin
 
 	return AccessPoint{
 		ByPath:  path,
-		VolMode: volMode,
-	}, nil
-}
-
-// GetPodVolumePath returns a path that can be accessed inside the pod for a given volume
-func GetPodVolumePath(ctx context.Context, pod *corev1.Pod, volumeName string, cli ctrlclient.Client, log logrus.FieldLogger) (AccessPoint, error) {
-	logger := log.WithField("pod name", pod.Name).WithField("pod UID", pod.GetUID()).WithField("volume", volumeName)
-
-	volDir, err := getVolumeDirectoryInPod(pod, volumeName)
-	if err != nil {
-		return AccessPoint{}, errors.Wrapf(err, "error getting volume directory name for volume %s in pod %s", volumeName, pod.Name)
-	}
-
-	logger.WithField("volDir", volDir).Info("Got volume dir")
-
-	volMode, err := getVolumeMode(ctx, logger, pod, volumeName, cli)
-	if err != nil {
-		return AccessPoint{}, errors.Wrapf(err, "error getting volume mode for volume %s in pod %s", volumeName, pod.Name)
-	}
-
-	return AccessPoint{
-		ByPath:  volDir,
 		VolMode: volMode,
 	}, nil
 }

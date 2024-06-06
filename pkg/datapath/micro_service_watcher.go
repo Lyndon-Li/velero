@@ -72,28 +72,27 @@ type microServiceBRWatcher struct {
 	terminatedFromEvent bool
 }
 
-func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
+func newMicroServiceBRWatcher(client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager, taskType string, taskName string, namespace string, res *exposer.ExposeResult, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
 	ms := &microServiceBRWatcher{
-		mgr:        mgr,
-		client:     client,
-		kubeClient: kubeClient,
-		namespace:  namespace,
-		callbacks:  callbacks,
-		taskType:   taskType,
-		taskName:   taskName,
-		eventCh:    make(chan *v1.Event, 10),
-		podCh:      make(chan *v1.Pod, 2),
-		log:        log,
+		mgr:           mgr,
+		client:        client,
+		kubeClient:    kubeClient,
+		namespace:     namespace,
+		callbacks:     callbacks,
+		taskType:      taskType,
+		taskName:      taskName,
+		thisPod:       res.ByPod.HostingPod.Name,
+		thisContainer: res.ByPod.HostingContainer,
+		thisVolume:    res.ByPod.VolumeName,
+		eventCh:       make(chan *v1.Event, 10),
+		podCh:         make(chan *v1.Pod, 2),
+		log:           log,
 	}
 
 	return ms
 }
 
-func (ms *microServiceBRWatcher) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
-	ms.thisPod = res.ByPod.HostingPod.Name
-	ms.thisContainer = res.ByPod.HostingContainer
-	ms.thisVolume = res.ByPod.VolumeName
-
+func (ms *microServiceBRWatcher) Init(ctx context.Context, param interface{}) error {
 	ms.ctx, ms.cancel = context.WithCancel(ctx)
 
 	thisPod := &v1.Pod{}

@@ -5,8 +5,6 @@ package mocks
 import (
 	context "context"
 
-	exposer "github.com/vmware-tanzu/velero/pkg/exposer"
-
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -25,17 +23,17 @@ func (_m *AsyncBR) Close(ctx context.Context) {
 	_m.Called(ctx)
 }
 
-// Init provides a mock function with given fields: ctx, res, param
-func (_m *AsyncBR) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
-	ret := _m.Called(ctx, res, param)
+// Init provides a mock function with given fields: ctx, param
+func (_m *AsyncBR) Init(ctx context.Context, param interface{}) error {
+	ret := _m.Called(ctx, param)
 
 	if len(ret) == 0 {
 		panic("no return value specified for Init")
 	}
 
 	var r0 error
-	if rf, ok := ret.Get(0).(func(context.Context, *exposer.ExposeResult, interface{}) error); ok {
-		r0 = rf(ctx, res, param)
+	if rf, ok := ret.Get(0).(func(context.Context, interface{}) error); ok {
+		r0 = rf(ctx, param)
 	} else {
 		r0 = ret.Error(0)
 	}

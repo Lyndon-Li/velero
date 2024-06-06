@@ -22,6 +22,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -46,7 +47,7 @@ func NewManager(cocurrentNum int) *Manager {
 }
 
 // CreateFileSystemBR creates a new file system backup/restore data path instance
-func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx context.Context, client client.Client, namespace string, callbacks Callbacks, log logrus.FieldLogger) (AsyncBR, error) {
+func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx context.Context, client client.Client, namespace string, sourceTargetPath exposer.AccessPoint, callbacks Callbacks, log logrus.FieldLogger) (AsyncBR, error) {
 	m.trackerLock.Lock()
 	defer m.trackerLock.Unlock()
 
@@ -54,23 +55,23 @@ func (m *Manager) CreateFileSystemBR(jobName string, requestorType string, ctx c
 		return nil, ConcurrentLimitExceed
 	}
 
-	m.tracker[jobName] = FSBRCreator(jobName, requestorType, client, namespace, callbacks, log)
+	m.tracker[jobName] = FSBRCreator(jobName, requestorType, client, namespace, sourceTargetPath, callbacks, log)
 
 	return m.tracker[jobName], nil
 }
 
 func (m *Manager) CreateMicroServiceBRWatcher(ctx context.Context, client client.Client, kubeClient kubernetes.Interface, mgr manager.Manager,
-	taskType string, taskName string, namespace string, callbacks Callbacks, resume bool, log logrus.FieldLogger) (AsyncBR, error) {
+	taskType string, taskName string, namespace string, res *exposer.ExposeResult, callbacks Callbacks, resume bool, log logrus.FieldLogger) (AsyncBR, error) {
 	m.trackerLock.Lock()
 	defer m.trackerLock.Unlock()
 
-	if resume {
+	if !resume {
 		if len(m.tracker) >= m.cocurrentNum {
 			return nil, ConcurrentLimitExceed
 		}
 	}
 
-	m.tracker[taskName] = MicroServiceBRWatcherCreator(client, kubeClient, mgr, taskType, taskName, namespace, callbacks, log)
+	m.tracker[taskName] = MicroServiceBRWatcherCreator(client, kubeClient, mgr, taskType, taskName, namespace, res, callbacks, log)
 
 	return m.tracker[taskName], nil
 }

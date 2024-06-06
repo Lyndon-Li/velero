@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
 	clientgofake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/clock"
 	testclocks "k8s.io/utils/clock/testing"
@@ -42,6 +43,7 @@ import (
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
@@ -291,7 +293,7 @@ type fakeDataUploadFSBR struct {
 	clock      clock.WithTickerAndDelayedExecution
 }
 
-func (f *fakeDataUploadFSBR) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
+func (f *fakeDataUploadFSBR) Init(ctx context.Context, param interface{}) error {
 	return nil
 }
 
@@ -490,7 +492,7 @@ func TestReconcile(t *testing.T) {
 				r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, velerotest.NewLogger())}
 			}
 
-			datapath.FSBRCreator = func(string, string, kbclient.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+			datapath.MicroServiceBRWatcherCreator = func(kbclient.Client, kubernetes.Interface, manager.Manager, string, string, string, *exposer.ExposeResult, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
 				return &fakeDataUploadFSBR{
 					du:         test.du,
 					kubeClient: r.client,
@@ -500,7 +502,7 @@ func TestReconcile(t *testing.T) {
 
 			if test.du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {
 				if fsBR := r.dataPathMgr.GetAsyncBR(test.du.Name); fsBR == nil {
-					_, err := r.dataPathMgr.CreateFileSystemBR(test.du.Name, uploader.DataUploadDownloadRequestor, ctx, r.client, velerov1api.DefaultNamespace, datapath.Callbacks{OnCancelled: r.OnDataUploadCancelled}, velerotest.NewLogger())
+					_, err := r.dataPathMgr.CreateMicroServiceBRWatcher(ctx, r.client, nil, nil, datapath.TaskTypeBackup, test.du.Name, velerov1api.DefaultNamespace, &exposer.ExposeResult{}, datapath.Callbacks{OnCancelled: r.OnDataUploadCancelled}, false, velerotest.NewLogger())
 					require.NoError(t, err)
 				}
 			}

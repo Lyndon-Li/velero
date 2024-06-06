@@ -71,20 +71,21 @@ type fileSystemBR struct {
 	sourceTargetPath exposer.AccessPoint
 }
 
-func newFileSystemBR(jobName string, requestorType string, client client.Client, namespace string, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
+func newFileSystemBR(jobName string, requestorType string, client client.Client, namespace string, sourceTargetPath exposer.AccessPoint, callbacks Callbacks, log logrus.FieldLogger) AsyncBR {
 	fs := &fileSystemBR{
-		jobName:       jobName,
-		requestorType: requestorType,
-		client:        client,
-		namespace:     namespace,
-		callbacks:     callbacks,
-		log:           log,
+		jobName:          jobName,
+		requestorType:    requestorType,
+		client:           client,
+		namespace:        namespace,
+		callbacks:        callbacks,
+		sourceTargetPath: sourceTargetPath,
+		log:              log,
 	}
 
 	return fs
 }
 
-func (fs *fileSystemBR) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
+func (fs *fileSystemBR) Init(ctx context.Context, param interface{}) error {
 	initParam := param.(*FSBRInitParam)
 
 	var err error
@@ -120,22 +121,6 @@ func (fs *fileSystemBR) Init(ctx context.Context, res *exposer.ExposeResult, par
 		fs.backupLocation, fs.backupRepo, initParam.CredentialGetter, repokey.RepoKeySelector(), fs.log)
 	if err != nil {
 		return errors.Wrapf(err, "error creating uploader %s", initParam.UploaderType)
-	}
-
-	if initParam.HostMode {
-		path, err := exposer.GetPodVolumeHostPath(ctx, res.ByPod.HostingPod, res.ByPod.VolumeName, fs.client, initParam.Filesystem, fs.log)
-		if err != nil {
-			return errors.Wrapf(err, "error exposing host path for pod volume %s/%s", res.ByPod.HostingPod, res.ByPod.VolumeName)
-		}
-
-		fs.sourceTargetPath = path
-	} else {
-		path, err := exposer.GetPodVolumePath(ctx, res.ByPod.HostingPod, res.ByPod.VolumeName, fs.client, fs.log)
-		if err != nil {
-			return errors.Wrapf(err, "error exposing path for pod volume %s/%s", res.ByPod.HostingPod, res.ByPod.VolumeName)
-		}
-
-		fs.sourceTargetPath = path
 	}
 
 	fs.initialized = true

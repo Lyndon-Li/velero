@@ -19,12 +19,12 @@ package controller
 import (
 	"context"
 	"fmt"
+	"testing"
 	"time"
 
-	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/ginkgo/extensions/table"
-	. "github.com/onsi/gomega"
 	"github.com/sirupsen/logrus"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -99,7 +99,7 @@ type fakeFSBR struct {
 	clock  clock.WithTickerAndDelayedExecution
 }
 
-func (b *fakeFSBR) Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error {
+func (b *fakeFSBR) Init(ctx context.Context, param interface{}) error {
 	return nil
 }
 
@@ -125,8 +125,15 @@ func (b *fakeFSBR) Cancel() {
 func (b *fakeFSBR) Close(ctx context.Context) {
 }
 
-var _ = Describe("PodVolumeBackup Reconciler", func() {
-	type request struct {
+func TestPVBReconcile(t *testing.T) {
+	// `now` will be used to set the fake clock's time; capture
+	// it here so it can be referenced in the test case defs.
+	now, err := time.Parse(time.RFC1123, time.RFC1123)
+	require.NoError(t, err)
+	now = now.Local()
+
+	tests := []struct {
+		name              string
 		pvb               *velerov1api.PodVolumeBackup
 		pod               *corev1.Pod
 		bsl               *velerov1api.BackupStorageLocation
@@ -136,35 +143,192 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 		expectedRequeue   ctrl.Result
 		expectedErrMsg    string
 		dataMgr           *datapath.Manager
+	}{
+		{
+			name:              "empty phase pvb on same node should be processed",
+			pvb:               pvbBuilder().Phase("").Node("test_node").Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: true,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "new phase pvb on same node should be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseNew).
+				Node("test_node").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: true,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "in progress phase pvb on same node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
+				Node("test_node").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "completed phase pvb on same node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+				Node("test_node").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "failed phase pvb on same node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseFailed).
+				Node("test_node").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseFailed).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+
+		{
+			name: "empty phase pvb on different node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseFailed).
+				Node("test_node_2").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseFailed).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "new phase pvb on different node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseNew).
+				Node("test_node_2").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseNew).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "in progress phase pvb on different node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
+				Node("test_node_2").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "completed phase pvb on different node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+				Node("test_node_2").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name: "failed phase pvb on different node should not be processed",
+			pvb: pvbBuilder().
+				Phase(velerov1api.PodVolumeBackupPhaseFailed).
+				Node("test_node_2").
+				Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase(velerov1api.PodVolumeBackupPhaseFailed).
+				Result(),
+			expectedRequeue: ctrl.Result{},
+		},
+		{
+			name:              "pvb should be requeued when exceeding max concurrent number",
+			pvb:               pvbBuilder().Phase("").Node("test_node").Result(),
+			pod:               podBuilder().Result(),
+			bsl:               bslBuilder().Result(),
+			backupRepo:        buildBackupRepo(),
+			dataMgr:           datapath.NewManager(0),
+			expectedProcessed: false,
+			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
+				Phase("").
+				Result(),
+			expectedRequeue: ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5},
+		},
 	}
 
-	// `now` will be used to set the fake clock's time; capture
-	// it here so it can be referenced in the test case defs.
-	now, err := time.Parse(time.RFC1123, time.RFC1123)
-	Expect(err).To(BeNil())
-	now = now.Local()
-
-	DescribeTable("a pod volume backup",
-		func(test request) {
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			ctx := context.Background()
 
+			require.NoError(t, velerov1api.AddToScheme(scheme.Scheme))
 			fakeClient := fake.NewClientBuilder().WithScheme(scheme.Scheme).Build()
 			err = fakeClient.Create(ctx, test.pvb)
-			Expect(err).To(BeNil())
+			require.NoError(t, err)
 
 			err = fakeClient.Create(ctx, test.pod)
-			Expect(err).To(BeNil())
+			require.NoError(t, err)
 
 			err = fakeClient.Create(ctx, test.bsl)
-			Expect(err).To(BeNil())
+			require.NoError(t, err)
 
 			err = fakeClient.Create(ctx, test.backupRepo)
-			Expect(err).To(BeNil())
+			require.NoError(t, err)
 
 			fakeFS := velerotest.NewFakeFileSystem()
 			pathGlob := fmt.Sprintf("/host_pods/%s/volumes/*/%s", "", "pvb-1-volume")
 			_, err = fakeFS.Create(pathGlob)
-			Expect(err).To(BeNil())
+			require.NoError(t, err)
 
 			credentialFileStore, err := credentials.NewNamespacedFileStore(
 				fakeClient,
@@ -173,13 +337,13 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 				fakeFS,
 			)
 
-			Expect(err).To(BeNil())
+			require.NoError(t, err)
 
 			if test.dataMgr == nil {
 				test.dataMgr = datapath.NewManager(1)
 			}
 
-			datapath.FSBRCreator = func(string, string, kbclient.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+			datapath.FSBRCreator = func(string, string, kbclient.Client, string, exposer.AccessPoint, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
 				return &fakeFSBR{
 					pvb:    test.pvb,
 					client: fakeClient,
@@ -187,8 +351,6 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 				}
 			}
 
-			// Setup reconciler
-			Expect(velerov1api.AddToScheme(scheme.Scheme)).To(Succeed())
 			r := PodVolumeBackupReconciler{
 				Client:           fakeClient,
 				clock:            testclocks.NewFakeClock(now),
@@ -206,11 +368,12 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 					Name:      test.pvb.Name,
 				},
 			})
-			Expect(actualResult).To(BeEquivalentTo(test.expectedRequeue))
+
+			assert.Equal(t, test.expectedRequeue, actualResult)
 			if test.expectedErrMsg == "" {
-				Expect(err).To(BeNil())
+				assert.NoError(t, err)
 			} else {
-				Expect(err.Error()).To(BeEquivalentTo(test.expectedErrMsg))
+				assert.Equal(t, test.expectedErrMsg, err.Error())
 			}
 
 			pvb := velerov1api.PodVolumeBackup{}
@@ -220,170 +383,21 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 			}, &pvb)
 			// Assertions
 			if test.expected == nil {
-				Expect(apierrors.IsNotFound(err)).To(BeTrue())
+				assert.True(t, apierrors.IsNotFound(err))
 			} else {
-				Expect(err).To(BeNil())
-				Eventually(pvb.Status.Phase).Should(Equal(test.expected.Status.Phase))
+				assert.NoError(t, err)
+				assert.Equal(t, test.expected.Status.Phase, pvb.Status.Phase)
 			}
 
 			// Processed PVBs will have completion timestamps.
 			if test.expectedProcessed == true {
-				Expect(pvb.Status.CompletionTimestamp).ToNot(BeNil())
+				assert.NotNil(t, pvb.Status.CompletionTimestamp)
 			}
 
 			// Unprocessed PVBs will not have completion timestamps.
 			if test.expectedProcessed == false {
-				Expect(pvb.Status.CompletionTimestamp).To(BeNil())
+				assert.Nil(t, pvb.Status.CompletionTimestamp)
 			}
-		},
-		Entry("empty phase pvb on same node should be processed", request{
-			pvb:               pvbBuilder().Phase("").Node("test_node").Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: true,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("new phase pvb on same node should be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseNew).
-				Node("test_node").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: true,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("in progress phase pvb on same node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
-				Node("test_node").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("completed phase pvb on same node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				Node("test_node").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("failed phase pvb on same node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseFailed).
-				Node("test_node").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseFailed).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("empty phase pvb on different node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseFailed).
-				Node("test_node_2").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseFailed).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("new phase pvb on different node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseNew).
-				Node("test_node_2").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseNew).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("in progress phase pvb on different node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
-				Node("test_node_2").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseInProgress).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("completed phase pvb on different node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				Node("test_node_2").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("failed phase pvb on different node should not be processed", request{
-			pvb: pvbBuilder().
-				Phase(velerov1api.PodVolumeBackupPhaseFailed).
-				Node("test_node_2").
-				Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase(velerov1api.PodVolumeBackupPhaseFailed).
-				Result(),
-			expectedRequeue: ctrl.Result{},
-		}),
-		Entry("pvb should be requeued when exceeding max concurrent number", request{
-			pvb:               pvbBuilder().Phase("").Node("test_node").Result(),
-			pod:               podBuilder().Result(),
-			bsl:               bslBuilder().Result(),
-			backupRepo:        buildBackupRepo(),
-			dataMgr:           datapath.NewManager(0),
-			expectedProcessed: false,
-			expected: builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").
-				Phase("").
-				Result(),
-			expectedRequeue: ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5},
-		}),
-	)
-})
+		})
+	}
+}

@@ -52,7 +52,7 @@ type Callbacks struct {
 // AsyncBR is the interface for asynchronous data path methods
 type AsyncBR interface {
 	// Init initializes an asynchronous data path instance
-	Init(ctx context.Context, res *exposer.ExposeResult, param interface{}) error
+	Init(ctx context.Context, param interface{}) error
 
 	// StartBackup starts an asynchronous data path instance for backup
 	StartBackup(dataMoverConfig map[string]string, param interface{}) error

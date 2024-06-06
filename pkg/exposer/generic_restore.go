@@ -281,7 +281,7 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	}
 
 	var gracePeriod int64 = 0
-	volumeMounts, volumeDevices := kube.MakePodPVCAttachment(volumeName, targetPVC.Spec.VolumeMode)
+	volumeMounts, volumeDevices, volumePath := kube.MakePodPVCAttachment(volumeName, targetPVC.Spec.VolumeMode)
 	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 
 	volumes := []corev1.Volume{{
@@ -294,10 +294,15 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	}}
 	volumes = append(volumes, podInfo.volumes...)
 
+	volumeMode := corev1.PersistentVolumeFilesystem
+	if targetPVC.Spec.VolumeMode != nil {
+		volumeMode = *targetPVC.Spec.VolumeMode
+	}
+
 	args := []string{
-		fmt.Sprintf("--this-pod=%s", restorePodName),
-		fmt.Sprintf("--this-container=%s", containerName),
-		fmt.Sprintf("--this-volume=%s", volumeName),
+		fmt.Sprintf("--volume-path=%s", volumePath),
+		fmt.Sprintf("--volume-mode=%s", volumeMode),
+		fmt.Sprintf("--data-download=%s", ownerObject.Name),
 		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
 	}
 

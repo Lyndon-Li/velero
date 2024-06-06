@@ -29,7 +29,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
@@ -39,7 +38,9 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/cmd/util/signals"
 	"github.com/vmware-tanzu/velero/pkg/datamover"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/repository"
+	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 
@@ -53,9 +54,9 @@ import (
 )
 
 type dataMoverBackupConfig struct {
-	thisPodName     string
-	thisContainer   string
-	thisVolume      string
+	volumePath      string
+	volumeMode      string
+	duName          string
 	resourceTimeout time.Duration
 }
 
@@ -89,9 +90,9 @@ func NewBackupCommand(f client.Factory) *cobra.Command {
 
 	command.Flags().Var(logLevelFlag, "log-level", fmt.Sprintf("The level at which to log. Valid values are %s.", strings.Join(logLevelFlag.AllowedValues(), ", ")))
 	command.Flags().Var(formatFlag, "log-format", fmt.Sprintf("The format for log output. Valid values are %s.", strings.Join(formatFlag.AllowedValues(), ", ")))
-	command.Flags().StringVar(&config.thisPodName, "this-pod", config.thisPodName, "The pod name where the data mover backup is running")
-	command.Flags().StringVar(&config.thisContainer, "this-container", config.thisContainer, "The container name where the data mover backup is running")
-	command.Flags().StringVar(&config.thisVolume, "this-volume", config.thisVolume, "The volume name that holds the snapshot data")
+	command.Flags().StringVar(&config.volumePath, "volume-path", config.volumePath, "The full path of the volume to be backed up")
+	command.Flags().StringVar(&config.volumeMode, "volume-mode", config.volumeMode, "The mode of the volume to be backed up")
+	command.Flags().StringVar(&config.duName, "data-upload", config.duName, "The data upload name")
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 
 	return command
@@ -114,7 +115,6 @@ type dataMoverBackup struct {
 	config      dataMoverBackupConfig
 	kubeClient  kubernetes.Interface
 	dataPathMgr *datapath.Manager
-	thisPod     *v1.Pod
 }
 
 func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, config dataMoverBackupConfig) (*dataMoverBackup, error) {
@@ -199,28 +199,7 @@ func (s *dataMoverBackup) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
 	go s.cache.Start(s.ctx)
 
-	s.logger.Infof("Starting micro service in node %s", s.nodeName)
-
-	pod := &v1.Pod{}
-	err := s.client.Get(s.ctx, types.NamespacedName{
-		Namespace: s.namespace,
-		Name:      s.config.thisPodName,
-	}, pod)
-	if err != nil {
-		s.cancelFunc()
-		exitWithMessage(s.logger, false, "Failed to get this pod: %v", err)
-	}
-
-	s.thisPod = pod
-	s.logger.Infof("Got this pod %s", pod.Name)
-
-	duName, exist := pod.Labels[velerov1api.DataUploadLabel]
-	if !exist {
-		s.cancelFunc()
-		exitWithMessage(s.logger, false, "This pod doesn't have dataupload info")
-	}
-
-	s.logger.Infof("Got DataUpload %s", duName)
+	s.logger.Infof("Starting micro service in node %s for du %s", s.nodeName, s.config.duName)
 
 	credentialFileStore, err := credentials.NewNamespacedFileStore(
 		s.client,
@@ -242,8 +221,10 @@ func (s *dataMoverBackup) run() {
 	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
 	repoEnsurer := repository.NewEnsurer(s.client, s.logger, s.config.resourceTimeout)
 
-	dpService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, duName, s.namespace, s.thisPod, s.config.thisContainer, s.config.thisVolume, s.dataPathMgr,
-		repoEnsurer, credentialGetter, s.logger)
+	dpService := datamover.NewBackupMicroService(s.ctx, s.client, s.kubeClient, s.config.duName, s.namespace, s.nodeName, exposer.AccessPoint{
+		ByPath:  s.config.volumePath,
+		VolMode: uploader.PersistentVolumeMode(s.config.volumeMode),
+	}, s.dataPathMgr, repoEnsurer, credentialGetter, s.logger)
 
 	duInformer, err := s.cache.GetInformer(s.ctx, &velerov2alpha1api.DataUpload{})
 	if err != nil {
@@ -253,7 +234,7 @@ func (s *dataMoverBackup) run() {
 
 	dpService.SetupWatcher(s.ctx, duInformer)
 
-	s.logger.Infof("Starting data path service %s", duName)
+	s.logger.Infof("Starting data path service %s", s.config.duName)
 
 	result, err := dpService.RunCancelableDataUpload(s.ctx)
 	if err != nil {
@@ -261,11 +242,11 @@ func (s *dataMoverBackup) run() {
 		exitWithMessage(s.logger, false, "Failed to run data path service: %v", err)
 	}
 
-	s.logger.WithField("du", duName).Info("Data path service completed")
+	s.logger.WithField("du", s.config.duName).Info("Data path service completed")
 
 	dpService.Shutdown()
 
-	s.logger.WithField("du", duName).Info("Data path service is shut down")
+	s.logger.WithField("du", s.config.duName).Info("Data path service is shut down")
 
 	s.cancelFunc()
 

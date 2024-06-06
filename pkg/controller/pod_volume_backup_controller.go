@@ -114,6 +114,20 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 	log.Info("PodVolumeBackup starting")
 
+	var pod corev1.Pod
+	podNamespacedName := client.ObjectKey{
+		Namespace: pvb.Spec.Pod.Namespace,
+		Name:      pvb.Spec.Pod.Name,
+	}
+	if err := r.Client.Get(ctx, podNamespacedName, &pod); err != nil {
+		return r.errorOut(ctx, &pvb, err, fmt.Sprintf("getting pod %s/%s", pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name), log)
+	}
+
+	path, err := exposer.GetPodVolumeHostPath(ctx, &pod, pvb.Spec.Volume, r.Client, r.fileSystem, log)
+	if err != nil {
+		return r.errorOut(ctx, &pvb, err, fmt.Sprintf("error exposing host path for pod volume %s/%s", pod.Name, pvb.Spec.Volume), log)
+	}
+
 	callbacks := datapath.Callbacks{
 		OnCompleted: r.OnDataPathCompleted,
 		OnFailed:    r.OnDataPathFailed,
@@ -121,7 +135,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		OnProgress:  r.OnDataPathProgress,
 	}
 
-	fsBackup, err := r.dataPathMgr.CreateFileSystemBR(pvb.Name, uploader.DataUploadDownloadRequestor, ctx, r.Client, pvb.Namespace, callbacks, log)
+	fsBackup, err := r.dataPathMgr.CreateFileSystemBR(pvb.Name, uploader.DataUploadDownloadRequestor, ctx, r.Client, pvb.Namespace, path, callbacks, log)
 	if err != nil {
 		if err == datapath.ConcurrentLimitExceed {
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
@@ -140,19 +154,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return r.errorOut(ctx, &pvb, err, "error updating PodVolumeBackup status", log)
 	}
 
-	var pod corev1.Pod
-	podNamespacedName := client.ObjectKey{
-		Namespace: pvb.Spec.Pod.Namespace,
-		Name:      pvb.Spec.Pod.Name,
-	}
-	if err := r.Client.Get(ctx, podNamespacedName, &pod); err != nil {
-		return r.errorOut(ctx, &pvb, err, fmt.Sprintf("getting pod %s/%s", pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name), log)
-	}
-
-	if err := fsBackup.Init(ctx, &exposer.ExposeResult{ByPod: exposer.ExposeByPod{
-		HostingPod: &pod,
-		VolumeName: pvb.Spec.Volume,
-	}}, &datapath.FSBRInitParam{
+	if err := fsBackup.Init(ctx, &datapath.FSBRInitParam{
 		BSLName:           pvb.Spec.BackupStorageLocation,
 		SourceNamespace:   pvb.Spec.Pod.Namespace,
 		UploaderType:      pvb.Spec.UploaderType,

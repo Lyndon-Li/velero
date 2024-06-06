@@ -401,7 +401,7 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 	}
 
 	var gracePeriod int64 = 0
-	volumeMounts, volumeDevices := kube.MakePodPVCAttachment(volumeName, backupPVC.Spec.VolumeMode)
+	volumeMounts, volumeDevices, volumePath := kube.MakePodPVCAttachment(volumeName, backupPVC.Spec.VolumeMode)
 	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 
 	volumes := []corev1.Volume{{
@@ -419,10 +419,15 @@ func (e *csiSnapshotExposer) createBackupPod(ctx context.Context, ownerObject co
 	}
 	label[podGroupLabel] = podGroupSnapshot
 
+	volumeMode := corev1.PersistentVolumeFilesystem
+	if backupPVC.Spec.VolumeMode != nil {
+		volumeMode = *backupPVC.Spec.VolumeMode
+	}
+
 	args := []string{
-		fmt.Sprintf("--this-pod=%s", podName),
-		fmt.Sprintf("--this-container=%s", containerName),
-		fmt.Sprintf("--this-volume=%s", volumeName),
+		fmt.Sprintf("--volume-path=%s", volumePath),
+		fmt.Sprintf("--volume-mode=%s", volumeMode),
+		fmt.Sprintf("--data-upload=%s", ownerObject.Name),
 		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
 	}
 

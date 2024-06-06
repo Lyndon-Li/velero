@@ -29,7 +29,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
@@ -42,7 +41,9 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/cmd/util/signals"
 	"github.com/vmware-tanzu/velero/pkg/datamover"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/repository"
+	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 
@@ -51,9 +52,9 @@ import (
 )
 
 type dataMoverRestoreConfig struct {
-	thisPodName     string
-	thisContainer   string
-	thisVolume      string
+	volumePath      string
+	volumeMode      string
+	ddName          string
 	resourceTimeout time.Duration
 }
 
@@ -87,9 +88,9 @@ func NewRestoreCommand(f client.Factory) *cobra.Command {
 
 	command.Flags().Var(logLevelFlag, "log-level", fmt.Sprintf("The level at which to log. Valid values are %s.", strings.Join(logLevelFlag.AllowedValues(), ", ")))
 	command.Flags().Var(formatFlag, "log-format", fmt.Sprintf("The format for log output. Valid values are %s.", strings.Join(formatFlag.AllowedValues(), ", ")))
-	command.Flags().StringVar(&config.thisPodName, "this-pod", config.thisPodName, "The pod name where the data mover restore is running")
-	command.Flags().StringVar(&config.thisContainer, "this-container", config.thisContainer, "The container name where the data mover restore is running")
-	command.Flags().StringVar(&config.thisVolume, "this-volume", config.thisVolume, "The volume name of target volume")
+	command.Flags().StringVar(&config.volumePath, "volume-path", config.volumePath, "TThe path of the volume to be restored")
+	command.Flags().StringVar(&config.volumeMode, "volume-mode", config.volumeMode, "The mode of the volume to be restored")
+	command.Flags().StringVar(&config.ddName, "data-download", config.ddName, "The data download name")
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 
 	return command
@@ -106,7 +107,6 @@ type dataMoverRestore struct {
 	config      dataMoverRestoreConfig
 	kubeClient  kubernetes.Interface
 	dataPathMgr *datapath.Manager
-	thisPod     *v1.Pod
 }
 
 func newdataMoverRestore(logger logrus.FieldLogger, factory client.Factory, config dataMoverRestoreConfig) (*dataMoverRestore, error) {
@@ -191,27 +191,7 @@ func (s *dataMoverRestore) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
 	go s.cache.Start(s.ctx)
 
-	s.logger.Infof("Starting micro service in node %s", s.nodeName)
-
-	pod := &v1.Pod{}
-	if err := s.client.Get(s.ctx, types.NamespacedName{
-		Namespace: s.namespace,
-		Name:      s.config.thisPodName,
-	}, pod); err != nil {
-		s.cancelFunc()
-		exitWithMessage(s.logger, false, "Failed to get this pod: %v", err)
-	}
-
-	s.thisPod = pod
-	s.logger.Infof("Got this pod %s", pod.Name)
-
-	ddName, exist := pod.Labels[velerov1api.DataDownloadLabel]
-	if !exist {
-		s.cancelFunc()
-		exitWithMessage(s.logger, false, "This pod doesn't have datadownload info")
-	}
-
-	s.logger.Infof("Got DataDownload %s", ddName)
+	s.logger.Infof("Starting micro service in node %s for dd %s", s.nodeName, s.config.ddName)
 
 	credentialFileStore, err := credentials.NewNamespacedFileStore(
 		s.client,
@@ -233,8 +213,10 @@ func (s *dataMoverRestore) run() {
 	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
 	repoEnsurer := repository.NewEnsurer(s.client, s.logger, s.config.resourceTimeout)
 
-	dpService := datamover.NewRestoreMicroService(s.ctx, s.client, s.kubeClient, ddName, s.namespace, s.thisPod, s.config.thisContainer, s.config.thisVolume, s.dataPathMgr,
-		repoEnsurer, credentialGetter, s.logger)
+	dpService := datamover.NewRestoreMicroService(s.ctx, s.client, s.kubeClient, s.config.ddName, s.namespace, s.nodeName, exposer.AccessPoint{
+		ByPath:  s.config.volumePath,
+		VolMode: uploader.PersistentVolumeMode(s.config.volumeMode),
+	}, s.dataPathMgr, repoEnsurer, credentialGetter, s.logger)
 
 	ddInformer, err := s.cache.GetInformer(s.ctx, &velerov2alpha1api.DataDownload{})
 	if err != nil {
@@ -244,7 +226,7 @@ func (s *dataMoverRestore) run() {
 
 	dpService.SetupWatcher(s.ctx, ddInformer)
 
-	s.logger.Infof("Starting data path service %s", ddName)
+	s.logger.Infof("Starting data path service %s", s.config.ddName)
 
 	result, err := dpService.RunCancelableDataDownload(s.ctx)
 	if err != nil {
@@ -252,11 +234,11 @@ func (s *dataMoverRestore) run() {
 		exitWithMessage(s.logger, false, "Failed to run data path service: %v", err)
 	}
 
-	s.logger.WithField("du", ddName).Info("Data path service completed")
+	s.logger.WithField("dd", s.config.ddName).Info("Data path service completed")
 
 	dpService.Shutdown()
 
-	s.logger.WithField("du", ddName).Info("Data path service is shut down")
+	s.logger.WithField("dd", s.config.ddName).Info("Data path service is shut down")
 
 	s.cancelFunc()
 
