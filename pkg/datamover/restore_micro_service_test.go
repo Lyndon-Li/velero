@@ -19,14 +19,22 @@ package datamover
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	datapathMock "github.com/vmware-tanzu/velero/pkg/datapath/mocks"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
@@ -222,4 +230,179 @@ func TestCancelDataDownload(t *testing.T) {
 			assert.Equal(t, test.expectedEventMsg, bt.EventMessage())
 		})
 	}
+}
+
+func TestRunCancelableDataDownload(t *testing.T) {
+	ctxTimeout, cancelFun := context.WithTimeout(context.Background(), time.Second)
+	tests := []struct {
+		name           string
+		ctx            context.Context
+		kubeClientObj  []runtime.Object
+		fsBRCreator    func(string, string, client.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR
+		dataMgr        *datapath.Manager
+		datpathErr     error
+		dataPathResult string
+		expectedResult string
+		expectedErr    string
+		expectEvent    string
+	}{
+		{
+			name:        "no du",
+			ctx:         context.Background(),
+			expectedErr: "error waiting for dd: context deadline exceeded",
+		},
+		{
+			name: "no in progress du",
+			ctx:  context.Background(),
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Result(),
+			},
+			expectedErr: "error waiting for dd: context deadline exceeded",
+		},
+		{
+			name: "create fs br fail",
+			ctx:  context.Background(),
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Phase(v2alpha1.DataDownloadPhaseInProgress).
+					Labels(map[string]string{velerov1api.AsyncOperationIDLabel: "faike-id"}).Result(),
+			},
+			dataMgr:     datapath.NewManager(0),
+			expectedErr: "error to create data path: Concurrent number exceeds",
+		},
+		{
+			name: "fs br init fail",
+			ctx:  context.Background(),
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Phase(v2alpha1.DataDownloadPhaseInProgress).
+					Labels(map[string]string{velerov1api.AsyncOperationIDLabel: "faike-id"}).Result(),
+			},
+			dataMgr: datapath.NewManager(1),
+			fsBRCreator: func(string, string, client.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+				asyncBR := datapathMock.NewAsyncBR(t)
+				asyncBR.On("Init", mock.Anything, mock.Anything).Return(errors.New("fake-init-error"))
+				return asyncBR
+			},
+			expectedErr: "error to initialize data path: fake-init-error",
+		},
+		{
+			name: "fs br start fail",
+			ctx:  context.Background(),
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Phase(v2alpha1.DataDownloadPhaseInProgress).
+					Labels(map[string]string{velerov1api.AsyncOperationIDLabel: "faike-id"}).Result(),
+			},
+			dataMgr: datapath.NewManager(1),
+			fsBRCreator: func(string, string, client.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+				asyncBR := datapathMock.NewAsyncBR(t)
+				asyncBR.On("Init", mock.Anything, mock.Anything).Return(nil)
+				asyncBR.On("StartRestore", mock.Anything, mock.Anything, mock.Anything).Return(errors.New("fake-start-error"))
+				return asyncBR
+			},
+			expectedErr: "error starting data path restore: fake-start-error",
+		},
+		{
+			name: "context timeout",
+			ctx:  ctxTimeout,
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Phase(v2alpha1.DataDownloadPhaseInProgress).
+					Labels(map[string]string{velerov1api.AsyncOperationIDLabel: "faike-id"}).Result(),
+			},
+			dataMgr: datapath.NewManager(1),
+			fsBRCreator: func(string, string, client.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+				asyncBR := datapathMock.NewAsyncBR(t)
+				asyncBR.On("Init", mock.Anything, mock.Anything).Return(nil)
+				asyncBR.On("StartRestore", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				return asyncBR
+			},
+			expectEvent: datapath.EventReasonStarted,
+			expectedErr: "timed out waiting for fs restore to complete",
+		},
+		{
+			name: "data path error",
+			ctx:  context.Background(),
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Phase(v2alpha1.DataDownloadPhaseInProgress).
+					Labels(map[string]string{velerov1api.AsyncOperationIDLabel: "faike-id"}).Result(),
+			},
+			dataMgr: datapath.NewManager(1),
+			fsBRCreator: func(string, string, client.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+				asyncBR := datapathMock.NewAsyncBR(t)
+				asyncBR.On("Init", mock.Anything, mock.Anything).Return(nil)
+				asyncBR.On("StartRestore", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				return asyncBR
+			},
+			expectEvent: datapath.EventReasonStarted,
+			datpathErr:  errors.New("fake-data-path-error"),
+			expectedErr: "fake-data-path-error",
+		},
+		{
+			name: "succeed",
+			ctx:  context.Background(),
+			kubeClientObj: []runtime.Object{
+				builder.ForDataDownload(velerov1api.DefaultNamespace, "fake-data-download").Phase(v2alpha1.DataDownloadPhaseInProgress).
+					Labels(map[string]string{velerov1api.AsyncOperationIDLabel: "faike-id"}).Result(),
+			},
+			dataMgr: datapath.NewManager(1),
+			fsBRCreator: func(string, string, client.Client, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
+				asyncBR := datapathMock.NewAsyncBR(t)
+				asyncBR.On("Init", mock.Anything, mock.Anything).Return(nil)
+				asyncBR.On("StartRestore", mock.Anything, mock.Anything, mock.Anything).Return(nil)
+				return asyncBR
+			},
+			expectEvent:    datapath.EventReasonStarted,
+			dataPathResult: "fake-data-path-result",
+			expectedResult: "fake-data-path-result",
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	v2alpha1.AddToScheme(scheme)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			waitStartTimeout = time.Second
+
+			fakeClientBuilder := clientFake.NewClientBuilder()
+			fakeClientBuilder = fakeClientBuilder.WithScheme(scheme)
+			fakeClient := fakeClientBuilder.WithRuntimeObjects(test.kubeClientObj...).Build()
+
+			bt := &msTestHelper{}
+
+			rs := &RestoreMicroService{
+				namespace:        velerov1api.DefaultNamespace,
+				dataDownloadName: "fake-data-download",
+				client:           fakeClient,
+				dataPathMgr:      test.dataMgr,
+				eventRecorder:    bt,
+				resultSignal:     make(chan dataPathResult),
+				logger:           velerotest.NewLogger(),
+			}
+
+			datapath.FSBRCreator = test.fsBRCreator
+
+			if test.dataPathResult != "" || test.datpathErr != nil {
+				go func() {
+					rs.resultSignal <- dataPathResult{
+						err:    test.datpathErr,
+						result: test.dataPathResult,
+					}
+				}()
+			}
+
+			result, err := rs.RunCancelableDataPath(test.ctx)
+
+			if test.expectedErr != "" {
+				assert.EqualError(t, err, test.expectedErr)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expectedResult, result)
+			}
+
+			if test.expectEvent != "" {
+				assert.Equal(t, test.expectEvent, bt.EventReason())
+			}
+		})
+	}
+
+	cancelFun()
 }

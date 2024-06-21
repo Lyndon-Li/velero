@@ -172,7 +172,7 @@ func (ms *microServiceBRWatcher) Close(ctx context.Context) {
 }
 
 func (ms *microServiceBRWatcher) StartBackup(source AccessPoint, uploaderConfig map[string]string, param interface{}) error {
-	ms.log.Infof("Start watching backup ms for source %v", source)
+	ms.log.Infof("Start watching backup ms for source %v", source.ByPath)
 
 	if err := ms.reEnsureThisPod(); err != nil {
 		return err
@@ -184,7 +184,7 @@ func (ms *microServiceBRWatcher) StartBackup(source AccessPoint, uploaderConfig 
 }
 
 func (ms *microServiceBRWatcher) StartRestore(snapshotID string, target AccessPoint, uploaderConfigs map[string]string) error {
-	ms.log.Infof("Start watching restore ms to target %v, from snapshot %s", target, snapshotID)
+	ms.log.Infof("Start watching restore ms to target %s, from snapshot %s", target.ByPath, snapshotID)
 
 	if err := ms.reEnsureThisPod(); err != nil {
 		return err

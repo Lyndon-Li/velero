@@ -113,7 +113,7 @@ func (r *RestoreMicroService) RunCancelableDataPath(ctx context.Context) (string
 	})
 
 	dd := &velerov2alpha1api.DataDownload{}
-	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, time.Minute*2, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, waitStartTimeout, true, func(ctx context.Context) (bool, error) {
 		err := r.client.Get(ctx, types.NamespacedName{
 			Namespace: r.namespace,
 			Name:      r.dataDownloadName,
@@ -154,7 +154,14 @@ func (r *RestoreMicroService) RunCancelableDataPath(ctx context.Context) (string
 	}
 
 	log.Debug("Found volume path")
-	if err := fsRestore.Init(ctx, dd.Spec.BackupStorageLocation, dd.Spec.SourceNamespace, GetUploaderType(dd.Spec.DataMover), velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
+	if err := fsRestore.Init(ctx, &datapath.FSBRInitParam{
+		BSLName:           dd.Spec.BackupStorageLocation,
+		SourceNamespace:   dd.Spec.SourceNamespace,
+		UploaderType:      GetUploaderType(dd.Spec.DataMover),
+		RepositoryType:    velerov1api.BackupRepositoryTypeKopia,
+		RepositoryEnsurer: r.repoEnsurer,
+		CredentialGetter:  r.credentialGetter,
+	}); err != nil {
 		return "", errors.Wrap(err, "error to initialize data path")
 	}
 	log.Info("fs init")
@@ -164,6 +171,7 @@ func (r *RestoreMicroService) RunCancelableDataPath(ctx context.Context) (string
 	}
 
 	log.Info("Async fs restore data path started")
+	r.eventRecorder.Event(dd, false, datapath.EventReasonStarted, "Data path for %s started", dd.Name)
 
 	result := ""
 	select {

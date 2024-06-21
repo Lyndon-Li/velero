@@ -20,7 +20,6 @@ import (
 	"io"
 
 	"github.com/sirupsen/logrus"
-	"github.com/vmware-tanzu/velero/pkg/util/logging"
 )
 
 func NewLogger() logrus.FieldLogger {
@@ -49,6 +48,17 @@ func NewSingleLogger(buffer *string) logrus.FieldLogger {
 	logger := logrus.New()
 	logger.Out = &singleLogRecorder{buffer: buffer}
 	logger.Level = logrus.TraceLevel
-	logger.AddHook(&logging.MergeHook{})
+	return logrus.NewEntry(logger)
+}
+
+func NewSingleLoggerWithHooks(buffer *string, hooks []logrus.Hook) logrus.FieldLogger {
+	logger := logrus.New()
+	logger.Out = &singleLogRecorder{buffer: buffer}
+	logger.Level = logrus.TraceLevel
+
+	for _, hook := range hooks {
+		logger.Hooks.Add(hook)
+	}
+
 	return logrus.NewEntry(logger)
 }

@@ -118,13 +118,15 @@ func (r *BackupMicroService) Init() {
 	)
 }
 
+var waitStartTimeout time.Duration = time.Minute * 2
+
 func (r *BackupMicroService) RunCancelableDataPath(ctx context.Context) (string, error) {
 	log := r.logger.WithFields(logrus.Fields{
 		"dataupload": r.dataUploadName,
 	})
 
 	du := &velerov2alpha1api.DataUpload{}
-	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, time.Minute*2, true, func(ctx context.Context) (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, 500*time.Millisecond, waitStartTimeout, true, func(ctx context.Context) (bool, error) {
 		err := r.client.Get(ctx, types.NamespacedName{
 			Namespace: r.namespace,
 			Name:      r.dataUploadName,
@@ -167,7 +169,14 @@ func (r *BackupMicroService) RunCancelableDataPath(ctx context.Context) (string,
 	}
 
 	log.Debug("Found volume path")
-	if err := fsBackup.Init(ctx, du.Spec.BackupStorageLocation, du.Spec.SourceNamespace, GetUploaderType(du.Spec.DataMover), velerov1api.BackupRepositoryTypeKopia, "", r.repoEnsurer, r.credentialGetter); err != nil {
+	if err := fsBackup.Init(ctx, &datapath.FSBRInitParam{
+		BSLName:           du.Spec.BackupStorageLocation,
+		SourceNamespace:   du.Spec.SourceNamespace,
+		UploaderType:      GetUploaderType(du.Spec.DataMover),
+		RepositoryType:    velerov1api.BackupRepositoryTypeKopia,
+		RepositoryEnsurer: r.repoEnsurer,
+		CredentialGetter:  r.credentialGetter,
+	}); err != nil {
 		return "", errors.Wrap(err, "error to initialize data path")
 	}
 	log.Info("fs init")
@@ -176,7 +185,12 @@ func (r *BackupMicroService) RunCancelableDataPath(ctx context.Context) (string,
 		velerov1api.AsyncOperationIDLabel: du.Labels[velerov1api.AsyncOperationIDLabel],
 	}
 
-	if err := fsBackup.StartBackup(r.sourceTargetPath, fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC), "", false, tags, du.Spec.DataMoverConfig); err != nil {
+	if err := fsBackup.StartBackup(r.sourceTargetPath, du.Spec.DataMoverConfig, &datapath.FSBRStartParam{
+		RealSource:     fmt.Sprintf("%s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC),
+		ParentSnapshot: "",
+		ForceFull:      false,
+		Tags:           tags,
+	}); err != nil {
 		return "", errors.Wrap(err, "error starting data path backup")
 	}
 

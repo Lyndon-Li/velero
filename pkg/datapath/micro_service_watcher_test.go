@@ -33,6 +33,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	"github.com/vmware-tanzu/velero/pkg/util/logging"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -566,7 +567,7 @@ func TestRedirectDataMoverLogs(t *testing.T) {
 			name:       "succeed",
 			thisPod:    "fake-pod",
 			logMessage: "fake-log-message-01\nfake-log-message-02\nfake-log-message-03\n",
-			logger:     velerotest.NewSingleLogger(&buffer),
+			logger:     velerotest.NewSingleLoggerWithHooks(&buffer, logging.DefaultHooks(true)),
 		},
 	}
 
