@@ -18,8 +18,6 @@ package datamover
 
 import (
 	"context"
-	"fmt"
-	"sync"
 	"testing"
 
 	"github.com/pkg/errors"
@@ -27,71 +25,29 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
 
-type msTestHelper struct {
-	eventReason  string
-	eventMsg     string
-	marshalErr   error
-	marshalBytes []byte
-	withEvent    bool
-	eventLock    sync.Mutex
-}
-
-func (bt *msTestHelper) Event(_ runtime.Object, _ bool, reason string, message string, a ...any) {
-	bt.eventLock.Lock()
-	defer bt.eventLock.Unlock()
-
-	bt.withEvent = true
-	bt.eventReason = reason
-	bt.eventMsg = fmt.Sprintf(message, a...)
-}
-func (bt *msTestHelper) Shutdown() {}
-
-func (bt *msTestHelper) Marshal(v any) ([]byte, error) {
-	if bt.marshalErr != nil {
-		return nil, bt.marshalErr
-	}
-
-	return bt.marshalBytes, nil
-}
-
-func (bt *msTestHelper) EventReason() string {
-	bt.eventLock.Lock()
-	defer bt.eventLock.Unlock()
-
-	return bt.eventReason
-}
-
-func (bt *msTestHelper) EventMessage() string {
-	bt.eventLock.Lock()
-	defer bt.eventLock.Unlock()
-
-	return bt.eventMsg
-}
-
-func TestOnDataUploadFailed(t *testing.T) {
-	dataUploadName := "fake-data-upload"
+func TestOnDataDownloadFailed(t *testing.T) {
+	dataDownloadName := "fake-data-download"
 	bt := &msTestHelper{}
 
-	bs := &BackupMicroService{
-		dataUploadName: dataUploadName,
-		dataPathMgr:    datapath.NewManager(1),
-		eventRecorder:  bt,
-		resultSignal:   make(chan dataPathResult),
-		logger:         velerotest.NewLogger(),
+	bs := &RestoreMicroService{
+		dataDownloadName: dataDownloadName,
+		dataPathMgr:      datapath.NewManager(1),
+		eventRecorder:    bt,
+		resultSignal:     make(chan dataPathResult),
+		logger:           velerotest.NewLogger(),
 	}
 
-	expectedErr := "Data path for data upload fake-data-upload failed: fake-error"
+	expectedErr := "Data path for data download fake-data-download failed: fake-error"
 	expectedEventReason := datapath.EventReasonFailed
-	expectedEventMsg := "Data path for data upload fake-data-upload failed, error fake-error"
+	expectedEventMsg := "Data path for data download fake-data-download failed, error fake-error"
 
-	go bs.OnDataUploadFailed(context.TODO(), velerov1api.DefaultNamespace, dataUploadName, errors.New("fake-error"))
+	go bs.OnDataDownloadFailed(context.TODO(), velerov1api.DefaultNamespace, dataDownloadName, errors.New("fake-error"))
 
 	result := <-bs.resultSignal
 	assert.EqualError(t, result.err, expectedErr)
@@ -99,23 +55,23 @@ func TestOnDataUploadFailed(t *testing.T) {
 	assert.Equal(t, expectedEventMsg, bt.EventMessage())
 }
 
-func TestOnDataUploadCancelled(t *testing.T) {
-	dataUploadName := "fake-data-upload"
+func TestOnDataDownloadCancelled(t *testing.T) {
+	dataDownloadName := "fake-data-download"
 	bt := &msTestHelper{}
 
-	bs := &BackupMicroService{
-		dataUploadName: dataUploadName,
-		dataPathMgr:    datapath.NewManager(1),
-		eventRecorder:  bt,
-		resultSignal:   make(chan dataPathResult),
-		logger:         velerotest.NewLogger(),
+	bs := &RestoreMicroService{
+		dataDownloadName: dataDownloadName,
+		dataPathMgr:      datapath.NewManager(1),
+		eventRecorder:    bt,
+		resultSignal:     make(chan dataPathResult),
+		logger:           velerotest.NewLogger(),
 	}
 
 	expectedErr := datapath.ErrCancelled
 	expectedEventReason := datapath.EventReasonCancelled
-	expectedEventMsg := "Data path for data upload fake-data-upload cancelled"
+	expectedEventMsg := "Data path for data download fake-data-download cancelled"
 
-	go bs.OnDataUploadCancelled(context.TODO(), velerov1api.DefaultNamespace, dataUploadName)
+	go bs.OnDataDownloadCancelled(context.TODO(), velerov1api.DefaultNamespace, dataDownloadName)
 
 	result := <-bs.resultSignal
 	assert.EqualError(t, result.err, expectedErr)
@@ -123,7 +79,7 @@ func TestOnDataUploadCancelled(t *testing.T) {
 	assert.Equal(t, expectedEventMsg, bt.EventMessage())
 }
 
-func TestOnDataUploadCompleted(t *testing.T) {
+func TestOnDataDownloadCompleted(t *testing.T) {
 	tests := []struct {
 		name                string
 		expectedErr         string
@@ -135,7 +91,7 @@ func TestOnDataUploadCompleted(t *testing.T) {
 		{
 			name:        "marshal fail",
 			marshalErr:  errors.New("fake-marshal-error"),
-			expectedErr: "Failed to marshal backup result { false { }}: fake-marshal-error",
+			expectedErr: "Failed to marshal restore result {{ }}: fake-marshal-error",
 		},
 		{
 			name:                "succeed",
@@ -147,14 +103,14 @@ func TestOnDataUploadCompleted(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			dataUploadName := "fake-data-upload"
+			dataDownloadName := "fake-data-download"
 
 			bt := &msTestHelper{
 				marshalErr:   test.marshalErr,
 				marshalBytes: []byte(test.marshallStr),
 			}
 
-			bs := &BackupMicroService{
+			bs := &RestoreMicroService{
 				dataPathMgr:   datapath.NewManager(1),
 				eventRecorder: bt,
 				resultSignal:  make(chan dataPathResult),
@@ -163,7 +119,7 @@ func TestOnDataUploadCompleted(t *testing.T) {
 
 			funcMarshal = bt.Marshal
 
-			go bs.OnDataUploadCompleted(context.TODO(), velerov1api.DefaultNamespace, dataUploadName, datapath.Result{})
+			go bs.OnDataDownloadCompleted(context.TODO(), velerov1api.DefaultNamespace, dataDownloadName, datapath.Result{})
 
 			result := <-bs.resultSignal
 			if test.marshalErr != nil {
@@ -177,7 +133,7 @@ func TestOnDataUploadCompleted(t *testing.T) {
 	}
 }
 
-func TestOnDataUploadProgress(t *testing.T) {
+func TestOnDataDownloadProgress(t *testing.T) {
 	tests := []struct {
 		name                string
 		expectedEventReason string
@@ -199,14 +155,14 @@ func TestOnDataUploadProgress(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			dataUploadName := "fake-data-upload"
+			dataDownloadName := "fake-data-download"
 
 			bt := &msTestHelper{
 				marshalErr:   test.marshalErr,
 				marshalBytes: []byte(test.marshallStr),
 			}
 
-			bs := &BackupMicroService{
+			bs := &RestoreMicroService{
 				dataPathMgr:   datapath.NewManager(1),
 				eventRecorder: bt,
 				logger:        velerotest.NewLogger(),
@@ -214,7 +170,7 @@ func TestOnDataUploadProgress(t *testing.T) {
 
 			funcMarshal = bt.Marshal
 
-			bs.OnDataUploadProgress(context.TODO(), velerov1api.DefaultNamespace, dataUploadName, &uploader.Progress{})
+			bs.OnDataDownloadProgress(context.TODO(), velerov1api.DefaultNamespace, dataDownloadName, &uploader.Progress{})
 
 			if test.marshalErr != nil {
 				assert.False(t, bt.withEvent)
@@ -227,7 +183,7 @@ func TestOnDataUploadProgress(t *testing.T) {
 	}
 }
 
-func TestCancelDataUpload(t *testing.T) {
+func TestCancelDataDownload(t *testing.T) {
 	tests := []struct {
 		name                string
 		expectedEventReason string
@@ -235,28 +191,28 @@ func TestCancelDataUpload(t *testing.T) {
 		expectedErr         string
 	}{
 		{
-			name:                "no fs backup",
+			name:                "no fs restore",
 			expectedEventReason: datapath.EventReasonCancelled,
-			expectedEventMsg:    "Data path for data upload fake-data-upload cancelled",
+			expectedEventMsg:    "Data path for data download fake-data-download cancelled",
 			expectedErr:         datapath.ErrCancelled,
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			dataUploadName := "fake-data-upload"
-			du := builder.ForDataUpload(velerov1api.DefaultNamespace, dataUploadName).Result()
+			dataDownloadName := "fake-data-download"
+			dd := builder.ForDataDownload(velerov1api.DefaultNamespace, dataDownloadName).Result()
 
 			bt := &msTestHelper{}
 
-			bs := &BackupMicroService{
+			bs := &RestoreMicroService{
 				dataPathMgr:   datapath.NewManager(1),
 				eventRecorder: bt,
 				resultSignal:  make(chan dataPathResult),
 				logger:        velerotest.NewLogger(),
 			}
 
-			go bs.cancelDataUpload(du)
+			go bs.cancelDataDownload(dd)
 
 			result := <-bs.resultSignal
 

@@ -14,62 +14,28 @@ limitations under the License.
 package datamover
 
 import (
-	"context"
 	"errors"
-	"fmt"
 	"testing"
 
-	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
-	ctlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/vmware-tanzu/velero/internal/credentials"
 	cacheMock "github.com/vmware-tanzu/velero/pkg/cmd/cli/datamover/mocks"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
-	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 )
 
-func fakeCreateDataPathBackupWithErr(_ *dataMoverBackup) (dataPathService, error) {
+func fakeCreateDataPathRestoreWithErr(_ *dataMoverRestore) (dataPathService, error) {
 	return nil, errors.New("fake-create-data-path-error")
 }
 
-var frHelper *fakeRunHelper
-
-func fakeCreateDataPathBackup(_ *dataMoverBackup) (dataPathService, error) {
+func fakeCreateDataPathRestore(_ *dataMoverRestore) (dataPathService, error) {
 	return frHelper, nil
 }
 
-type fakeRunHelper struct {
-	runCancelableDataPathErr    error
-	runCancelableDataPathResult string
-	exitMessage                 string
-	succeed                     bool
-}
-
-func (fr *fakeRunHelper) Init() {}
-
-func (fr *fakeRunHelper) RunCancelableDataPath(_ context.Context) (string, error) {
-	if fr.runCancelableDataPathErr != nil {
-		return "", fr.runCancelableDataPathErr
-	} else {
-		return fr.runCancelableDataPathResult, nil
-	}
-}
-
-func (fr *fakeRunHelper) Shutdown() {
-
-}
-
-func (fr *fakeRunHelper) ExitWithMessage(logger logrus.FieldLogger, succeed bool, message string, a ...any) {
-	fr.succeed = succeed
-	fr.exitMessage = fmt.Sprintf(message, a...)
-}
-
-func TestRunDataPathBackup(t *testing.T) {
+func TestRunDataPathRestore(t *testing.T) {
 	tests := []struct {
 		name                        string
-		duName                      string
+		ddName                      string
 		createDataPathFail          bool
 		runCancelableDataPathErr    error
 		runCancelableDataPathResult string
@@ -78,19 +44,19 @@ func TestRunDataPathBackup(t *testing.T) {
 	}{
 		{
 			name:               "create data path failed",
-			duName:             "fake-name",
+			ddName:             "fake-name",
 			createDataPathFail: true,
-			expectedMessage:    "Failed to create data path service for DataUpload fake-name: fake-create-data-path-error",
+			expectedMessage:    "Failed to create data path service for DataDownload fake-name: fake-create-data-path-error",
 		},
 		{
 			name:                     "run data path failed",
-			duName:                   "fake-name",
+			ddName:                   "fake-name",
 			runCancelableDataPathErr: errors.New("fake-run-data-path-error"),
-			expectedMessage:          "Failed to run data path service for DataUpload fake-name: fake-run-data-path-error",
+			expectedMessage:          "Failed to run data path service for DataDownload fake-name: fake-run-data-path-error",
 		},
 		{
 			name:                        "succeed",
-			duName:                      "fake-name",
+			ddName:                      "fake-name",
 			runCancelableDataPathResult: "fake-run-data-path-result",
 			expectedMessage:             "fake-run-data-path-result",
 			expectedSucceed:             true,
@@ -105,18 +71,18 @@ func TestRunDataPathBackup(t *testing.T) {
 			}
 
 			if test.createDataPathFail {
-				funcCreateDataPathBackup = fakeCreateDataPathBackupWithErr
+				funcCreateDataPathRestore = fakeCreateDataPathRestoreWithErr
 			} else {
-				funcCreateDataPathBackup = fakeCreateDataPathBackup
+				funcCreateDataPathRestore = fakeCreateDataPathRestore
 			}
 
 			funcExitWithMessage = frHelper.ExitWithMessage
 
-			s := &dataMoverBackup{
+			s := &dataMoverRestore{
 				logger:     velerotest.NewLogger(),
 				cancelFunc: func() {},
-				config: dataMoverBackupConfig{
-					duName: test.duName,
+				config: dataMoverRestoreConfig{
+					ddName: test.ddName,
 				},
 			}
 
@@ -128,20 +94,7 @@ func TestRunDataPathBackup(t *testing.T) {
 	}
 }
 
-type fakeCreateDataPathServiceHelper struct {
-	fileStoreErr   error
-	secretStoreErr error
-}
-
-func (fc *fakeCreateDataPathServiceHelper) NewNamespacedFileStore(_ ctlclient.Client, _ string, _ string, _ filesystem.Interface) (credentials.FileStore, error) {
-	return nil, fc.fileStoreErr
-}
-
-func (fc *fakeCreateDataPathServiceHelper) NewNamespacedSecretStore(_ ctlclient.Client, _ string) (credentials.SecretStore, error) {
-	return nil, fc.secretStoreErr
-}
-
-func TestCreateDataPathBackup(t *testing.T) {
+func TestCreateDataPathRestore(t *testing.T) {
 	tests := []struct {
 		name            string
 		fileStoreErr    error
@@ -189,7 +142,7 @@ func TestCreateDataPathBackup(t *testing.T) {
 
 			funcExitWithMessage = frHelper.ExitWithMessage
 
-			s := &dataMoverBackup{
+			s := &dataMoverRestore{
 				cache: cache,
 			}
 

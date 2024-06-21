@@ -192,7 +192,7 @@ func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, confi
 }
 
 var funcExitWithMessage = exitWithMessage
-var funcCreateDataPathService = (*dataMoverBackup).createDataPathService
+var funcCreateDataPathBackup = (*dataMoverBackup).createDataPathService
 
 func (s *dataMoverBackup) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
@@ -204,7 +204,7 @@ func (s *dataMoverBackup) run() {
 func (s *dataMoverBackup) runDataPath() {
 	s.logger.Infof("Starting micro service in node %s for du %s", s.nodeName, s.config.duName)
 
-	dpService, err := funcCreateDataPathService(s)
+	dpService, err := funcCreateDataPathBackup(s)
 	if err != nil {
 		s.cancelFunc()
 		funcExitWithMessage(s.logger, false, "Failed to create data path service for DataUpload %s: %v", s.config.duName, err)
