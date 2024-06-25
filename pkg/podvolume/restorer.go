@@ -213,7 +213,7 @@ func (r *restorer) RestorePodVolumes(data RestoreData, tracker *volume.RestoreVo
 		} else if err != nil {
 			r.log.WithError(err).Error("Failed to check node-agent pod status, disengage")
 		} else {
-			err = nodeagent.IsRunningInNode(checkCtx, data.Restore.Namespace, nodeName, r.crClient)
+			err = nodeagent.IsRunningInNode(checkCtx, data.Restore.Namespace, nodeName, r.crClient, nil)
 			if err != nil {
 				r.log.WithField("node", nodeName).WithError(err).Error("node-agent pod is not running in node, abort the restore")
 				r.nodeAgentCheck <- errors.Wrapf(err, "node-agent pod is not running in node %s", nodeName)

@@ -133,3 +133,16 @@ func IsPodUnrecoverable(pod *corev1api.Pod, log logrus.FieldLogger) (bool, strin
 	}
 	return false, ""
 }
+
+func IsPodUnschedulable(pod *corev1api.Pod, log logrus.FieldLogger) (bool, string) {
+	if pod.Status.Phase == corev1api.PodPending && len(pod.Status.Conditions) > 0 {
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1api.PodScheduled && condition.Reason == "Unschedulable" {
+				log.Warnf("Pod is unschedulable %s", condition.Message)
+				return true, fmt.Sprintf("Pod is unschedulable: %s", condition.Message)
+			}
+		}
+	}
+
+	return false, ""
+}

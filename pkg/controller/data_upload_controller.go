@@ -752,11 +752,16 @@ func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov
 func (r *DataUploadReconciler) onPrepareTimeout(ctx context.Context, du *velerov2alpha1api.DataUpload) {
 	log := r.logger.WithField("Dataupload", du.Name)
 
-	log.Info("Timeout happened for preparing dataupload")
+	message := "timeout on preparing data upload, diagnostic message: "
+	if ep, ok := r.snapshotExposerList[du.Spec.SnapshotType]; ok {
+		message += ep.DiagnoseExpose(ctx, getOwnerObject(du))
+	}
+
+	log.Info(message)
 
 	succeeded, err := r.exclusiveUpdateDataUpload(ctx, du, func(du *velerov2alpha1api.DataUpload) {
 		du.Status.Phase = velerov2alpha1api.DataUploadPhaseFailed
-		du.Status.Message = "timeout on preparing data upload"
+		du.Status.Message = message
 	})
 
 	if err != nil {
@@ -769,8 +774,7 @@ func (r *DataUploadReconciler) onPrepareTimeout(ctx context.Context, du *velerov
 		return
 	}
 
-	ep, ok := r.snapshotExposerList[du.Spec.SnapshotType]
-	if !ok {
+	if ep, ok := r.snapshotExposerList[du.Spec.SnapshotType]; !ok {
 		log.WithError(fmt.Errorf("%v type of snapshot exposer is not exist", du.Spec.SnapshotType)).
 			Warn("Failed to clean up resources on canceled")
 	} else {

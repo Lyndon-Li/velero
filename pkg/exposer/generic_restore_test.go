@@ -18,6 +18,7 @@ package exposer
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	corev1api "k8s.io/api/core/v1"
 	clientTesting "k8s.io/client-go/testing"
 )
@@ -493,6 +495,142 @@ func TestRestorePeekExpose(t *testing.T) {
 			} else {
 				assert.EqualError(t, err, test.err)
 			}
+		})
+	}
+}
+
+func TestRestoreDiagnoseExpose(t *testing.T) {
+	restore := &velerov1.Restore{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: velerov1.SchemeGroupVersion.String(),
+			Kind:       "Restore",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: velerov1.DefaultNamespace,
+			Name:      "fake-restore",
+			UID:       "fake-uid",
+		},
+	}
+
+	restorePodUrecoverable := &corev1api.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: restore.Namespace,
+			Name:      restore.Name,
+		},
+		Status: corev1api.PodStatus{
+			Phase: corev1api.PodFailed,
+		},
+	}
+
+	restorePodUnSchedulable := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: restore.Namespace,
+			Name:      restore.Name,
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{
+				{
+					Type:    corev1.PodScheduled,
+					Reason:  "Unschedulable",
+					Message: "fake-unschedulable-message",
+				},
+			},
+		},
+	}
+
+	restorePodRunning := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: restore.Namespace,
+			Name:      restore.Name,
+		},
+
+		Spec: corev1.PodSpec{
+			NodeName: "node-1",
+		},
+
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+		},
+	}
+
+	restorePod := &corev1api.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: restore.Namespace,
+			Name:      restore.Name,
+		},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodSucceeded,
+		},
+	}
+
+	tests := []struct {
+		name          string
+		kubeClientObj []runtime.Object
+		ownerRestore  *velerov1.Restore
+		expectedMsg   string
+	}{
+		{
+			name:         "failed to peek backup pod",
+			ownerRestore: restore,
+			expectedMsg:  fmt.Sprintf("error to peek restore pod %s, err: pods \"fake-restore\" not found", restore.Name),
+		},
+		{
+			name:         "pod is unrecoverable",
+			ownerRestore: restore,
+			kubeClientObj: []runtime.Object{
+				restorePodUrecoverable,
+			},
+			expectedMsg: "Pod is in abnormal state Failed",
+		},
+		{
+			name:         "pod is unschedulable",
+			ownerRestore: restore,
+			kubeClientObj: []runtime.Object{
+				restorePodUnSchedulable,
+			},
+			expectedMsg: "Pod is unschedulable: fake-unschedulable-message",
+		},
+		{
+			name:         "node-agent is not running",
+			ownerRestore: restore,
+			kubeClientObj: []runtime.Object{
+				restorePodRunning,
+			},
+			expectedMsg: "node-agent is not running in node node-1",
+		},
+		{
+			name:         "no info",
+			ownerRestore: restore,
+			kubeClientObj: []runtime.Object{
+				restorePod,
+			},
+			expectedMsg: fmt.Sprintf("unkonwn condition for restore pod %s in phase %s", restore.Name, corev1.PodSucceeded),
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
+
+			exposer := genericRestoreExposer{
+				kubeClient: fakeKubeClient,
+				log:        velerotest.NewLogger(),
+			}
+
+			var ownerObject corev1api.ObjectReference
+			if test.ownerRestore != nil {
+				ownerObject = corev1api.ObjectReference{
+					Kind:       test.ownerRestore.Kind,
+					Namespace:  test.ownerRestore.Namespace,
+					Name:       test.ownerRestore.Name,
+					UID:        test.ownerRestore.UID,
+					APIVersion: test.ownerRestore.APIVersion,
+				}
+			}
+
+			msg := exposer.DiagnoseExpose(context.Background(), ownerObject)
+			assert.Equal(t, test.expectedMsg, msg)
 		})
 	}
 }

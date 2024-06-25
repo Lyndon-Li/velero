@@ -288,6 +288,10 @@ func (f *fakeSnapshotExposer) PeekExposed(ctx context.Context, ownerObject corev
 	return f.peekErr
 }
 
+func (f *fakeSnapshotExposer) DiagnoseExpose(context.Context, corev1.ObjectReference) string {
+	return ""
+}
+
 func (f *fakeSnapshotExposer) CleanUp(context.Context, corev1.ObjectReference, string, string) {
 }
 

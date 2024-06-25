@@ -18,6 +18,7 @@ package exposer
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
@@ -262,6 +263,36 @@ func (e *csiSnapshotExposer) PeekExposed(ctx context.Context, ownerObject corev1
 	}
 
 	return nil
+}
+
+func (e *csiSnapshotExposer) DiagnoseExpose(ctx context.Context, ownerObject corev1.ObjectReference) string {
+	backupPodName := ownerObject.Name
+
+	curLog := e.log.WithFields(logrus.Fields{
+		"owner": ownerObject.Name,
+	})
+
+	pod, err := e.kubeClient.CoreV1().Pods(ownerObject.Namespace).Get(ctx, backupPodName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Sprintf("error to peek backup pod %s, err: %v", backupPodName, err)
+	}
+
+	if podFailed, message := kube.IsPodUnrecoverable(pod, curLog); podFailed {
+		return message
+	}
+
+	if podUnscheduled, message := kube.IsPodUnschedulable(pod, curLog); podUnscheduled {
+		return message
+	}
+
+	if pod.Spec.NodeName != "" {
+		err = nodeagent.IsRunningInNode(ctx, ownerObject.Namespace, pod.Spec.NodeName, nil, e.kubeClient)
+		if err != nil {
+			return fmt.Sprintf("node-agent is not running in node %s", pod.Spec.NodeName)
+		}
+	}
+
+	return fmt.Sprintf("unkonwn condition for backup pod %s in phase %s", backupPodName, pod.Status.Phase)
 }
 
 func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject corev1.ObjectReference, vsName string, sourceNamespace string) {

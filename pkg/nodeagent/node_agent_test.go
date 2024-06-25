@@ -173,7 +173,7 @@ func TestIsRunningInNode(t *testing.T) {
 
 			fakeClient := fakeClientBuilder.WithRuntimeObjects(test.kubeClientObj...).Build()
 
-			err := IsRunningInNode(context.TODO(), "", test.nodeName, fakeClient)
+			err := IsRunningInNode(context.TODO(), "", test.nodeName, fakeClient, nil)
 			if test.expectErr == "" {
 				assert.NoError(t, err)
 			} else {

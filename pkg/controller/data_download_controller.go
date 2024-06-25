@@ -700,10 +700,13 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *velerov2alpha1api.DataDownload) {
 	log := r.logger.WithField("DataDownload", dd.Name)
 
-	log.Info("Timeout happened for preparing datadownload")
+	message := "timeout on preparing data download, diagnostic message: " + r.restoreExposer.DiagnoseExpose(ctx, getDataDownloadOwnerObject(dd))
+
+	log.Info(message)
+
 	succeeded, err := r.exclusiveUpdateDataDownload(ctx, dd, func(dd *velerov2alpha1api.DataDownload) {
 		dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseFailed
-		dd.Status.Message = "timeout on preparing data download"
+		dd.Status.Message = message
 	})
 
 	if err != nil {
