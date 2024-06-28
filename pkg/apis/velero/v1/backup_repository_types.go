@@ -41,11 +41,20 @@ type BackupRepositorySpec struct {
 
 	// MaintenanceFrequency is how often maintenance should be run.
 	MaintenanceFrequency metav1.Duration `json:"maintenanceFrequency"`
+
+	// RepositoryConfig is for repository-specific configuration fields.
+	// +optional
+	// +nullable
+	RepositoryConfig map[string]string `json:"repositoryConfig,omitempty"`
 }
 
 // BackupRepositoryPhase represents the lifecycle phase of a BackupRepository.
 // +kubebuilder:validation:Enum=New;Ready;NotReady
 type BackupRepositoryPhase string
+
+// BackupRepositoryTaskType represents the type of a BackupRepository task.
+// +kubebuilder:validation:Enum=Maintenance
+type BackupRepositoryTaskType string
 
 const (
 	BackupRepositoryPhaseNew      BackupRepositoryPhase = "New"
@@ -56,6 +65,13 @@ const (
 	BackupRepositoryTypeKopia  string = "kopia"
 )
 
+type BackupRepositoryTaskStatus struct {
+	Type           BackupRepositoryTaskType `json:"type"`
+	Message        string                   `json:"message,omitempty"`
+	StartTime      *metav1.Time             `json:"startTime,omitempty"`
+	CompletionTime *metav1.Time             `json:"completionTime,omitempty"`
+}
+
 // BackupRepositoryStatus is the current status of a BackupRepository.
 type BackupRepositoryStatus struct {
 	// Phase is the current state of the BackupRepository.
@@ -65,6 +81,10 @@ type BackupRepositoryStatus struct {
 	// Message is a message about the current status of the BackupRepository.
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Tasks is a collection of status for various BackupRepository tasks.
+	// +optional
+	Tasks []BackupRepositoryTaskStatus `json:"tasks,omitempty"`
 
 	// LastMaintenanceTime is the last time maintenance was run.
 	// +optional
