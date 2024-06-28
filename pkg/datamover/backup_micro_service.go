@@ -102,7 +102,7 @@ func (r *BackupMicroService) Init() {
 				oldDu := oldObj.(*velerov2alpha1api.DataUpload)
 				newDu := newObj.(*velerov2alpha1api.DataUpload)
 
-				if newDu.Name != r.dataUpload.Name {
+				if newDu.Name != r.dataUploadName {
 					return
 				}
 

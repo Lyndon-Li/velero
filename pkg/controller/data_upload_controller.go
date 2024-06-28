@@ -360,7 +360,9 @@ func (r *DataUploadReconciler) runCancelableDataUpload(ctx context.Context, asyn
 }
 
 func (r *DataUploadReconciler) OnDataUploadCompleted(ctx context.Context, namespace string, duName string, result datapath.Result) {
-	defer r.closeDataPath(ctx, duName)
+	defer func() {
+		go r.closeDataPath(ctx, duName)
+	}()
 
 	log := r.logger.WithField("dataupload", duName)
 
@@ -404,7 +406,9 @@ func (r *DataUploadReconciler) OnDataUploadCompleted(ctx context.Context, namesp
 }
 
 func (r *DataUploadReconciler) OnDataUploadFailed(ctx context.Context, namespace, duName string, err error) {
-	defer r.closeDataPath(ctx, duName)
+	defer func() {
+		go r.closeDataPath(ctx, duName)
+	}()
 
 	log := r.logger.WithField("dataupload", duName)
 
@@ -414,14 +418,14 @@ func (r *DataUploadReconciler) OnDataUploadFailed(ctx context.Context, namespace
 	if getErr := r.client.Get(ctx, types.NamespacedName{Name: duName, Namespace: namespace}, &du); getErr != nil {
 		log.WithError(getErr).Warn("Failed to get dataupload on failure")
 	} else {
-		if _, errOut := r.errorOut(ctx, &du, err, "data path backup failed", log); err != nil {
-			log.WithError(err).Warnf("Failed to patch dataupload with err %v", errOut)
-		}
+		r.errorOut(ctx, &du, err, "data path backup failed", log)
 	}
 }
 
 func (r *DataUploadReconciler) OnDataUploadCancelled(ctx context.Context, namespace string, duName string) {
-	defer r.closeDataPath(ctx, duName)
+	defer func() {
+		go r.closeDataPath(ctx, duName)
+	}()
 
 	log := r.logger.WithField("dataupload", duName)
 
@@ -617,7 +621,7 @@ func (r *DataUploadReconciler) errorOut(ctx context.Context, du *velerov2alpha1a
 		}
 		se.CleanUp(ctx, getOwnerObject(du), volumeSnapshotName, du.Spec.SourceNamespace)
 	} else {
-		err = errors.Wrapf(err, "failed to clean up exposed snapshot with could not find %s snapshot exposer", du.Spec.SnapshotType)
+		log.Warnf("failed to clean up exposed snapshot could not find %s snapshot exposer", du.Spec.SnapshotType)
 	}
 
 	return ctrl.Result{}, r.updateStatusToFailed(ctx, du, err, msg, log)
@@ -830,7 +834,7 @@ func UpdateDataUploadWithRetry(ctx context.Context, client client.Client, namesp
 				return false, nil
 			}
 			log.Errorf("failed to update dataupload with error %s for %s/%s", updateErr.Error(), du.Namespace, du.Name)
-			return true, err
+			return true, updateErr
 		}
 		return true, nil
 	})

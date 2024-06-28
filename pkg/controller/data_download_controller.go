@@ -349,7 +349,9 @@ func (r *DataDownloadReconciler) runCancelableDataPath(ctx context.Context, asyn
 }
 
 func (r *DataDownloadReconciler) OnDataDownloadCompleted(ctx context.Context, namespace string, ddName string, result datapath.Result) {
-	defer r.closeDataPath(ctx, ddName)
+	defer func() {
+		go r.closeDataPath(ctx, ddName)
+	}()
 
 	log := r.logger.WithField("datadownload", ddName)
 	log.Info("Async fs restore data path completed")
@@ -382,7 +384,9 @@ func (r *DataDownloadReconciler) OnDataDownloadCompleted(ctx context.Context, na
 }
 
 func (r *DataDownloadReconciler) OnDataDownloadFailed(ctx context.Context, namespace string, ddName string, err error) {
-	defer r.closeDataPath(ctx, ddName)
+	defer func() {
+		go r.closeDataPath(ctx, ddName)
+	}()
 
 	log := r.logger.WithField("datadownload", ddName)
 
@@ -392,14 +396,14 @@ func (r *DataDownloadReconciler) OnDataDownloadFailed(ctx context.Context, names
 	if getErr := r.client.Get(ctx, types.NamespacedName{Name: ddName, Namespace: namespace}, &dd); getErr != nil {
 		log.WithError(getErr).Warn("Failed to get data download on failure")
 	} else {
-		if _, errOut := r.errorOut(ctx, &dd, err, "data path restore failed", log); err != nil {
-			log.WithError(err).Warnf("Failed to patch data download with err %v", errOut)
-		}
+		r.errorOut(ctx, &dd, err, "data path restore failed", log)
 	}
 }
 
 func (r *DataDownloadReconciler) OnDataDownloadCancelled(ctx context.Context, namespace string, ddName string) {
-	defer r.closeDataPath(ctx, ddName)
+	defer func() {
+		go r.closeDataPath(ctx, ddName)
+	}()
 
 	log := r.logger.WithField("datadownload", ddName)
 
@@ -756,7 +760,7 @@ func UpdateDataDownloadWithRetry(ctx context.Context, client client.Client, name
 				return false, nil
 			}
 			log.Errorf("failed to update datadownload with error %s for %s/%s", updateErr.Error(), dd.Namespace, dd.Name)
-			return true, err
+			return true, updateErr
 		}
 
 		return true, nil
