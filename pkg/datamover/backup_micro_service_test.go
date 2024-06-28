@@ -292,12 +292,12 @@ func TestRunCancelableDataUpload(t *testing.T) {
 	}{
 		{
 			name:        "no du",
-			ctx:         context.Background(),
+			ctx:         ctxTimeout,
 			expectedErr: "error waiting for du: context deadline exceeded",
 		},
 		{
 			name: "no in progress du",
-			ctx:  context.Background(),
+			ctx:  ctxTimeout,
 			kubeClientObj: []runtime.Object{
 				builder.ForDataUpload(velerov1api.DefaultNamespace, "fake-data-upload").Result(),
 			},
@@ -404,8 +404,6 @@ func TestRunCancelableDataUpload(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			waitStartTimeout = time.Second
-
 			fakeClientBuilder := clientFake.NewClientBuilder()
 			fakeClientBuilder = fakeClientBuilder.WithScheme(scheme)
 			fakeClient := fakeClientBuilder.WithRuntimeObjects(test.kubeClientObj...).Build()
