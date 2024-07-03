@@ -67,6 +67,9 @@ type CSISnapshotExposeParam struct {
 
 	// Affinity specifies the node affinity of the backup pod
 	Affinity *nodeagent.LoadAffinity
+
+	// BackupPVCConfig specifies the configs of backupPVC
+	BackupPVCConfig map[string]nodeagent.BackupPVC
 }
 
 // CSISnapshotExposeWaitParam define the input param for WaitExposed of CSI snapshots
@@ -163,7 +166,7 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 		curLog.WithField("vs name", volumeSnapshot.Name).Warnf("The snapshot doesn't contain a valid restore size, use source volume's size %v", volumeSize)
 	}
 
-	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupVS.Name, csiExposeParam.StorageClass, csiExposeParam.AccessMode, volumeSize)
+	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupVS.Name, csiExposeParam.StorageClass, csiExposeParam.AccessMode, csiExposeParam.BackupPVCConfig, volumeSize)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup pvc")
 	}
@@ -171,7 +174,7 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 	curLog.WithField("pvc name", backupPVC.Name).Info("Backup PVC is created")
 	defer func() {
 		if err != nil {
-			kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVC.Name, backupPVC.Namespace, curLog)
+			kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVC.Name, backupPVC.Namespace, 0, curLog)
 		}
 	}()
 
@@ -271,13 +274,15 @@ func (e *csiSnapshotExposer) PeekExposed(ctx context.Context, ownerObject corev1
 	return nil
 }
 
+const cleanUpTimeout = time.Minute
+
 func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject corev1.ObjectReference, vsName string, sourceNamespace string) {
 	backupPodName := ownerObject.Name
 	backupPVCName := ownerObject.Name
 	backupVSName := ownerObject.Name
 
 	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), backupPodName, ownerObject.Namespace, e.log)
-	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVCName, ownerObject.Namespace, e.log)
+	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVCName, ownerObject.Namespace, cleanUpTimeout, e.log)
 
 	csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVSName, ownerObject.Namespace, e.log)
 	csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, vsName, sourceNamespace, e.log)
@@ -345,7 +350,8 @@ func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject co
 	return e.csiSnapshotClient.VolumeSnapshotContents().Create(ctx, vsc, metav1.CreateOptions{})
 }
 
-func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject corev1.ObjectReference, backupVS, storageClass, accessMode string, resource resource.Quantity) (*corev1.PersistentVolumeClaim, error) {
+func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject corev1.ObjectReference, backupVS, storageClass, accessMode string,
+	backupPVCConfig map[string]nodeagent.BackupPVC, resource resource.Quantity) (*corev1.PersistentVolumeClaim, error) {
 	backupPVCName := ownerObject.Name
 
 	volumeMode, err := getVolumeModeByAccessMode(accessMode)
@@ -357,6 +363,20 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject co
 		APIGroup: &snapshotv1api.SchemeGroupVersion.Group,
 		Kind:     "VolumeSnapshot",
 		Name:     backupVS,
+	}
+
+	sc := storageClass
+	volumeAccess := corev1.ReadWriteOnce
+	if backupPVCConfig != nil {
+		if config, ok := backupPVCConfig[sc]; ok {
+			if config.StorageClass != "" {
+				sc = config.StorageClass
+			}
+
+			if config.ReadOnly {
+				volumeAccess = corev1.ReadOnlyMany
+			}
+		}
 	}
 
 	pvc := &corev1.PersistentVolumeClaim{
@@ -375,9 +395,9 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject co
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes: []corev1.PersistentVolumeAccessMode{
-				corev1.ReadWriteOnce,
+				volumeAccess,
 			},
-			StorageClassName: &storageClass,
+			StorageClassName: &sc,
 			VolumeMode:       &volumeMode,
 			DataSource:       dataSource,
 			DataSourceRef:    nil,

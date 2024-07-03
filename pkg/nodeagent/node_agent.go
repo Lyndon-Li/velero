@@ -69,6 +69,17 @@ type Configs struct {
 
 	// LoadAffinity is the config for data path load affinity.
 	LoadAffinity []*LoadAffinity `json:"loadAffinity,omitempty"`
+
+	// BackupPVC is the config for backupPVC of snapshot data movement.
+	BackupPVC map[string]BackupPVC `json:"backupPVC,omitempty"`
+}
+
+type BackupPVC struct {
+	// StorageClass is the name of storage class to be used by the backupPVC.
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// ReadOnly sets the backupPVC's access mode as read only.
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 // IsRunning checks if the node agent daemonset is running properly. If not, return the error found

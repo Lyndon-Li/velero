@@ -289,10 +289,15 @@ func (s *nodeAgentServer) run() {
 	}
 
 	var loadAffinity *nodeagent.LoadAffinity
-	if s.dataPathConfigs != nil && len(s.dataPathConfigs.LoadAffinity) > 0 {
-		loadAffinity = s.dataPathConfigs.LoadAffinity[0]
+	var backupPVCConfig map[string]nodeagent.BackupPVC
+	if s.dataPathConfigs != nil {
+		if len(s.dataPathConfigs.LoadAffinity) > 0 {
+			loadAffinity = s.dataPathConfigs.LoadAffinity[0]
+		}
+
+		backupPVCConfig = s.dataPathConfigs.BackupPVC
 	}
-	dataUploadReconciler := controller.NewDataUploadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.csiSnapshotClient.SnapshotV1(), s.dataPathMgr, loadAffinity, repoEnsurer, clock.RealClock{}, credentialGetter, s.nodeName, s.fileSystem, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
+	dataUploadReconciler := controller.NewDataUploadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.csiSnapshotClient.SnapshotV1(), s.dataPathMgr, loadAffinity, backupPVCConfig, repoEnsurer, clock.RealClock{}, credentialGetter, s.nodeName, s.fileSystem, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
 	if err = dataUploadReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the data upload controller")
 	}
