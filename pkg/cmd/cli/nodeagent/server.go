@@ -84,6 +84,7 @@ type nodeAgentServerConfig struct {
 	metricsAddress          string
 	resourceTimeout         time.Duration
 	dataMoverPrepareTimeout time.Duration
+	configMapName           string
 }
 
 func NewServerCommand(f client.Factory) *cobra.Command {
@@ -120,6 +121,7 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 	command.Flags().DurationVar(&config.dataMoverPrepareTimeout, "data-mover-prepare-timeout", config.dataMoverPrepareTimeout, "How long to wait for preparing a DataUpload/DataDownload. Default is 30 minutes.")
 	command.Flags().StringVar(&config.metricsAddress, "metrics-address", config.metricsAddress, "The address to expose prometheus metrics")
+	command.Flags().StringVar(&config.configMapName, "nonde-agent-config", config.configMapName, "The name of configMap delivering node agent configurations")
 
 	return command
 }
@@ -227,7 +229,10 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 		return nil, err
 	}
 
-	s.getDataPathConfigs()
+	if s.config.configMapName != "" {
+		s.getDataPathConfigs()
+	}
+
 	s.dataPathMgr = datapath.NewManager(s.getDataPathConcurrentNum(defaultDataPathConcurrentNum))
 
 	return s, nil
@@ -460,7 +465,7 @@ func (s *nodeAgentServer) markInProgressPVRsFailed(client ctrlclient.Client) {
 var getConfigsFunc = nodeagent.GetConfigs
 
 func (s *nodeAgentServer) getDataPathConfigs() {
-	configs, err := getConfigsFunc(s.ctx, s.namespace, s.kubeClient)
+	configs, err := getConfigsFunc(s.ctx, s.namespace, s.kubeClient, s.config.configMapName)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to get node agent configs")
 		return

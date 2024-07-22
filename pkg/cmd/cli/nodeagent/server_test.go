@@ -122,20 +122,20 @@ func Test_getDataPathConfigs(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		getFunc       func(context.Context, string, kubernetes.Interface) (*nodeagent.Configs, error)
+		getFunc       func(context.Context, string, kubernetes.Interface, string) (*nodeagent.Configs, error)
 		expectConfigs *nodeagent.Configs
 		expectLog     string
 	}{
 		{
 			name: "failed to get configs",
-			getFunc: func(context.Context, string, kubernetes.Interface) (*nodeagent.Configs, error) {
+			getFunc: func(context.Context, string, kubernetes.Interface, string) (*nodeagent.Configs, error) {
 				return nil, errors.New("fake-get-error")
 			},
 			expectLog: "Failed to get node agent configs",
 		},
 		{
 			name: "configs cm not found",
-			getFunc: func(context.Context, string, kubernetes.Interface) (*nodeagent.Configs, error) {
+			getFunc: func(context.Context, string, kubernetes.Interface, string) (*nodeagent.Configs, error) {
 				return nil, nil
 			},
 			expectLog: "Node agent configs are not found",
@@ -143,7 +143,7 @@ func Test_getDataPathConfigs(t *testing.T) {
 
 		{
 			name: "succeed",
-			getFunc: func(context.Context, string, kubernetes.Interface) (*nodeagent.Configs, error) {
+			getFunc: func(context.Context, string, kubernetes.Interface, string) (*nodeagent.Configs, error) {
 				return configs, nil
 			},
 			expectConfigs: configs,

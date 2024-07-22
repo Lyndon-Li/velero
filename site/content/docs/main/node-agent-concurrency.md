@@ -8,7 +8,8 @@ Varying from the data size, data complexity, resource availability, the tasks ma
 
 Node-agent concurrency configurations allow you to configure the concurrent number of node-agent loads per node. When the resources are sufficient in nodes, you can set a large concurrent number, so as to reduce the backup/restore time; otherwise, the concurrency should be reduced, otherwise, the backup/restore may encounter problems, i.e., time lagging, hang or OOM kill.  
 
-To set Node-agent concurrency configurations, a configMap named ```node-agent-config``` should be created manually. The configMap should be in the same namespace where Velero is installed. If multiple Velero instances are installed in different namespaces, there should be one configMap in each namespace which applies to node-agent in that namespace only.  
+To set Node-agent concurrency configurations, a configMap should be created manually. The configMap should be in the same namespace where Velero is installed. If multiple Velero instances are installed in different namespaces, there should be one configMap in each namespace which applies to node-agent in that namespace only.  
+The configMap name should be set to velero server parameters by flag ```--node-agent-config```. At installation time, this can be done by setting ```--node-agent-config``` flag.  
 Node-agent server checks these configurations at startup time. Therefore, you could edit this configMap any time, but in order to make the changes effective, node-agent server needs to be restarted.  
 
 ### Global concurrent number
@@ -61,6 +62,10 @@ A sample of the complete ```node-agent-config``` configMap is as below:
 To create the configMap, save something like the above sample to a json file and then run below command:
 ```
 kubectl create cm node-agent-config -n velero --from-file=<json file name>
+```
+To set the configMap to at installation, use below installation flag:
+```
+velero install --node-agent-config xxx
 ```
 
 
