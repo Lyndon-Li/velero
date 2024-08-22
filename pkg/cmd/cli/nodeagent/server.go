@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"time"
@@ -78,12 +79,15 @@ const (
 	defaultResourceTimeout         = 10 * time.Minute
 	defaultDataMoverPrepareTimeout = 30 * time.Minute
 	defaultDataPathConcurrentNum   = 1
+
+	defaultProfilerAddress = "localhost:6060"
 )
 
 type nodeAgentServerConfig struct {
 	metricsAddress          string
 	resourceTimeout         time.Duration
 	dataMoverPrepareTimeout time.Duration
+	profilerAddress         string
 }
 
 func NewServerCommand(f client.Factory) *cobra.Command {
@@ -93,6 +97,7 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 		metricsAddress:          defaultMetricsAddress,
 		resourceTimeout:         defaultResourceTimeout,
 		dataMoverPrepareTimeout: defaultDataMoverPrepareTimeout,
+		profilerAddress:         defaultProfilerAddress,
 	}
 
 	command := &cobra.Command{
@@ -120,6 +125,7 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters. Default is 10 minutes.")
 	command.Flags().DurationVar(&config.dataMoverPrepareTimeout, "data-mover-prepare-timeout", config.dataMoverPrepareTimeout, "How long to wait for preparing a DataUpload/DataDownload. Default is 30 minutes.")
 	command.Flags().StringVar(&config.metricsAddress, "metrics-address", config.metricsAddress, "The address to expose prometheus metrics")
+	command.Flags().StringVar(&config.profilerAddress, "profiler-address", config.profilerAddress, "The address to expose the pprof profiler.")
 
 	return command
 }
@@ -236,6 +242,10 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 func (s *nodeAgentServer) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
 
+	if s.config.profilerAddress != "" {
+		go s.runProfiler()
+	}
+
 	go func() {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.Handler())
@@ -305,6 +315,24 @@ func (s *nodeAgentServer) run() {
 
 	if err := s.mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		s.logger.Fatal("Problem starting manager", err)
+	}
+}
+
+func (s *nodeAgentServer) runProfiler() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	server := &http.Server{
+		Addr:              s.config.profilerAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 3 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
+		s.logger.WithError(errors.WithStack(err)).Error("error running profiler http server")
 	}
 }
 
