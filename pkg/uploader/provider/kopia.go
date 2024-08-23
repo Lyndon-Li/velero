@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/kopia/kopia/diagnostic"
 	"github.com/kopia/kopia/snapshot/snapshotfs"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -34,6 +35,8 @@ import (
 	repokeys "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/service"
+
+	kopialog "github.com/vmware-tanzu/velero/pkg/kopia"
 )
 
 // BackupFunc mainly used to make testing more convenient
@@ -106,7 +109,11 @@ func (kp *kopiaProvider) CheckContext(ctx context.Context, finishChan chan struc
 }
 
 func (kp *kopiaProvider) Close(ctx context.Context) error {
-	return kp.bkRepo.Close(ctx)
+	err := kp.bkRepo.Close(ctx)
+
+	kp.log.Info("repo is closed, dumping stats")
+	diagnostic.DumpStats(kopialog.SetupKopiaLog(ctx, kp.log))
+	return err
 }
 
 // RunBackup which will backup specific path and update backup progress
