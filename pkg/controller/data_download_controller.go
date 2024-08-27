@@ -61,11 +61,12 @@ type DataDownloadReconciler struct {
 	nodeName         string
 	dataPathMgr      *datapath.Manager
 	preparingTimeout time.Duration
+	enableProfile    bool
 	metrics          *metrics.ServerMetrics
 }
 
 func NewDataDownloadReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	nodeName string, preparingTimeout time.Duration, logger logrus.FieldLogger, metrics *metrics.ServerMetrics) *DataDownloadReconciler {
+	nodeName string, preparingTimeout time.Duration, enableProfile bool, logger logrus.FieldLogger, metrics *metrics.ServerMetrics) *DataDownloadReconciler {
 	return &DataDownloadReconciler{
 		client:           client,
 		kubeClient:       kubeClient,
@@ -76,6 +77,7 @@ func NewDataDownloadReconciler(client client.Client, mgr manager.Manager, kubeCl
 		restoreExposer:   exposer.NewGenericRestoreExposer(kubeClient, logger),
 		dataPathMgr:      dataPathMgr,
 		preparingTimeout: preparingTimeout,
+		enableProfile:    enableProfile,
 		metrics:          metrics,
 	}
 }
@@ -179,7 +181,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// Expose() will trigger to create one pod whose volume is restored by a given volume snapshot,
 		// but the pod maybe is not in the same node of the current controller, so we need to return it here.
 		// And then only the controller who is in the same node could do the rest work.
-		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), dd.Spec.TargetVolume.PVC, dd.Spec.TargetVolume.Namespace, hostingPodLabels, dd.Spec.OperationTimeout.Duration)
+		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), dd.Spec.TargetVolume.PVC, dd.Spec.TargetVolume.Namespace, hostingPodLabels, dd.Spec.OperationTimeout.Duration, r.enableProfile)
 		if err != nil {
 			if err := r.client.Get(ctx, req.NamespacedName, dd); err != nil {
 				if !apierrors.IsNotFound(err) {

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"time"
@@ -80,6 +81,8 @@ const (
 	defaultResourceTimeout         = 10 * time.Minute
 	defaultDataMoverPrepareTimeout = 30 * time.Minute
 	defaultDataPathConcurrentNum   = 1
+
+	profilerAddress = "localhost:6060"
 )
 
 type nodeAgentServerConfig struct {
@@ -87,6 +90,7 @@ type nodeAgentServerConfig struct {
 	resourceTimeout         time.Duration
 	dataMoverPrepareTimeout time.Duration
 	nodeAgentConfig         string
+	enableProfile           bool
 }
 
 func NewServerCommand(f client.Factory) *cobra.Command {
@@ -124,6 +128,7 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 	command.Flags().DurationVar(&config.dataMoverPrepareTimeout, "data-mover-prepare-timeout", config.dataMoverPrepareTimeout, "How long to wait for preparing a DataUpload/DataDownload. Default is 30 minutes.")
 	command.Flags().StringVar(&config.metricsAddress, "metrics-address", config.metricsAddress, "The address to expose prometheus metrics")
 	command.Flags().StringVar(&config.nodeAgentConfig, "node-agent-config", config.nodeAgentConfig, "The name of configMap containing node-agent configurations.")
+	command.Flags().BoolVar(&config.enableProfile, "enable-profile", config.enableProfile, "Whether to enable pprof profile.")
 
 	return command
 }
@@ -243,6 +248,10 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 func (s *nodeAgentServer) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
 
+	if s.config.enableProfile {
+		go runProfiler(s.logger)
+	}
+
 	go func() {
 		metricsMux := http.NewServeMux()
 		metricsMux.Handle("/metrics", promhttp.Handler())
@@ -302,12 +311,12 @@ func (s *nodeAgentServer) run() {
 		backupPVCConfig = s.dataPathConfigs.BackupPVCConfig
 	}
 
-	dataUploadReconciler := controller.NewDataUploadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.csiSnapshotClient.SnapshotV1(), s.dataPathMgr, loadAffinity, backupPVCConfig, clock.RealClock{}, s.nodeName, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
+	dataUploadReconciler := controller.NewDataUploadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.csiSnapshotClient.SnapshotV1(), s.dataPathMgr, loadAffinity, backupPVCConfig, clock.RealClock{}, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.enableProfile, s.logger, s.metrics)
 	if err = dataUploadReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the data upload controller")
 	}
 
-	dataDownloadReconciler := controller.NewDataDownloadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.nodeName, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
+	dataDownloadReconciler := controller.NewDataDownloadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.enableProfile, s.logger, s.metrics)
 	if err = dataDownloadReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the data download controller")
 	}
@@ -331,6 +340,24 @@ func (s *nodeAgentServer) run() {
 
 	if err := s.mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		s.logger.Fatal("Problem starting manager", err)
+	}
+}
+
+func runProfiler(logger logrus.FieldLogger) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	server := &http.Server{
+		Addr:              profilerAddress,
+		Handler:           mux,
+		ReadHeaderTimeout: 3 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
+		logger.WithError(errors.WithStack(err)).Error("error running profiler http server")
 	}
 }
 

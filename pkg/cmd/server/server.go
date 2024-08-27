@@ -128,6 +128,7 @@ type serverConfig struct {
 	clientQPS                                                               float32
 	clientBurst                                                             int
 	clientPageSize                                                          int
+	enableProfile                                                           bool
 	profilerAddress                                                         string
 	formatFlag                                                              *logging.FormatFlag
 	repoMaintenanceFrequency                                                time.Duration
@@ -234,6 +235,7 @@ func NewCommand(f client.Factory) *cobra.Command {
 	command.Flags().Float32Var(&config.clientQPS, "client-qps", config.clientQPS, "Maximum number of requests per second by the server to the Kubernetes API once the burst limit has been reached.")
 	command.Flags().IntVar(&config.clientBurst, "client-burst", config.clientBurst, "Maximum number of requests by the server to the Kubernetes API in a short period of time.")
 	command.Flags().IntVar(&config.clientPageSize, "client-page-size", config.clientPageSize, "Page size of requests by the server to the Kubernetes API when listing objects during a backup. Set to 0 to disable paging.")
+	command.Flags().BoolVar(&config.enableProfile, "enable-profile", config.enableProfile, "Whether to enable pprof profile.")
 	command.Flags().StringVar(&config.profilerAddress, "profiler-address", config.profilerAddress, "The address to expose the pprof profiler.")
 	command.Flags().DurationVar(&config.resourceTerminatingTimeout, "terminating-resource-timeout", config.resourceTerminatingTimeout, "How long to wait on persistent volumes and namespaces to terminate during a restore before timing out.")
 	command.Flags().DurationVar(&config.defaultBackupTTL, "default-backup-ttl", config.defaultBackupTTL, "How long to wait by default before backups can be garbage collected.")
@@ -432,7 +434,12 @@ func newServer(f client.Factory, config serverConfig, logger *logrus.Logger) (*s
 func (s *server) run() error {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
 
-	if s.config.profilerAddress != "" {
+	if s.config.enableProfile {
+		address := s.config.profilerAddress
+		if address == "" {
+			address = defaultProfilerAddress
+		}
+
 		go s.runProfiler()
 	}
 

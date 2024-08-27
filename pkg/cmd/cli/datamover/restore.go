@@ -52,6 +52,7 @@ type dataMoverRestoreConfig struct {
 	volumeMode      string
 	ddName          string
 	resourceTimeout time.Duration
+	enableProfile   bool
 }
 
 func NewRestoreCommand(f client.Factory) *cobra.Command {
@@ -88,6 +89,7 @@ func NewRestoreCommand(f client.Factory) *cobra.Command {
 	command.Flags().StringVar(&config.volumeMode, "volume-mode", config.volumeMode, "The mode of the volume to be restored")
 	command.Flags().StringVar(&config.ddName, "data-download", config.ddName, "The data download name")
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters.")
+	command.Flags().BoolVar(&config.enableProfile, "enable-profile", config.enableProfile, "Whether to enable pprof profile.")
 
 	_ = command.MarkFlagRequired("volume-path")
 	_ = command.MarkFlagRequired("volume-mode")
@@ -192,6 +194,11 @@ var funcCreateDataPathRestore = (*dataMoverRestore).createDataPathService
 
 func (s *dataMoverRestore) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
+
+	if s.config.enableProfile {
+		go runProfiler(profilerAddress, s.logger)
+	}
+
 	go func() {
 		if err := s.cache.Start(s.ctx); err != nil {
 			s.logger.WithError(err).Warn("error starting cache")

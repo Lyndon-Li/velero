@@ -16,6 +16,8 @@ package datamover
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"time"
@@ -49,11 +51,16 @@ import (
 	ctlclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+const (
+	profilerAddress = "localhost:6060"
+)
+
 type dataMoverBackupConfig struct {
 	volumePath      string
 	volumeMode      string
 	duName          string
 	resourceTimeout time.Duration
+	enableProfile   bool
 }
 
 func NewBackupCommand(f client.Factory) *cobra.Command {
@@ -90,6 +97,7 @@ func NewBackupCommand(f client.Factory) *cobra.Command {
 	command.Flags().StringVar(&config.volumeMode, "volume-mode", config.volumeMode, "The mode of the volume to be backed up")
 	command.Flags().StringVar(&config.duName, "data-upload", config.duName, "The data upload name")
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters.")
+	command.Flags().BoolVar(&config.enableProfile, "enable-profile", config.enableProfile, "Whether to enable pprof profile.")
 
 	_ = command.MarkFlagRequired("volume-path")
 	_ = command.MarkFlagRequired("volume-mode")
@@ -201,6 +209,11 @@ var funcCreateDataPathService = (*dataMoverBackup).createDataPathService
 
 func (s *dataMoverBackup) run() {
 	signals.CancelOnShutdown(s.cancelFunc, s.logger)
+
+	if s.config.enableProfile {
+		go runProfiler(profilerAddress, s.logger)
+	}
+
 	go func() {
 		if err := s.cache.Start(s.ctx); err != nil {
 			s.logger.WithError(err).Warn("error starting cache")
@@ -283,4 +296,22 @@ func (s *dataMoverBackup) createDataPathService() (dataPathService, error) {
 		ByPath:  s.config.volumePath,
 		VolMode: uploader.PersistentVolumeMode(s.config.volumeMode),
 	}, s.dataPathMgr, repoEnsurer, credGetter, duInformer, s.logger), nil
+}
+
+func runProfiler(address string, logger logrus.FieldLogger) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/debug/pprof/", pprof.Index)
+	mux.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+	mux.HandleFunc("/debug/pprof/profile", pprof.Profile)
+	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+	server := &http.Server{
+		Addr:              address,
+		Handler:           mux,
+		ReadHeaderTimeout: 3 * time.Second,
+	}
+	if err := server.ListenAndServe(); err != nil {
+		logger.WithError(errors.WithStack(err)).Error("error running profiler http server")
+	}
 }

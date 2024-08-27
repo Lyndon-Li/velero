@@ -140,7 +140,7 @@ func initDataDownloadReconcilerWithError(objects []runtime.Object, needError ...
 
 	dataPathMgr := datapath.NewManager(1)
 
-	return NewDataDownloadReconciler(fakeClient, nil, fakeKubeClient, dataPathMgr, "test-node", time.Minute*5, velerotest.NewLogger(), metrics.NewServerMetrics()), nil
+	return NewDataDownloadReconciler(fakeClient, nil, fakeKubeClient, dataPathMgr, "test-node", time.Minute*5, false, velerotest.NewLogger(), metrics.NewServerMetrics()), nil
 }
 
 func TestDataDownloadReconcile(t *testing.T) {
@@ -959,7 +959,7 @@ func (dt *ddResumeTestHelper) resumeCancellableDataPath(_ *DataUploadReconciler,
 	return dt.resumeErr
 }
 
-func (dt *ddResumeTestHelper) Expose(context.Context, corev1.ObjectReference, string, string, map[string]string, time.Duration) error {
+func (dt *ddResumeTestHelper) Expose(context.Context, corev1.ObjectReference, string, string, map[string]string, time.Duration, bool) error {
 	return nil
 }
 
