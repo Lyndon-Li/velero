@@ -24,6 +24,10 @@ PKG := github.com/vmware-tanzu/velero
 REGISTRY ?= velero
 GCR_REGISTRY ?= gcr.io/velero-gcp
 
+OS_VERSION ?= ltsc2022
+TARGET_OS ?= linux
+TARGET_ARCH ?= amd64
+
 # Image name
 IMAGE ?= $(REGISTRY)/$(BIN)
 GCR_IMAGE ?= $(GCR_REGISTRY)/$(BIN)
@@ -31,6 +35,7 @@ GCR_IMAGE ?= $(GCR_REGISTRY)/$(BIN)
 # We allow the Dockerfile to be configurable to enable the use of custom Dockerfiles
 # that pull base images from different registries.
 VELERO_DOCKERFILE ?= Dockerfile
+VELERO_DOCKERFILE_WINDOWS ?= Dockerfile-Windows
 BUILDER_IMAGE_DOCKERFILE ?= hack/build-image/Dockerfile
 
 # Calculate the realpath of the build-image Dockerfile as we `cd` into the hack/build
@@ -70,7 +75,7 @@ ifeq ($(TAG_LATEST), true)
 	IMAGE_TAGS ?= $(IMAGE):$(VERSION) $(IMAGE):latest
 	GCR_IMAGE_TAGS ?= $(GCR_IMAGE):$(VERSION) $(GCR_IMAGE):latest
 else
-	IMAGE_TAGS ?= $(IMAGE):$(VERSION)
+	IMAGE_TAGS ?= $(IMAGE)-$(OS_VERSION):$(VERSION)
 	GCR_IMAGE_TAGS ?= $(GCR_IMAGE):$(VERSION)
 endif
 
@@ -110,6 +115,11 @@ else
 	GIT_TREE_STATE ?= clean
 endif
 
+ifeq ($(ARCH), windows-amd64)
+	VELERO_DOCKERFILE = $(VELERO_DOCKERFILE_WINDOWS)
+	TARGET_OS = windows
+endif
+
 ###
 ### These variables should not need tweaking.
 ###
@@ -132,9 +142,10 @@ build-%:
 
 all-build: $(addprefix build-, $(CLI_PLATFORMS))
 
-all-containers:
-	@$(MAKE) --no-print-directory container
-	@$(MAKE) --no-print-directory container BIN=velero-restore-helper
+container-%:
+	@$(MAKE) --no-print-directory ARCH=$* container
+
+all-containers: $(addprefix container-, $(CLI_PLATFORMS))
 
 local: build-dirs
 # Add DEBUG=1 to enable debug locally
@@ -196,14 +207,22 @@ container:
 ifneq ($(BUILDX_ENABLED), true)
 	$(error $(BUILDX_ERROR))
 endif
+	@echo "docker file: $(VELERO_DOCKERFILE)"
+	@echo "platform: $(BUILDX_PLATFORMS)"
+
+	@docker buildx rm container-builder || true
+	@docker buildx create --use --name=container-builder	
+
 	@docker buildx build --pull \
 	--output=type=$(BUILDX_OUTPUT_TYPE) \
 	--platform $(BUILDX_PLATFORMS) \
 	$(addprefix -t , $(IMAGE_TAGS)) \
-	$(addprefix -t , $(GCR_IMAGE_TAGS)) \
 	--build-arg=GOPROXY=$(GOPROXY) \
 	--build-arg=PKG=$(PKG) \
 	--build-arg=BIN=$(BIN) \
+	--build-arg=OS_VERSION=$(OS_VERSION) \
+	--build-arg=TARGETOS=$(TARGET_OS) \
+    --build-arg=TARGETARCH=$(TARGET_ARCH) \
 	--build-arg=VERSION=$(VERSION) \
 	--build-arg=GIT_SHA=$(GIT_SHA) \
 	--build-arg=GIT_TREE_STATE=$(GIT_TREE_STATE) \
