@@ -54,7 +54,8 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 		daemonSetArgs = append(daemonSetArgs, fmt.Sprintf("--node-agent-configmap=%s", c.nodeAgentConfigMap))
 	}
 
-	userID := int64(0)
+	userID := "ContainerAdministrator"
+	hostProcess := false
 	mountPropagationMode := corev1.MountPropagationHostToContainer
 
 	daemonSet := &appsv1.DaemonSet{
@@ -79,7 +80,13 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 				Spec: corev1.PodSpec{
 					ServiceAccountName: c.serviceAccountName,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsUser: &userID,
+						WindowsOptions: &corev1.WindowsSecurityContextOptions{
+							RunAsUserName: &userID,
+							HostProcess:   &hostProcess,
+						},
+					},
+					NodeSelector: map[string]string{
+						"kubernetes.io/os": "windows",
 					},
 					Volumes: []corev1.Volume{
 						{

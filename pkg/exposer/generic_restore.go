@@ -338,7 +338,7 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	args = append(args, podInfo.logFormatArgs...)
 	args = append(args, podInfo.logLevelArgs...)
 
-	userID := int64(0)
+	userID := "ContainerAdministrator"
 
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -379,7 +379,9 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 			NodeName:                      selectedNode,
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsUser: &userID,
+				WindowsOptions: &corev1.WindowsSecurityContextOptions{
+					RunAsUserName: &userID,
+				},
 			},
 		},
 	}

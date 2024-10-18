@@ -313,6 +313,9 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 				Spec: corev1.PodSpec{
 					RestartPolicy:      corev1.RestartPolicyAlways,
 					ServiceAccountName: c.serviceAccountName,
+					NodeSelector: map[string]string{
+						"kubernetes.io/os": "windows",
+					},
 					Containers: []corev1.Container{
 						{
 							Name:            "velero",

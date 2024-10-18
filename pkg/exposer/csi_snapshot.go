@@ -503,7 +503,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 	args = append(args, podInfo.logFormatArgs...)
 	args = append(args, podInfo.logLevelArgs...)
 
-	userID := int64(0)
+	userID := "ContainerAdministrator"
 
 	affinityList := make([]*kube.LoadAffinity, 0)
 	if affinity != nil {
@@ -561,7 +561,9 @@ func (e *csiSnapshotExposer) createBackupPod(
 			Volumes:                       volumes,
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsUser: &userID,
+				WindowsOptions: &corev1.WindowsSecurityContextOptions{
+					RunAsUserName: &userID,
+				},
 			},
 		},
 	}
