@@ -31,6 +31,7 @@ GCR_IMAGE ?= $(GCR_REGISTRY)/$(BIN)
 # We allow the Dockerfile to be configurable to enable the use of custom Dockerfiles
 # that pull base images from different registries.
 VELERO_DOCKERFILE ?= Dockerfile
+VELERO_DOCKERFILE_WINDOWS ?= Dockerfile-Windows
 BUILDER_IMAGE_DOCKERFILE ?= hack/build-image/Dockerfile
 
 # Calculate the realpath of the build-image Dockerfile as we `cd` into the hack/build
@@ -110,6 +111,10 @@ else
 	GIT_TREE_STATE ?= clean
 endif
 
+ifeq ($(ARCH), windows-amd64)
+	VELERO_DOCKERFILE = $(VELERO_DOCKERFILE_WINDOWS)
+endif
+
 ###
 ### These variables should not need tweaking.
 ###
@@ -132,9 +137,10 @@ build-%:
 
 all-build: $(addprefix build-, $(CLI_PLATFORMS))
 
-all-containers:
-	@$(MAKE) --no-print-directory container
-	@$(MAKE) --no-print-directory container BIN=velero-restore-helper
+container-%:
+	@$(MAKE) --no-print-directory ARCH=$* container
+
+all-containers: $(addprefix container-, $(CLI_PLATFORMS))
 
 local: build-dirs
 # Add DEBUG=1 to enable debug locally
@@ -196,6 +202,12 @@ container:
 ifneq ($(BUILDX_ENABLED), true)
 	$(error $(BUILDX_ERROR))
 endif
+	@echo "docker file: $(VELERO_DOCKERFILE)"
+	@echo "platform: $(BUILDX_PLATFORMS)"
+
+	@docker buildx rm container-builder || true
+	@docker buildx create --use --name=container-builder	
+
 	@docker buildx build --pull \
 	--output=type=$(BUILDX_OUTPUT_TYPE) \
 	--platform $(BUILDX_PLATFORMS) \
