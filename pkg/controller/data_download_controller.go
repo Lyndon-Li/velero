@@ -67,7 +67,7 @@ type DataDownloadReconciler struct {
 }
 
 func NewDataDownloadReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	podResources v1.ResourceRequirements, nodeName string, preparingTimeout time.Duration, logger logrus.FieldLogger, metrics *metrics.ServerMetrics) *DataDownloadReconciler {
+	podResources v1.ResourceRequirements, nodeName string, preparingTimeout time.Duration, debugMode bool, logger logrus.FieldLogger, metrics *metrics.ServerMetrics) *DataDownloadReconciler {
 	return &DataDownloadReconciler{
 		client:           client,
 		kubeClient:       kubeClient,
@@ -75,7 +75,7 @@ func NewDataDownloadReconciler(client client.Client, mgr manager.Manager, kubeCl
 		logger:           logger.WithField("controller", "DataDownload"),
 		Clock:            &clock.RealClock{},
 		nodeName:         nodeName,
-		restoreExposer:   exposer.NewGenericRestoreExposer(kubeClient, logger),
+		restoreExposer:   exposer.NewGenericRestoreExposer(kubeClient, debugMode, logger),
 		dataPathMgr:      dataPathMgr,
 		podResources:     podResources,
 		preparingTimeout: preparingTimeout,

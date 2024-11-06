@@ -90,6 +90,7 @@ func NewDataUploadReconciler(
 	clock clocks.WithTickerAndDelayedExecution,
 	nodeName string,
 	preparingTimeout time.Duration,
+	debugMode bool,
 	log logrus.FieldLogger,
 	metrics *metrics.ServerMetrics,
 ) *DataUploadReconciler {
@@ -105,6 +106,7 @@ func NewDataUploadReconciler(
 			velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(
 				kubeClient,
 				csiSnapshotClient,
+				debugMode,
 				log,
 			),
 		},

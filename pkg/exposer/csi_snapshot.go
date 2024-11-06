@@ -83,10 +83,11 @@ type CSISnapshotExposeWaitParam struct {
 }
 
 // NewCSISnapshotExposer create a new instance of CSI snapshot exposer
-func NewCSISnapshotExposer(kubeClient kubernetes.Interface, csiSnapshotClient snapshotter.SnapshotV1Interface, log logrus.FieldLogger) SnapshotExposer {
+func NewCSISnapshotExposer(kubeClient kubernetes.Interface, csiSnapshotClient snapshotter.SnapshotV1Interface, debugMode bool, log logrus.FieldLogger) SnapshotExposer {
 	return &csiSnapshotExposer{
 		kubeClient:        kubeClient,
 		csiSnapshotClient: csiSnapshotClient,
+		debugMode:         debugMode,
 		log:               log,
 	}
 }
@@ -94,6 +95,7 @@ func NewCSISnapshotExposer(kubeClient kubernetes.Interface, csiSnapshotClient sn
 type csiSnapshotExposer struct {
 	kubeClient        kubernetes.Interface
 	csiSnapshotClient snapshotter.SnapshotV1Interface
+	debugMode         bool
 	log               logrus.FieldLogger
 }
 
@@ -314,6 +316,11 @@ func (e *csiSnapshotExposer) CleanUp(ctx context.Context, ownerObject corev1.Obj
 	backupPodName := ownerObject.Name
 	backupPVCName := ownerObject.Name
 	backupVSName := ownerObject.Name
+
+	if e.debugMode {
+		e.log.Warnf("Leaving backupPod %s, backupPVC %s, backupVS %s behind for debug mode", backupPodName, backupPVCName, backupVSName)
+		return
+	}
 
 	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), backupPodName, ownerObject.Namespace, e.log)
 	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), backupPVCName, ownerObject.Namespace, cleanUpTimeout, e.log)

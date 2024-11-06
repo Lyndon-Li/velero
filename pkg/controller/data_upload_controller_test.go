@@ -243,6 +243,7 @@ func initDataUploaderReconcilerWithError(needError ...error) (*DataUploadReconci
 		testclocks.NewFakeClock(now),
 		"test-node",
 		time.Minute*5,
+		false,
 		velerotest.NewLogger(),
 		metrics.NewServerMetrics(),
 	), nil
@@ -559,7 +560,7 @@ func TestReconcile(t *testing.T) {
 			if test.du.Spec.SnapshotType == fakeSnapshotType {
 				r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{fakeSnapshotType: &fakeSnapshotExposer{r.client, r.Clock, test.peekErr}}
 			} else if test.du.Spec.SnapshotType == velerov2alpha1api.SnapshotTypeCSI {
-				r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, velerotest.NewLogger())}
+				r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, false, velerotest.NewLogger())}
 			}
 			if !test.notCreateFSBR {
 				datapath.MicroServiceBRWatcherCreator = func(kbclient.Client, kubernetes.Interface, manager.Manager, string, string, string, string, string, string, datapath.Callbacks, logrus.FieldLogger) datapath.AsyncBR {
@@ -723,7 +724,7 @@ func TestOnDataUploadFailed(t *testing.T) {
 	duName := du.Name
 	// Add the DataUpload object to the fake client
 	assert.NoError(t, r.client.Create(ctx, du))
-	r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, velerotest.NewLogger())}
+	r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, false, velerotest.NewLogger())}
 	r.OnDataUploadFailed(ctx, namespace, duName, fmt.Errorf("Failed to handle %v", duName))
 	updatedDu := &velerov2alpha1api.DataUpload{}
 	assert.NoError(t, r.client.Get(ctx, types.NamespacedName{Name: duName, Namespace: namespace}, updatedDu))
@@ -742,7 +743,7 @@ func TestOnDataUploadCompleted(t *testing.T) {
 	duName := du.Name
 	// Add the DataUpload object to the fake client
 	assert.NoError(t, r.client.Create(ctx, du))
-	r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, velerotest.NewLogger())}
+	r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, false, velerotest.NewLogger())}
 	r.OnDataUploadCompleted(ctx, namespace, duName, datapath.Result{})
 	updatedDu := &velerov2alpha1api.DataUpload{}
 	assert.NoError(t, r.client.Get(ctx, types.NamespacedName{Name: duName, Namespace: namespace}, updatedDu))

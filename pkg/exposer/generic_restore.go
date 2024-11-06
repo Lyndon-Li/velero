@@ -57,15 +57,17 @@ type GenericRestoreExposer interface {
 }
 
 // NewGenericRestoreExposer creates a new instance of generic restore exposer
-func NewGenericRestoreExposer(kubeClient kubernetes.Interface, log logrus.FieldLogger) GenericRestoreExposer {
+func NewGenericRestoreExposer(kubeClient kubernetes.Interface, debugMode bool, log logrus.FieldLogger) GenericRestoreExposer {
 	return &genericRestoreExposer{
 		kubeClient: kubeClient,
+		debugMode:  debugMode,
 		log:        log,
 	}
 }
 
 type genericRestoreExposer struct {
 	kubeClient kubernetes.Interface
+	debugMode  bool
 	log        logrus.FieldLogger
 }
 
@@ -198,6 +200,11 @@ func (e *genericRestoreExposer) PeekExposed(ctx context.Context, ownerObject cor
 func (e *genericRestoreExposer) CleanUp(ctx context.Context, ownerObject corev1.ObjectReference) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
+
+	if e.debugMode {
+		e.log.Warnf("Leaving restorePod %s, restorePVC %s behind for debug mode", restorePodName, restorePVCName)
+		return
+	}
 
 	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePodName, ownerObject.Namespace, e.log)
 	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVCName, ownerObject.Namespace, 0, e.log)
