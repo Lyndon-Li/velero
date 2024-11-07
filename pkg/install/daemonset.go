@@ -88,6 +88,13 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 					NodeSelector: map[string]string{
 						"kubernetes.io/os": "windows",
 					},
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "os",
+							Operator: "Equal",
+							Value:    "windows",
+						},
+					},
 					Volumes: []corev1.Volume{
 						{
 							Name: "host-pods",

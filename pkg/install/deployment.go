@@ -316,6 +316,13 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1.Deployment 
 					NodeSelector: map[string]string{
 						"kubernetes.io/os": "windows",
 					},
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "os",
+							Operator: "Equal",
+							Value:    "windows",
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:            "velero",

@@ -38,6 +38,8 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 	veleroutil "github.com/vmware-tanzu/velero/pkg/util/velero"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // Manager manages backup repositories.
@@ -440,6 +442,14 @@ func (m *manager) buildMaintenanceJob(
 					RestartPolicy:      v1.RestartPolicyNever,
 					Volumes:            volumes,
 					ServiceAccountName: serviceAccount,
+					Tolerations: []corev1.Toleration{
+						{
+							Key:      "os",
+							Operator: "Equal",
+							Effect:   "NoSchedule",
+							Value:    "windows",
+						},
+					},
 				},
 			},
 		},

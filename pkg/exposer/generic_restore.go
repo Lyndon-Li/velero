@@ -390,6 +390,14 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 					RunAsUserName: &userID,
 				},
 			},
+			Tolerations: []corev1.Toleration{
+				{
+					Key:      "os",
+					Operator: "Equal",
+					Effect:   "NoSchedule",
+					Value:    "windows",
+				},
+			},
 		},
 	}
 

@@ -572,6 +572,14 @@ func (e *csiSnapshotExposer) createBackupPod(
 					RunAsUserName: &userID,
 				},
 			},
+			Tolerations: []corev1.Toleration{
+				{
+					Key:      "os",
+					Operator: "Equal",
+					Effect:   "NoSchedule",
+					Value:    "windows",
+				},
+			},
 		},
 	}
 
