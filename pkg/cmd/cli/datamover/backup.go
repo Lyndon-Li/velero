@@ -193,6 +193,8 @@ func newdataMoverBackup(logger logrus.FieldLogger, factory client.Factory, confi
 
 	s.dataPathMgr = datapath.NewManager(1)
 
+	logger.Info("Created data mover backup")
+
 	return s, nil
 }
 
