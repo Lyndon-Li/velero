@@ -78,6 +78,7 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: podLabels(c.labels, map[string]string{
 						"name": dsName,
+						"role": "node-agent",
 					}),
 					Annotations: c.annotations,
 				},
