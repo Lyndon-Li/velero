@@ -34,7 +34,8 @@ import (
 
 const (
 	// daemonSet is the name of the Velero node agent daemonset.
-	daemonSet = "node-agent"
+	daemonSet        = "node-agent"
+	daemonsetWindows = "node-agent-windows"
 )
 
 var (
@@ -90,7 +91,29 @@ type Configs struct {
 
 // IsRunning checks if the node agent daemonset is running properly. If not, return the error found
 func IsRunning(ctx context.Context, kubeClient kubernetes.Interface, namespace string) error {
+	if err := isRunningOnLinux(ctx, kubeClient, namespace); err != nil {
+		return err
+	}
+
+	if err := isRunningOnWindows(ctx, kubeClient, namespace); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func isRunningOnLinux(ctx context.Context, kubeClient kubernetes.Interface, namespace string) error {
 	if _, err := kubeClient.AppsV1().DaemonSets(namespace).Get(ctx, daemonSet, metav1.GetOptions{}); apierrors.IsNotFound(err) {
+		return ErrDaemonSetNotFound
+	} else if err != nil {
+		return err
+	} else {
+		return nil
+	}
+}
+
+func isRunningOnWindows(ctx context.Context, kubeClient kubernetes.Interface, namespace string) error {
+	if _, err := kubeClient.AppsV1().DaemonSets(namespace).Get(ctx, daemonsetWindows, metav1.GetOptions{}); apierrors.IsNotFound(err) {
 		return ErrDaemonSetNotFound
 	} else if err != nil {
 		return err
@@ -106,7 +129,7 @@ func IsRunningInNode(ctx context.Context, namespace string, nodeName string, crC
 	}
 
 	pods := new(v1.PodList)
-	parsedSelector, err := labels.Parse(fmt.Sprintf("name=%s", daemonSet))
+	parsedSelector, err := labels.Parse(fmt.Sprintf("role=%s", daemonSet))
 	if err != nil {
 		return errors.Wrap(err, "fail to parse selector")
 	}
