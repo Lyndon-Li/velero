@@ -217,9 +217,15 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 		daemonSet.Spec.Template.Spec.NodeSelector = map[string]string{
 			"kubernetes.io/os": "windows",
 		}
+		daemonSet.Spec.Template.Spec.OS = &corev1.PodOS{
+			Name: "windows",
+		}
 	} else {
 		daemonSet.Spec.Template.Spec.NodeSelector = map[string]string{
 			"kubernetes.io/os": "linux",
+		}
+		daemonSet.Spec.Template.Spec.OS = &corev1.PodOS{
+			Name: "linux",
 		}
 	}
 

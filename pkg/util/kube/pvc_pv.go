@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	jsonpatch "github.com/evanphx/json-patch/v5"
@@ -411,4 +412,43 @@ func GetPVCForPodVolume(vol *corev1api.Volume, pod *corev1api.Pod, crClient crcl
 	}
 
 	return pvc, nil
+}
+
+func GetPVCAttachingNodeOS(pvc *corev1api.PersistentVolumeClaim, nodeClient corev1client.CoreV1Interface,
+	storageClient storagev1.StorageV1Interface, log logrus.FieldLogger) (string, error) {
+	var nodeOS string
+	var scFsType string
+
+	if nd, found := pvc.Annotations[KubeAnnSelectedNode]; found {
+		if os, err := GetNodeOS(context.Background(), nd, nodeClient); err != nil {
+			return "", errors.Wrapf(err, "error to get os from node %s for PVC %s/%s", nd, pvc.Namespace, pvc.Name)
+		} else {
+			nodeOS = os
+		}
+	}
+
+	if pvc.Spec.StorageClassName != nil {
+		sc, err := storageClient.StorageClasses().Get(context.Background(), *pvc.Spec.StorageClassName, metav1.GetOptions{})
+		if err != nil {
+			return "", errors.Wrapf(err, "error to get storage class %s", *pvc.Spec.StorageClassName)
+		}
+
+		if fs, found := sc.Parameters["csi.storage.k8s.io/fstype"]; found {
+			scFsType = strings.ToLower(fs)
+		}
+	}
+
+	if nodeOS != "" {
+		log.Infof("Deduced node os %s from selected node for PVC %s/%s (fsType %s)", nodeOS, pvc.Namespace, pvc.Name, scFsType)
+		return nodeOS, nil
+	}
+
+	if scFsType == "ntfs" {
+		nodeOS = NodeOSWindows
+		log.Infof("Deduced node os %s from fsType for PVC %s/%s", nodeOS, pvc.Namespace, pvc.Name)
+		return nodeOS, nil
+	}
+
+	log.Warnf("Cannot deduce node os for PVC %s/%s, default to linux", pvc.Namespace, pvc.Name)
+	return NodeOSLinux, nil
 }

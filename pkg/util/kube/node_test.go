@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	kubeClientFake "k8s.io/client-go/kubernetes/fake"
 	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -79,6 +80,60 @@ func TestIsLinuxNode(t *testing.T) {
 				assert.EqualError(t, err, test.err)
 			} else {
 				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestGetNodeOSType(t *testing.T) {
+	nodeNoOSLabel := builder.ForNode("fake-node").Result()
+	nodeWindows := builder.ForNode("fake-node").Labels(map[string]string{"kubernetes.io/os": "windows"}).Result()
+	nodeLinux := builder.ForNode("fake-node").Labels(map[string]string{"kubernetes.io/os": "linux"}).Result()
+
+	scheme := runtime.NewScheme()
+	corev1.AddToScheme(scheme)
+
+	tests := []struct {
+		name           string
+		kubeClientObj  []runtime.Object
+		err            string
+		expectedOSType string
+	}{
+		{
+			name: "error getting node",
+			err:  "error getting node fake-node: nodes \"fake-node\" not found",
+		},
+		{
+			name: "no os label",
+			kubeClientObj: []runtime.Object{
+				nodeNoOSLabel,
+			},
+		},
+		{
+			name: "windows node",
+			kubeClientObj: []runtime.Object{
+				nodeWindows,
+			},
+			expectedOSType: "windows",
+		},
+		{
+			name: "linux node",
+			kubeClientObj: []runtime.Object{
+				nodeLinux,
+			},
+			expectedOSType: "linux",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeKubeClient := kubeClientFake.NewSimpleClientset(test.kubeClientObj...)
+
+			osType, err := GetNodeOS(context.TODO(), "fake-node", fakeKubeClient.CoreV1())
+			if err != nil {
+				assert.EqualError(t, err, test.err)
+			} else {
+				assert.Equal(t, test.expectedOSType, osType)
 			}
 		})
 	}

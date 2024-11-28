@@ -801,6 +801,11 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 			return nil, errors.Wrapf(err, "failed to get PVC %s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC)
 		}
 
+		nodeOS, err := kube.GetPVCAttachingNodeOS(pvc, r.kubeClient.CoreV1(), r.kubeClient.StorageV1(), r.logger)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get attaching node OS for PVC %s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC)
+		}
+
 		accessMode := exposer.AccessModeFileSystem
 		if pvc.Spec.VolumeMode != nil && *pvc.Spec.VolumeMode == corev1.PersistentVolumeBlock {
 			accessMode = exposer.AccessModeBlock
@@ -818,6 +823,7 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 			Affinity:         r.loadAffinity,
 			BackupPVCConfig:  r.backupPVCConfig,
 			Resources:        r.podResources,
+			NodeOS:           nodeOS,
 		}, nil
 	}
 	return nil, nil

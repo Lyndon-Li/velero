@@ -20,8 +20,16 @@ import (
 
 	"github.com/pkg/errors"
 	corev1api "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+)
+
+const (
+	NodeOSLinux   = "linux"
+	NodeOSWindows = "windows"
+	NodeOSLabel   = "kubernetes.io/os"
 )
 
 func IsLinuxNode(ctx context.Context, nodeName string, client client.Client) error {
@@ -30,11 +38,24 @@ func IsLinuxNode(ctx context.Context, nodeName string, client client.Client) err
 		return errors.Wrapf(err, "error getting node %s", nodeName)
 	}
 
-	if os, found := node.Labels["kubernetes.io/os"]; !found {
+	if os, found := node.Labels[NodeOSLabel]; !found {
 		return errors.Errorf("no os type label for node %s", nodeName)
-	} else if os != "linux" {
+	} else if os != NodeOSLinux {
 		return errors.Errorf("os type %s for node %s is not linux", os, nodeName)
 	} else {
 		return nil
+	}
+}
+
+func GetNodeOS(ctx context.Context, nodeName string, nodeClient corev1client.CoreV1Interface) (string, error) {
+	node, err := nodeClient.Nodes().Get(context.Background(), nodeName, metav1.GetOptions{})
+	if err != nil {
+		return "", errors.Wrapf(err, "error getting node %s", nodeName)
+	}
+
+	if os, found := node.Labels[NodeOSLabel]; found {
+		return os, nil
+	} else {
+		return "", nil
 	}
 }
