@@ -125,7 +125,9 @@ func (p *Progress) HashingFile(fname string) {}
 func (p *Progress) ExcludedFile(fname string, numBytes int64) {}
 
 // ExcludedDir statistic the dir been excluded currently
-func (p *Progress) ExcludedDir(dirname string) {}
+func (p *Progress) ExcludedDir(dirname string) {
+	p.Log.Infof("Excluded dir %s", dirname)
+}
 
 // FinishedHashingFile which will called when specific file finished hash
 func (p *Progress) FinishedHashingFile(fname string, numBytes int64) {
