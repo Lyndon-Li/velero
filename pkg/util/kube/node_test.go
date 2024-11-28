@@ -20,12 +20,14 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	kubeClientFake "k8s.io/client-go/kubernetes/fake"
+	clientTesting "k8s.io/client-go/testing"
 	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -134,6 +136,82 @@ func TestGetNodeOSType(t *testing.T) {
 				assert.EqualError(t, err, test.err)
 			} else {
 				assert.Equal(t, test.expectedOSType, osType)
+			}
+		})
+	}
+}
+
+func TestHasNodeWithOS(t *testing.T) {
+	nodeNoOSLabel := builder.ForNode("fake-node-1").Result()
+	nodeWindows := builder.ForNode("fake-node-2").Labels(map[string]string{"kubernetes.io/os": "windows"}).Result()
+	nodeLinux := builder.ForNode("fake-node-3").Labels(map[string]string{"kubernetes.io/os": "linux"}).Result()
+
+	scheme := runtime.NewScheme()
+	corev1.AddToScheme(scheme)
+
+	tests := []struct {
+		name          string
+		kubeClientObj []runtime.Object
+		kubeReactors  []reactor
+		os            string
+		err           string
+	}{
+		{
+			name: "os is empty",
+			err:  "invalid node OS",
+		},
+		{
+			name: "error to list node",
+			kubeReactors: []reactor{
+				{
+					verb:     "list",
+					resource: "nodes",
+					reactorFunc: func(action clientTesting.Action) (handled bool, ret runtime.Object, err error) {
+						return true, nil, errors.New("fake-list-error")
+					},
+				},
+			},
+			os:  "linux",
+			err: "error listing nodes with OS linux: fake-list-error",
+		},
+		{
+			name: "no expected node - no node",
+			os:   "linux",
+			err:  "node with OS linux doesn't exist",
+		},
+		{
+			name: "no expected node - no node with label",
+			kubeClientObj: []runtime.Object{
+				nodeNoOSLabel,
+				nodeWindows,
+			},
+			os:  "linux",
+			err: "node with OS linux doesn't exist",
+		},
+		{
+			name: "succeed",
+			kubeClientObj: []runtime.Object{
+				nodeNoOSLabel,
+				nodeWindows,
+				nodeLinux,
+			},
+			os: "windows",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeKubeClient := kubeClientFake.NewSimpleClientset(test.kubeClientObj...)
+
+			for _, reactor := range test.kubeReactors {
+				fakeKubeClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
+			}
+
+			err := HasNodeWithOS(context.TODO(), test.os, fakeKubeClient.CoreV1())
+			if test.err != "" {
+				assert.EqualError(t, err, test.err)
+			} else {
+				assert.NoError(t, err)
 			}
 		})
 	}

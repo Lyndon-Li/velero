@@ -17,6 +17,7 @@ package kube
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/pkg/errors"
 	corev1api "k8s.io/api/core/v1"
@@ -58,4 +59,21 @@ func GetNodeOS(ctx context.Context, nodeName string, nodeClient corev1client.Cor
 	} else {
 		return "", nil
 	}
+}
+
+func HasNodeWithOS(ctx context.Context, os string, nodeClient corev1client.CoreV1Interface) error {
+	if os == "" {
+		return errors.New("invalid node OS")
+	}
+
+	nodes, err := nodeClient.Nodes().List(ctx, metav1.ListOptions{LabelSelector: fmt.Sprintf("%s=%s", NodeOSLabel, os)})
+	if err != nil {
+		return errors.Wrapf(err, "error listing nodes with OS %s", os)
+	}
+
+	if len(nodes.Items) == 0 {
+		return errors.Errorf("node with OS %s doesn't exist", os)
+	}
+
+	return nil
 }
