@@ -101,20 +101,18 @@ comma=,
 RESTIC_VERSION ?= 0.15.0
 
 CLI_PLATFORMS ?= linux-amd64 linux-arm linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 linux-ppc64le
-BUILDX_PUSH ?= false
+BUILDX_OUTPUT_TYPE ?= docker
 BUILDX_BUILD_OS ?= linux
 BUILDX_BUILD_ARCH ?= amd64
 BUILDX_TAG_GCR ?= false
 BUILDX_WINDOWS_VERSION ?= ltsc2022
 
-ifneq ($(BUILDX_PUSH), true)
+ifeq ($(BUILDX_OUTPUT_TYPE), docker)
 	ALL_OS = linux
 	ALL_ARCH.linux = $(word 2, $(subst -, ,$(shell go env GOOS)-$(shell go env GOARCH)))
-	BUILDX_OUTPUT_TYPE = docker
 else
 	ALL_OS = $(subst $(comma), ,$(BUILDX_BUILD_OS))
 	ALL_ARCH.linux = $(subst $(comma), ,$(BUILDX_BUILD_ARCH))
-	BUILDX_OUTPUT_TYPE = registry
 endif
 
 ALL_ARCH.windows = $(if $(filter windows,$(ALL_OS)),amd64,)
@@ -225,11 +223,13 @@ endif
 	-docker buildx rm velero-builder || true
 	@docker buildx create --use --name=velero-builder
 
+	@mkdir -p _output
+
 	@for osarch in $(ALL_OS_ARCH); do \
 		$(MAKE) container-$${osarch}; \
 	done
 
-ifeq ($(BUILDX_PUSH), true)
+ifeq ($(BUILDX_OUTPUT_TYPE), registry)
 	@for tag in $(ALL_IMAGE_TAGS); do \
 		IMAGE_TAG=$${tag} $(MAKE) push-manifest; \
 	done
@@ -242,7 +242,7 @@ container-linux:
 	@echo "building container: $(IMAGE):$(VERSION)-linux-$(BUILDX_ARCH)"
 
 	@docker buildx build --pull \
-	--output=type=$(BUILDX_OUTPUT_TYPE) \
+	--output="type=$(BUILDX_OUTPUT_TYPE)$(if $(findstring tar, $(BUILDX_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-linux-$(BUILDX_ARCH).tar,)" \
 	--platform="linux/$(BUILDX_ARCH)" \
 	$(addprefix -t , $(addsuffix "-linux-$(BUILDX_ARCH)",$(ALL_IMAGE_TAGS))) \
 	--build-arg=GOPROXY=$(GOPROXY) \
@@ -266,7 +266,7 @@ container-windows:
 	@echo "building container: $(IMAGE):$(VERSION)-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH)"
 
 	@docker buildx build --pull \
-	--output=type=$(BUILDX_OUTPUT_TYPE) \
+	--output="type=$(BUILDX_OUTPUT_TYPE)$(if $(findstring tar, $(BUILDX_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-windows-$(BUILDX_ARCH).tar,)" \
 	--platform="windows/$(BUILDX_ARCH)" \
 	$(addprefix -t , $(addsuffix "-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH)",$(ALL_IMAGE_TAGS))) \
 	--build-arg=GOPROXY=$(GOPROXY) \
