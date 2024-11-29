@@ -266,7 +266,7 @@ container-windows:
 	@echo "building container: $(IMAGE):$(VERSION)-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH)"
 
 	@docker buildx build --pull \
-	--output="type=$(BUILDX_OUTPUT_TYPE)$(if $(findstring tar, $(BUILDX_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-windows-$(BUILDX_ARCH).tar,)" \
+	--output="type=$(BUILDX_OUTPUT_TYPE)$(if $(findstring tar, $(BUILDX_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH).tar,)" \
 	--platform="windows/$(BUILDX_ARCH)" \
 	$(addprefix -t , $(addsuffix "-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH)",$(ALL_IMAGE_TAGS))) \
 	--build-arg=GOPROXY=$(GOPROXY) \

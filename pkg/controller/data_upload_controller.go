@@ -284,6 +284,17 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 
+		var nodeOS velerov2alpha1api.NodeOS
+		if res.ByPod.NodeOS == nil {
+			nodeOS = velerov2alpha1api.NodeOSAuto
+		} else if *res.ByPod.NodeOS == "linux" {
+			nodeOS = velerov2alpha1api.NodeOSLinux
+		} else if *res.ByPod.NodeOS == "windows" {
+			nodeOS = velerov2alpha1api.NodeOSWindows
+		} else {
+			return r.errorOut(ctx, du, errors.Errorf("invalid node OS %s", *res.ByPod.NodeOS), "invalid expose result", log)
+		}
+
 		log.Info("Exposed snapshot is ready and creating data path routine")
 
 		// Need to first create file system BR and get data path instance then update data upload status
@@ -316,6 +327,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		original := du.DeepCopy()
 		du.Status.Phase = velerov2alpha1api.DataUploadPhaseInProgress
 		du.Status.StartTimestamp = &metav1.Time{Time: r.Clock.Now()}
+		du.Status.NodeOS = nodeOS
 		if err := r.client.Patch(ctx, du, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Warnf("Failed to update dataupload %s to InProgress, will data path close and retry", du.Name)
 

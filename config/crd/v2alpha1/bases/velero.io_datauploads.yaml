@@ -165,6 +165,9 @@ spec:
               node:
                 description: Node is name of the node where the DataUpload is processed.
                 type: string
+              nodeOS:
+                description: Node is OS of the node where the DataUpload is processed.
+                type: string
               path:
                 description: Path is the full path of the snapshot volume being backed
                   up.

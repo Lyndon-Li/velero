@@ -96,6 +96,14 @@ const (
 	DataUploadPhaseFailed     DataUploadPhase = "Failed"
 )
 
+type NodeOS string
+
+const (
+	NodeOSLinux   NodeOS = "linux"
+	NodeOSWindows NodeOS = "windows"
+	NodeOSAuto    NodeOS = "auto"
+)
+
 // DataUploadStatus is the current status of a DataUpload.
 type DataUploadStatus struct {
 	// Phase is the current state of the DataUpload.
@@ -144,6 +152,10 @@ type DataUploadStatus struct {
 	// Node is name of the node where the DataUpload is processed.
 	// +optional
 	Node string `json:"node,omitempty"`
+
+	// Node is OS of the node where the DataUpload is processed.
+	// +optional
+	NodeOS NodeOS `json:"nodeOS,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,
@@ -212,4 +224,8 @@ type DataUploadResult struct {
 	// +optional
 	// +nullable
 	DataMoverResult *map[string]string `json:"dataMoverResult,omitempty"`
+
+	// Node is OS of the node where the DataUpload is processed.
+	// +optional
+	NodeOS NodeOS `json:"nodeOS,omitempty"`
 }

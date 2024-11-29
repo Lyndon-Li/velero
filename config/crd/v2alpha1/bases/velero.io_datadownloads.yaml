@@ -92,6 +92,9 @@ spec:
                   DataMover specifies the data mover to be used by the backup.
                   If DataMover is "" or "velero", the built-in data mover will be used.
                 type: string
+              nodeOS:
+                description: Node is OS of the node where the DataUpload is processed.
+                type: string
               operationTimeout:
                 description: |-
                   OperationTimeout specifies the time used to wait internal operations,

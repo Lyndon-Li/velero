@@ -52,7 +52,6 @@ RUN mkdir -p /output/usr/bin && \
 
 # Velero image packing section
 FROM mcr.microsoft.com/windows/nanoserver:${OS_VERSION}
-ENTRYPOINT [ "velero.exe" ]
 COPY --from=velero-builder /output /
 
 USER ContainerUser
