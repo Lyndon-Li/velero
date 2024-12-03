@@ -1,3 +1,4 @@
+
 # Copyright 2016 The Kubernetes Authors.
 #
 # Modifications Copyright 2020 the Velero contributors.
@@ -101,28 +102,28 @@ comma=,
 RESTIC_VERSION ?= 0.15.0
 
 CLI_PLATFORMS ?= linux-amd64 linux-arm linux-arm64 darwin-amd64 darwin-arm64 windows-amd64 linux-ppc64le
-BUILDX_OUTPUT_TYPE ?= docker
-BUILDX_BUILD_OS ?= linux
-BUILDX_BUILD_ARCH ?= amd64
-BUILDX_TAG_GCR ?= false
-BUILDX_WINDOWS_VERSION ?= ltsc2022
+BUILD_OUTPUT_TYPE ?= docker
+BUILD_OS ?= linux
+BUILD_ARCH ?= amd64
+BUILD_TAG_GCR ?= false
+BUILD_WINDOWS_VERSION ?= ltsc2022
 
-ifeq ($(BUILDX_OUTPUT_TYPE), docker)
+ifeq ($(BUILD_OUTPUT_TYPE), docker)
 	ALL_OS = linux
 	ALL_ARCH.linux = $(word 2, $(subst -, ,$(shell go env GOOS)-$(shell go env GOARCH)))
 else
-	ALL_OS = $(subst $(comma), ,$(BUILDX_BUILD_OS))
-	ALL_ARCH.linux = $(subst $(comma), ,$(BUILDX_BUILD_ARCH))
+	ALL_OS = $(subst $(comma), ,$(BUILD_OS))
+	ALL_ARCH.linux = $(subst $(comma), ,$(BUILD_ARCH))
 endif
 
 ALL_ARCH.windows = $(if $(filter windows,$(ALL_OS)),amd64,)
-ALL_OSVERSIONS.windows = $(if $(filter windows,$(ALL_OS)),$(BUILDX_WINDOWS_VERSION),)
+ALL_OSVERSIONS.windows = $(if $(filter windows,$(ALL_OS)),$(BUILD_WINDOWS_VERSION),)
 ALL_OS_ARCH.linux =  $(foreach os, $(filter linux,$(ALL_OS)), $(foreach arch, ${ALL_ARCH.linux}, ${os}-$(arch)))
 ALL_OS_ARCH.windows = $(foreach os, $(filter windows,$(ALL_OS)), $(foreach arch, $(ALL_ARCH.windows), $(foreach osversion, ${ALL_OSVERSIONS.windows}, ${os}-${osversion}-${arch})))
 ALL_OS_ARCH = $(ALL_OS_ARCH.linux)$(ALL_OS_ARCH.windows)
 
 ALL_IMAGE_TAGS = $(IMAGE_TAGS)
-ifeq ($(BUILDX_TAG_GCR), true)
+ifeq ($(BUILD_TAG_GCR), true)
 	ALL_IMAGE_TAGS += $(GCR_IMAGE_TAGS)
 endif
 
@@ -229,7 +230,7 @@ endif
 		$(MAKE) container-$${osarch}; \
 	done
 
-ifeq ($(BUILDX_OUTPUT_TYPE), registry)
+ifeq ($(BUILD_OUTPUT_TYPE), registry)
 	@for tag in $(ALL_IMAGE_TAGS); do \
 		IMAGE_TAG=$${tag} $(MAKE) push-manifest; \
 	done
@@ -242,7 +243,7 @@ container-linux:
 	@echo "building container: $(IMAGE):$(VERSION)-linux-$(BUILDX_ARCH)"
 
 	@docker buildx build --pull \
-	--output="type=$(BUILDX_OUTPUT_TYPE)$(if $(findstring tar, $(BUILDX_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-linux-$(BUILDX_ARCH).tar,)" \
+	--output="type=$(BUILD_OUTPUT_TYPE)$(if $(findstring tar, $(BUILD_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-linux-$(BUILDX_ARCH).tar,)" \
 	--platform="linux/$(BUILDX_ARCH)" \
 	$(addprefix -t , $(addsuffix "-linux-$(BUILDX_ARCH)",$(ALL_IMAGE_TAGS))) \
 	--build-arg=GOPROXY=$(GOPROXY) \
@@ -266,7 +267,7 @@ container-windows:
 	@echo "building container: $(IMAGE):$(VERSION)-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH)"
 
 	@docker buildx build --pull \
-	--output="type=$(BUILDX_OUTPUT_TYPE)$(if $(findstring tar, $(BUILDX_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH).tar,)" \
+	--output="type=$(BUILD_OUTPUT_TYPE)$(if $(findstring tar, $(BUILD_OUTPUT_TYPE)),$(comma)dest=_output/$(BIN)-$(VERSION)-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH).tar,)" \
 	--platform="windows/$(BUILDX_ARCH)" \
 	$(addprefix -t , $(addsuffix "-windows-$(BUILDX_OSVERSION)-$(BUILDX_ARCH)",$(ALL_IMAGE_TAGS))) \
 	--build-arg=GOPROXY=$(GOPROXY) \
@@ -296,10 +297,10 @@ push-manifest:
 		done; \
 	done
 
-	@echo "pushing mainifest $(IMAGE_TAG)"
+	@echo "pushing manifest $(IMAGE_TAG)"
 	@docker manifest push --purge $(IMAGE_TAG)
 
-	@echo "pushed mainifest $(IMAGE_TAG):"
+	@echo "pushed manifest $(IMAGE_TAG):"
 	@docker manifest inspect $(IMAGE_TAG)
 
 SKIP_TESTS ?=
@@ -471,7 +472,7 @@ go-generate:
 # make new-changelog CHANGELOG_BODY="Changes you have made"
 new-changelog: GH_LOGIN ?= $(shell gh pr view --json author --jq .author.login 2> /dev/null)
 new-changelog: GH_PR_NUMBER ?= $(shell gh pr view --json number --jq .number 2> /dev/null)
-new-changelog: CHANGELOG_BODY ?= "$(shell gh pr view --json title --jq .title)"
+new-changelog: CHANGELOG_BODY ?= '$(shell gh pr view --json title --jq .title)'
 new-changelog:
 	@if [ "$(GH_LOGIN)" = "" ]; then \
 		echo "branch does not have PR or cli not logged in, try 'gh auth login' or 'gh pr create'"; \
@@ -479,4 +480,4 @@ new-changelog:
 	fi
 	@mkdir -p ./changelogs/unreleased/ && \
 	echo $(CHANGELOG_BODY) > ./changelogs/unreleased/$(GH_PR_NUMBER)-$(GH_LOGIN) && \
-	echo "\"$(CHANGELOG_BODY)\" added to ./changelogs/unreleased/$(GH_PR_NUMBER)-$(GH_LOGIN)"
+	echo \"$(CHANGELOG_BODY)\" added to "./changelogs/unreleased/$(GH_PR_NUMBER)-$(GH_LOGIN)"

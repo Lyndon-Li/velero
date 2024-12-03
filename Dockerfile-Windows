@@ -38,8 +38,6 @@ ENV CGO_ENABLED=0 \
 
 WORKDIR /go/src/github.com/vmware-tanzu/velero
 
-RUN apt-get update && apt-get install -y jq
-
 COPY . /go/src/github.com/vmware-tanzu/velero
 
 RUN mkdir -p /output/usr/bin && \
