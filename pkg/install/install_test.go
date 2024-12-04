@@ -143,7 +143,7 @@ func TestDaemonSetIsReady(t *testing.T) {
 	factory := &test.FakeDynamicFactory{}
 	factory.On("ClientForGroupVersionResource", mock.Anything, mock.Anything, mock.Anything).Return(dc, nil)
 
-	ready, err := DaemonSetIsReady(factory, "velero")
+	ready, err := daemonSetIsReady(factory, "velero", "node-agent")
 	require.NoError(t, err)
 	assert.True(t, ready)
 }
