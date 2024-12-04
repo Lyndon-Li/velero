@@ -457,3 +457,12 @@ func GetPVCAttachingNodeOS(pvc *corev1api.PersistentVolumeClaim, blockAccess boo
 	log.Warnf("Cannot deduce node os for PVC %s/%s, default to linux", pvc.Namespace, pvc.Name)
 	return NodeOSLinux, nil
 }
+
+func DiagnosePVC(pvc *corev1api.PersistentVolumeClaim) string {
+	return fmt.Sprintf("PVC %s/%s, phase %s, binding to %s\n", pvc.Namespace, pvc.Name, pvc.Status.Phase, pvc.Spec.VolumeName)
+}
+
+func DiagnosePV(pv *corev1api.PersistentVolume) string {
+	diag := fmt.Sprintf("PV %s, phase %s, reason %s, message %s\n", pv.Name, pv.Status.Phase, pv.Status.Reason, pv.Status.Message)
+	return diag
+}
