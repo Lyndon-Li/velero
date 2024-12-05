@@ -1007,22 +1007,22 @@ func TestAttemptDataDownloadResume(t *testing.T) {
 		},
 		{
 			name:                   "accepted DataDownload in the current node",
-			dd:                     dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Labels(map[string]string{acceptNodeLabelKey: "node-1"}).Result(),
+			dd:                     dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Annotations(map[string]string{acceptNodeAnnoKey: "node-1"}).Result(),
 			cancelledDataDownloads: []string{dataDownloadName},
 			acceptedDataDownloads:  []string{dataDownloadName},
 		},
 		{
 			name: "accepted DataDownload with dd label but is canceled",
-			dd: dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Cancel(true).Labels(map[string]string{
-				acceptNodeLabelKey: "node-1",
+			dd: dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Cancel(true).Annotations(map[string]string{
+				acceptNodeAnnoKey: "node-1",
 			}).Result(),
 			acceptedDataDownloads:  []string{dataDownloadName},
 			cancelledDataDownloads: []string{dataDownloadName},
 		},
 		{
 			name: "accepted DataDownload with dd label but cancel fail",
-			dd: dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Labels(map[string]string{
-				acceptNodeLabelKey: "node-1",
+			dd: dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Annotations(map[string]string{
+				acceptNodeAnnoKey: "node-1",
 			}).Result(),
 			needErrs:              []bool{false, false, true, false, false, false},
 			acceptedDataDownloads: []string{dataDownloadName},

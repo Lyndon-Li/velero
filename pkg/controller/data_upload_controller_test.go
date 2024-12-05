@@ -1079,19 +1079,19 @@ func TestAttemptDataUploadResume(t *testing.T) {
 		},
 		{
 			name:                 "accepted DataUpload in the current node",
-			du:                   dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Labels(map[string]string{acceptNodeLabelKey: "node-1"}).Result(),
+			du:                   dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Annotations(map[string]string{acceptNodeAnnoKey: "node-1"}).Result(),
 			cancelledDataUploads: []string{dataUploadName},
 			acceptedDataUploads:  []string{dataUploadName},
 		},
 		{
 			name:                 "accepted DataUpload in the current node but canceled",
-			du:                   dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Labels(map[string]string{acceptNodeLabelKey: "node-1"}).Cancel(true).Result(),
+			du:                   dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Annotations(map[string]string{acceptNodeAnnoKey: "node-1"}).Cancel(true).Result(),
 			cancelledDataUploads: []string{dataUploadName},
 			acceptedDataUploads:  []string{dataUploadName},
 		},
 		{
 			name:                "accepted DataUpload in the current node but update error",
-			du:                  dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Labels(map[string]string{acceptNodeLabelKey: "node-1"}).Result(),
+			du:                  dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).Annotations(map[string]string{acceptNodeAnnoKey: "node-1"}).Result(),
 			needErrs:            []bool{false, false, true, false, false, false},
 			acceptedDataUploads: []string{dataUploadName},
 		},
