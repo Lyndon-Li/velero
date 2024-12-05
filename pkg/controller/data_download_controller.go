@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -223,7 +224,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		} else if peekErr := r.restoreExposer.PeekExposed(ctx, getDataDownloadOwnerObject(dd)); peekErr != nil {
 			r.tryCancelAcceptedDataDownload(ctx, dd, fmt.Sprintf("found a dataupload %s/%s with expose error: %s. mark it as cancel", dd.Namespace, dd.Name, peekErr))
 			log.Errorf("Cancel dd %s/%s because of expose error %s", dd.Namespace, dd.Name, peekErr)
-		} else if at, found := dd.Labels[acceptTimeAnnoKey]; found {
+		} else if at, found := dd.Annotations[acceptTimeAnnoKey]; found {
 			if t, err := time.Parse(time.RFC3339, at); err == nil {
 				if time.Since(t) >= r.preparingTimeout {
 					r.onPrepareTimeout(ctx, dd)
@@ -680,7 +681,10 @@ func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *veler
 		return
 	}
 
-	log.Warn(r.restoreExposer.DiagnoseExpose(ctx, getDataDownloadOwnerObject(dd)))
+	diags := strings.Split(r.restoreExposer.DiagnoseExpose(ctx, getDataDownloadOwnerObject(dd)), "\n")
+	for _, diag := range diags {
+		log.Warnf("[Diagnose DD expose %s/%s]%s", dd.Namespace, dd.Name, diag)
+	}
 
 	r.restoreExposer.CleanUp(ctx, getDataDownloadOwnerObject(dd))
 
