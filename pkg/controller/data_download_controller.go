@@ -178,12 +178,15 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 
-		hostingPodLabels := map[string]string{velerov1api.DataDownloadLabel: dd.Name}
+		exposeParam, err := r.setupExposeParam(dd)
+		if err != nil {
+			return r.errorOut(ctx, dd, err, "failed to set exposer parameters", log)
+		}
 
 		// Expose() will trigger to create one pod whose volume is restored by a given volume snapshot,
 		// but the pod maybe is not in the same node of the current controller, so we need to return it here.
 		// And then only the controller who is in the same node could do the rest work.
-		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), dd.Spec.TargetVolume.PVC, dd.Spec.TargetVolume.Namespace, hostingPodLabels, r.podResources, dd.Spec.OperationTimeout.Duration)
+		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), exposeParam)
 		if err != nil {
 			if err := r.client.Get(ctx, req.NamespacedName, dd); err != nil {
 				if !apierrors.IsNotFound(err) {
@@ -222,7 +225,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			log.Debugf("Data download is been canceled %s in Phase %s", dd.GetName(), dd.Status.Phase)
 			r.tryCancelAcceptedDataDownload(ctx, dd, "")
 		} else if peekErr := r.restoreExposer.PeekExposed(ctx, getDataDownloadOwnerObject(dd)); peekErr != nil {
-			r.tryCancelAcceptedDataDownload(ctx, dd, fmt.Sprintf("found a dataupload %s/%s with expose error: %s. mark it as cancel", dd.Namespace, dd.Name, peekErr))
+			r.tryCancelAcceptedDataDownload(ctx, dd, fmt.Sprintf("found a datadownload %s/%s with expose error: %s. mark it as cancel", dd.Namespace, dd.Name, peekErr))
 			log.Errorf("Cancel dd %s/%s because of expose error %s", dd.Namespace, dd.Name, peekErr)
 		} else if dd.Status.AcceptedTimestamp != nil {
 			if time.Since(dd.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
@@ -714,6 +717,30 @@ func (r *DataDownloadReconciler) closeDataPath(ctx context.Context, ddName strin
 	}
 
 	r.dataPathMgr.RemoveAsyncBR(ddName)
+}
+
+func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDownload) (interface{}, error) {
+	nodeOS := string(dd.Spec.NodeOS)
+	if nodeOS == "" {
+		r.logger.Info("nodeOS is empty in DD, fallback to linux")
+		nodeOS = kube.NodeOSLinux
+	}
+
+	if err := kube.HasNodeWithOS(context.Background(), string(dd.Spec.NodeOS), r.kubeClient.CoreV1()); err != nil {
+		return ctrl.Result{}, errors.Wrapf(err, "no appropriate node to run datadownload %s/%s", dd.Namespace, dd.Name)
+	}
+
+	hostingPodLabels := map[string]string{velerov1api.DataDownloadLabel: dd.Name}
+
+	return &exposer.GenericRestoreExposeParam{
+		TargetPVCName:    dd.Spec.TargetVolume.PVC,
+		TargetNamespace:  dd.Spec.TargetVolume.Namespace,
+		HostingPodLabels: hostingPodLabels,
+		Resources:        r.podResources,
+		OperationTimeout: dd.Spec.OperationTimeout.Duration,
+		ExposeTimeout:    r.preparingTimeout,
+		NodeOS:           nodeOS,
+	}, nil
 }
 
 func getDataDownloadOwnerObject(dd *velerov2alpha1api.DataDownload) v1.ObjectReference {
