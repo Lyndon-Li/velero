@@ -66,7 +66,7 @@ func dataDownloadBuilder() *builder.DataDownloadBuilder {
 		PV:        "test-pv",
 		PVC:       "test-pvc",
 		Namespace: "test-ns",
-	})
+	}).NodeOS(velerov2alpha1api.NodeOS("test-node-os"))
 }
 
 func initDataDownloadReconciler(objects []runtime.Object, needError ...bool) (*DataDownloadReconciler, error) {
@@ -959,7 +959,7 @@ func (dt *ddResumeTestHelper) resumeCancellableDataPath(_ *DataUploadReconciler,
 	return dt.resumeErr
 }
 
-func (dt *ddResumeTestHelper) Expose(context.Context, corev1.ObjectReference, string, string, map[string]string, corev1.ResourceRequirements, time.Duration) error {
+func (dt *ddResumeTestHelper) Expose(context.Context, corev1.ObjectReference, interface{}) error {
 	return nil
 }
 
