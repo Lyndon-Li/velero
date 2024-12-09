@@ -479,7 +479,7 @@ func TestReconcile(t *testing.T) {
 		},
 		{
 			name:     "prepare timeout",
-			du:       dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).SnapshotType(fakeSnapshotType).Annotations(map[string]string{acceptTimeAnnoKey: (time.Now().Add(-time.Minute * 5)).Format(time.RFC3339)}).Result(),
+			du:       dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseAccepted).SnapshotType(fakeSnapshotType).AcceptedTimestamp(&metav1.Time{Time: time.Now().Add(-time.Minute * 5)}).Result(),
 			expected: dataUploadBuilder().Phase(velerov2alpha1api.DataUploadPhaseFailed).Result(),
 		},
 		{

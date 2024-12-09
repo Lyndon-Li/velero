@@ -349,7 +349,7 @@ func TestDataDownloadReconcile(t *testing.T) {
 		},
 		{
 			name:     "prepare timeout",
-			dd:       dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Annotations(map[string]string{acceptTimeAnnoKey: (time.Now().Add(-time.Minute * 5)).Format(time.RFC3339)}).Result(),
+			dd:       dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseAccepted).AcceptedTimestamp(&metav1.Time{Time: time.Now().Add(-time.Minute * 5)}).Result(),
 			expected: dataDownloadBuilder().Phase(velerov2alpha1api.DataDownloadPhaseFailed).Result(),
 		},
 		{
