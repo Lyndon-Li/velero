@@ -28,14 +28,19 @@ import (
 	"github.com/stretchr/testify/require"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/repository/provider"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+	"github.com/vmware-tanzu/velero/pkg/util/logging"
+
+	appsv1 "k8s.io/api/apps/v1"
 )
 
 func TestGenerateJobName1(t *testing.T) {
@@ -56,7 +61,7 @@ func TestGenerateJobName1(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.repo, func(t *testing.T) {
 			// Call the function to test
-			jobName := GenerateJobName(tc.repo)
+			jobName := generateJobName(tc.repo)
 
 			// Check if the generated job name starts with the expected prefix
 			if !strings.HasPrefix(jobName, tc.expectedStart) {
@@ -108,7 +113,7 @@ func TestDeleteOldMaintenanceJobs(t *testing.T) {
 	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 
 	// Call the function
-	err := DeleteOldMaintenanceJobs(cli, repo, keep)
+	err := deleteOldMaintenanceJobs(cli, repo, keep)
 	assert.NoError(t, err)
 
 	// Get the remaining jobs
@@ -125,58 +130,6 @@ func TestDeleteOldMaintenanceJobs(t *testing.T) {
 
 	// Job2 should also not be present in the remaining list
 	assert.NotContains(t, jobList.Items, objs[1])
-}
-
-func TestWaitForJobComplete(t *testing.T) {
-	// Set up test job
-	job := &batchv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-job",
-			Namespace: "default",
-		},
-		Status: batchv1.JobStatus{},
-	}
-
-	// Define test cases
-	tests := []struct {
-		description string            // Test case description
-		jobStatus   batchv1.JobStatus // Job status to set for the test
-		expectError bool              // Whether an error is expected
-	}{
-		{
-			description: "Job Succeeded",
-			jobStatus: batchv1.JobStatus{
-				Succeeded: 1,
-			},
-			expectError: false,
-		},
-		{
-			description: "Job Failed",
-			jobStatus: batchv1.JobStatus{
-				Failed: 1,
-			},
-			expectError: true,
-		},
-	}
-
-	// Run tests
-	for _, tc := range tests {
-		t.Run(tc.description, func(t *testing.T) {
-			// Set the job status
-			job.Status = tc.jobStatus
-			// Create a fake Kubernetes client
-			cli := fake.NewClientBuilder().WithObjects(job).Build()
-			// Call the function
-			err := WaitForJobComplete(context.Background(), cli, job)
-
-			// Check if the error matches the expectation
-			if tc.expectError {
-				assert.Error(t, err)
-			} else {
-				assert.NoError(t, err)
-			}
-		})
-	}
 }
 
 func TestGetMaintenanceResultFromJob(t *testing.T) {
@@ -277,7 +230,7 @@ func TestGetLatestMaintenanceJob(t *testing.T) {
 	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 
 	// Call the function
-	job, err := GetLatestMaintenanceJob(cli, "default")
+	job, err := getLatestMaintenanceJob(cli, "default")
 	assert.NoError(t, err)
 
 	// We expect the returned job to be the newer job
@@ -440,7 +393,7 @@ func TestGetMaintenanceJobConfig(t *testing.T) {
 				fakeClient = velerotest.NewFakeControllerRuntimeClient(t)
 			}
 
-			jobConfig, err := GetMaintenanceJobConfig(
+			jobConfig, err := getMaintenanceJobConfig(
 				ctx,
 				fakeClient,
 				logger,
@@ -455,6 +408,208 @@ func TestGetMaintenanceJobConfig(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Equal(t, tc.expectedConfig, jobConfig)
+		})
+	}
+}
+
+func TestBuildMaintenanceJob(t *testing.T) {
+	testCases := []struct {
+		name            string
+		m               *JobConfigs
+		deploy          *appsv1.Deployment
+		logLevel        logrus.Level
+		logFormat       *logging.FormatFlag
+		expectedJobName string
+		expectedError   bool
+		expectedEnv     []v1.EnvVar
+		expectedEnvFrom []v1.EnvFromSource
+	}{
+		{
+			name: "Valid maintenance job",
+			m: &JobConfigs{
+				PodResources: &kube.PodResources{
+					CPURequest:    "100m",
+					MemoryRequest: "128Mi",
+					CPULimit:      "200m",
+					MemoryLimit:   "256Mi",
+				},
+			},
+			deploy: &appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "velero",
+					Namespace: "velero",
+				},
+				Spec: appsv1.DeploymentSpec{
+					Template: v1.PodTemplateSpec{
+						Spec: v1.PodSpec{
+							Containers: []v1.Container{
+								{
+									Name:  "velero-repo-maintenance-container",
+									Image: "velero-image",
+									Env: []v1.EnvVar{
+										{
+											Name:  "test-name",
+											Value: "test-value",
+										},
+									},
+									EnvFrom: []v1.EnvFromSource{
+										{
+											ConfigMapRef: &v1.ConfigMapEnvSource{
+												LocalObjectReference: v1.LocalObjectReference{
+													Name: "test-configmap",
+												},
+											},
+										},
+										{
+											SecretRef: &v1.SecretEnvSource{
+												LocalObjectReference: v1.LocalObjectReference{
+													Name: "test-secret",
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			logLevel:        logrus.InfoLevel,
+			logFormat:       logging.NewFormatFlag(),
+			expectedJobName: "test-123-maintain-job",
+			expectedError:   false,
+			expectedEnv: []v1.EnvVar{
+				{
+					Name:  "test-name",
+					Value: "test-value",
+				},
+			},
+			expectedEnvFrom: []v1.EnvFromSource{
+				{
+					ConfigMapRef: &v1.ConfigMapEnvSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "test-configmap",
+						},
+					},
+				},
+				{
+					SecretRef: &v1.SecretEnvSource{
+						LocalObjectReference: v1.LocalObjectReference{
+							Name: "test-secret",
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "Error getting Velero server deployment",
+			m: &JobConfigs{
+				PodResources: &kube.PodResources{
+					CPURequest:    "100m",
+					MemoryRequest: "128Mi",
+					CPULimit:      "200m",
+					MemoryLimit:   "256Mi",
+				},
+			},
+			logLevel:        logrus.InfoLevel,
+			logFormat:       logging.NewFormatFlag(),
+			expectedJobName: "",
+			expectedError:   true,
+		},
+	}
+
+	param := provider.RepoParam{
+		BackupRepo: &velerov1api.BackupRepository{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "velero",
+				Name:      "test-123",
+			},
+			Spec: velerov1api.BackupRepositorySpec{
+				VolumeNamespace: "test-123",
+				RepositoryType:  "kopia",
+			},
+		},
+		BackupLocation: &velerov1api.BackupStorageLocation{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace: "velero",
+				Name:      "test-location",
+			},
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Create a fake clientset with resources
+			objs := []runtime.Object{param.BackupLocation, param.BackupRepo}
+
+			if tc.deploy != nil {
+				objs = append(objs, tc.deploy)
+			}
+			scheme := runtime.NewScheme()
+			_ = appsv1.AddToScheme(scheme)
+			_ = velerov1api.AddToScheme(scheme)
+			cli := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
+
+			// Call the function to test
+			job, err := buildMaintenanceJob(context.Background(), cli, param.BackupRepo, tc.m, AllMaintenanceJobConfigs{})
+
+			// Check the error
+			if tc.expectedError {
+				assert.Error(t, err)
+				assert.Nil(t, job)
+			} else {
+				assert.NoError(t, err)
+				assert.NotNil(t, job)
+				assert.Contains(t, job.Name, tc.expectedJobName)
+				assert.Equal(t, param.BackupRepo.Namespace, job.Namespace)
+				assert.Equal(t, param.BackupRepo.Name, job.Labels[RepositoryNameLabel])
+
+				assert.Equal(t, param.BackupRepo.Name, job.Spec.Template.ObjectMeta.Labels[RepositoryNameLabel])
+
+				// Check container
+				assert.Len(t, job.Spec.Template.Spec.Containers, 1)
+				container := job.Spec.Template.Spec.Containers[0]
+				assert.Equal(t, "velero-repo-maintenance-container", container.Name)
+				assert.Equal(t, "velero-image", container.Image)
+				assert.Equal(t, v1.PullIfNotPresent, container.ImagePullPolicy)
+
+				// Check container env
+				assert.Equal(t, tc.expectedEnv, container.Env)
+				assert.Equal(t, tc.expectedEnvFrom, container.EnvFrom)
+
+				// Check resources
+				expectedResources := v1.ResourceRequirements{
+					Requests: v1.ResourceList{
+						v1.ResourceCPU:    resource.MustParse(tc.m.PodResources.CPURequest),
+						v1.ResourceMemory: resource.MustParse(tc.m.PodResources.MemoryRequest),
+					},
+					Limits: v1.ResourceList{
+						v1.ResourceCPU:    resource.MustParse(tc.m.PodResources.CPULimit),
+						v1.ResourceMemory: resource.MustParse(tc.m.PodResources.MemoryLimit),
+					},
+				}
+				assert.Equal(t, expectedResources, container.Resources)
+
+				// Check args
+				expectedArgs := []string{
+					"repo-maintenance",
+					fmt.Sprintf("--repo-name=%s", param.BackupRepo.Spec.VolumeNamespace),
+					fmt.Sprintf("--repo-type=%s", param.BackupRepo.Spec.RepositoryType),
+					fmt.Sprintf("--backup-storage-location=%s", param.BackupLocation.Name),
+					fmt.Sprintf("--log-level=%s", tc.logLevel.String()),
+					fmt.Sprintf("--log-format=%s", tc.logFormat.String()),
+				}
+				assert.Equal(t, expectedArgs, container.Args)
+
+				// Check affinity
+				assert.Nil(t, job.Spec.Template.Spec.Affinity)
+
+				// Check tolerations
+				assert.Nil(t, job.Spec.Template.Spec.Tolerations)
+
+				// Check node selector
+				assert.Nil(t, job.Spec.Template.Spec.NodeSelector)
+			}
 		})
 	}
 }

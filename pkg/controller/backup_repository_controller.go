@@ -40,9 +40,12 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/label"
+	"github.com/vmware-tanzu/velero/pkg/repository"
 	repoconfig "github.com/vmware-tanzu/velero/pkg/repository/config"
 	repomanager "github.com/vmware-tanzu/velero/pkg/repository/manager"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+
+	batchv1 "k8s.io/api/batch/v1"
 )
 
 const (
@@ -52,16 +55,17 @@ const (
 
 type BackupRepoReconciler struct {
 	client.Client
-	namespace            string
-	logger               logrus.FieldLogger
-	clock                clocks.WithTickerAndDelayedExecution
-	maintenanceFrequency time.Duration
-	backupRepoConfig     string
-	repositoryManager    repomanager.Manager
+	namespace             string
+	logger                logrus.FieldLogger
+	clock                 clocks.WithTickerAndDelayedExecution
+	maintenanceFrequency  time.Duration
+	backupRepoConfig      string
+	repositoryManager     repomanager.Manager
+	maintenanceJobConfigs repository.AllMaintenanceJobConfigs
 }
 
 func NewBackupRepoReconciler(namespace string, logger logrus.FieldLogger, client client.Client,
-	maintenanceFrequency time.Duration, backupRepoConfig string, repositoryManager repomanager.Manager) *BackupRepoReconciler {
+	maintenanceFrequency time.Duration, backupRepoConfig string, repositoryManager repomanager.Manager, jobConfig repository.AllMaintenanceJobConfigs) *BackupRepoReconciler {
 	c := &BackupRepoReconciler{
 		client,
 		namespace,
@@ -70,6 +74,7 @@ func NewBackupRepoReconciler(namespace string, logger logrus.FieldLogger, client
 		maintenanceFrequency,
 		backupRepoConfig,
 		repositoryManager,
+		jobConfig,
 	}
 
 	return c
@@ -87,6 +92,8 @@ func (r *BackupRepoReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				kube.NewUpdateEventPredicate(r.needInvalidBackupRepo),
 				// When BSL is created, invalidate any backup repositories that reference it
 				kube.NewCreateEventPredicate(func(client.Object) bool { return true }))).
+		Watches(&batchv1.Job{}, kube.EnqueueRequestsFromMapUpdateFunc(r.updateMaintainStatus),
+			builder.WithPredicates(kube.NewUpdateEventPredicate(r.needUpdateMaintainStatus))).
 		Complete(r)
 }
 
@@ -108,6 +115,45 @@ func (r *BackupRepoReconciler) invalidateBackupReposForBSL(ctx context.Context, 
 		r.logger.WithField("BSL", bsl.Name).Infof("Invalidating Backup Repository %s", list.Items[i].Name)
 		if err := r.patchBackupRepository(context.Background(), &list.Items[i], repoNotReady("re-establish on BSL change or create")); err != nil {
 			r.logger.WithField("BSL", bsl.Name).WithError(err).Errorf("fail to patch BackupRepository %s", list.Items[i].Name)
+		}
+	}
+
+	return []reconcile.Request{}
+}
+
+func (r *BackupRepoReconciler) updateMaintainStatus(ctx context.Context, jobObj client.Object) []reconcile.Request {
+	logger := r.logger.WithField("maintenance job", jobObj.GetName())
+
+	maintainJob := jobObj.(*batchv1.Job)
+
+	repoName := maintainJob.Labels[repository.RepositoryNameLabel]
+	repo := &velerov1api.BackupRepository{}
+	if err := r.Client.Get(ctx, client.ObjectKey{
+		Namespace: r.namespace,
+		Name:      repoName,
+	}, repo); err != nil {
+		logger.WithError(err).Errorf("Faied to get backup repository %s/%s for maintenance job", r.namespace, repoName)
+		return []reconcile.Request{}
+	}
+
+	result, err := repository.GetMaintenanceResultFromJob(r.Client, maintainJob)
+	if err != nil {
+		r.logger.WithError(err).Error("Failed to get maintenance job result")
+		result = err.Error()
+	}
+
+	if result != "" {
+		if err := r.patchBackupRepository(ctx, repo, func(rr *velerov1api.BackupRepository) {
+			rr.Status.Message = result
+		}); err != nil {
+			logger.WithError(err).Errorf("Failed to patch backup repository %s/%s on maintenance failure [%s]", repo.Namespace, repo.Name, result)
+		}
+	} else {
+		if err := r.patchBackupRepository(ctx, repo, func(rr *velerov1api.BackupRepository) {
+			rr.Status.Message = ""
+			rr.Status.LastMaintenanceTime = &metav1.Time{Time: r.clock.Now()}
+		}); err != nil {
+			logger.WithError(err).Errorf("Failed to patch backup repository %s/%s on maintenance succeed", repo.Namespace, repo.Name)
 		}
 	}
 
@@ -164,6 +210,25 @@ func (r *BackupRepoReconciler) needInvalidBackupRepo(oldObj client.Object, newOb
 	}
 
 	return false
+}
+
+func (r *BackupRepoReconciler) needUpdateMaintainStatus(oldObj client.Object, newObj client.Object) bool {
+	oldJob := oldObj.(*batchv1.Job)
+	newJob := newObj.(*batchv1.Job)
+
+	if newJob.Labels == nil {
+		return false
+	}
+
+	if _, found := newJob.Labels[repository.RepositoryNameLabel]; !found {
+		return false
+	}
+
+	if newJob.Status.Succeeded == oldJob.Status.Succeeded && newJob.Status.Failed == oldJob.Status.Failed {
+		return false
+	}
+
+	return true
 }
 
 func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -310,19 +375,16 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 
 	// prune failures should be displayed in the `.status.message` field but
 	// should not cause the repo to move to `NotReady`.
-	log.Debug("Pruning repo")
-
-	if err := r.repositoryManager.PruneRepo(req); err != nil {
-		log.WithError(err).Warn("error pruning repository")
+	if err := repository.StartMaintenanceJob(ctx, r.Client, req, r.maintenanceJobConfigs, log); err != nil {
+		log.WithError(err).Warn("error starting to prune repository")
 		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
 			rr.Status.Message = err.Error()
 		})
 	}
 
-	return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
-		rr.Status.Message = ""
-		rr.Status.LastMaintenanceTime = &metav1.Time{Time: now}
-	})
+	log.Info("Maintenance on backup repository started")
+
+	return nil
 }
 
 func dueForMaintenance(req *velerov1api.BackupRepository, now time.Time) bool {

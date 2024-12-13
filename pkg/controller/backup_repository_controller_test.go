@@ -28,6 +28,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/repository"
 	repomokes "github.com/vmware-tanzu/velero/pkg/repository/mocks"
 	repotypes "github.com/vmware-tanzu/velero/pkg/repository/types"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
@@ -50,6 +51,7 @@ func mockBackupRepoReconciler(t *testing.T, mockOn string, arg interface{}, ret 
 		testMaintenanceFrequency,
 		"fake-repo-config",
 		mgr,
+		repository.AllMaintenanceJobConfigs{},
 	)
 }
 
@@ -251,6 +253,7 @@ func TestGetRepositoryMaintenanceFrequency(t *testing.T) {
 				test.userDefinedFreq,
 				"",
 				&mgr,
+				repository.AllMaintenanceJobConfigs{},
 			)
 
 			freq := reconciler.getRepositoryMaintenanceFrequency(test.repo)
@@ -377,7 +380,7 @@ func TestNeedInvalidBackupRepo(t *testing.T) {
 				velerov1api.DefaultNamespace,
 				velerotest.NewLogger(),
 				velerotest.NewFakeControllerRuntimeClient(t),
-				time.Duration(0), "", nil)
+				time.Duration(0), "", nil, repository.AllMaintenanceJobConfigs{})
 
 			need := reconciler.needInvalidBackupRepo(test.oldBSL, test.newBSL)
 			assert.Equal(t, test.expect, need)

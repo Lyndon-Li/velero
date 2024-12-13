@@ -18,9 +18,10 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerocli "github.com/vmware-tanzu/velero/pkg/client"
 	"github.com/vmware-tanzu/velero/pkg/repository"
-	"github.com/vmware-tanzu/velero/pkg/repository/provider"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
+
+	repomanager "github.com/vmware-tanzu/velero/pkg/repository/manager"
 )
 
 type Options struct {
@@ -61,6 +62,12 @@ func (o *Options) Run(f velerocli.Factory) {
 	logger := logging.DefaultLogger(o.LogLevelFlag.Parse(), o.FormatFlag.Parse())
 	logger.SetOutput(os.Stdout)
 
+	logger.WithFields(logrus.Fields{
+		"BSL name":  o.BackupStorageLocation,
+		"repo type": o.RepoType,
+		"repo name": o.RepoName,
+	}).Info("Starting pruning repo")
+
 	pruneError := o.runRepoPrune(f, f.Namespace(), logger)
 	defer func() {
 		if pruneError != nil {
@@ -80,6 +87,8 @@ func (o *Options) Run(f velerocli.Factory) {
 		if _, errWrite := terminationLogFile.WriteString(fmt.Sprintf("An error occurred: %v", err)); errWrite != nil {
 			logger.WithError(errWrite).Error("Failed to write error to termination log file")
 		}
+	} else {
+		logger.Info("Complete to prune repo")
 	}
 }
 
@@ -110,11 +119,8 @@ func (o *Options) initClient(f velerocli.Factory) (client.Client, error) {
 	return cli, nil
 }
 
-func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger logrus.FieldLogger) error {
-	cli, err := o.initClient(f)
-	if err != nil {
-		return err
-	}
+func (o *Options) initRepoManager(cli client.Client, namespace string, logger logrus.FieldLogger) (repomanager.Manager, error) {
+	repoLocker := repository.NewRepoLocker()
 
 	credentialFileStore, err := credentials.NewNamespacedFileStore(
 		cli,
@@ -123,23 +129,33 @@ func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger log
 		filesystem.NewFileSystem(),
 	)
 	if err != nil {
-		return errors.Wrap(err, "failed to create namespaced file store")
+		return nil, errors.Wrap(err, "failed to create namespaced file store")
 	}
 
 	credentialSecretStore, err := credentials.NewNamespacedSecretStore(cli, namespace)
 	if err != nil {
-		return errors.Wrap(err, "failed to create namespaced secret store")
+		return nil, errors.Wrap(err, "failed to create namespaced secret store")
 	}
 
-	var repoProvider provider.Provider
-	if o.RepoType == velerov1api.BackupRepositoryTypeRestic {
-		repoProvider = provider.NewResticRepositoryProvider(credentialFileStore, filesystem.NewFileSystem(), logger)
-	} else {
-		repoProvider = provider.NewUnifiedRepoProvider(
-			credentials.CredentialGetter{
-				FromFile:   credentialFileStore,
-				FromSecret: credentialSecretStore,
-			}, o.RepoType, logger)
+	return repomanager.NewManager(
+		namespace,
+		cli,
+		repoLocker,
+		credentialFileStore,
+		credentialSecretStore,
+		logger,
+	), nil
+}
+
+func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger logrus.FieldLogger) error {
+	cli, err := o.initClient(f)
+	if err != nil {
+		return errors.Wrapf(err, "error initializing client")
+	}
+
+	repoMgr, err := o.initRepoManager(cli, namespace, logger)
+	if err != nil {
+		return errors.Wrapf(err, "error initializing repo manager")
 	}
 
 	// backupRepository
@@ -151,29 +167,13 @@ func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger log
 		}, true)
 
 	if err != nil {
-		return errors.Wrap(err, "failed to get backup repository")
+		return errors.Wrap(err, "error getting backup repository")
 	}
 
-	// bsl
-	bsl := &velerov1api.BackupStorageLocation{}
-	err = cli.Get(context.Background(), client.ObjectKey{Namespace: namespace, Name: repo.Spec.BackupStorageLocation}, bsl)
+	err = repoMgr.PruneRepo(repo)
 	if err != nil {
-		return errors.Wrap(err, "failed to get backup storage location")
+		return errors.Wrap(err, "error pruning repo")
 	}
 
-	para := provider.RepoParam{
-		BackupRepo:     repo,
-		BackupLocation: bsl,
-	}
-
-	err = repoProvider.BoostRepoConnect(context.Background(), para)
-	if err != nil {
-		return errors.Wrap(err, "failed to boost repo connect")
-	}
-
-	err = repoProvider.PruneRepo(context.Background(), para)
-	if err != nil {
-		return errors.Wrap(err, "failed to prune repo")
-	}
 	return nil
 }
