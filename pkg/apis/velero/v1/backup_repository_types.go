@@ -71,10 +71,34 @@ type BackupRepositoryStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 
-	// LastMaintenanceTime is the last time maintenance was run.
+	// LastMaintenanceTime is the last time repo maintenance completed.
 	// +optional
 	// +nullable
 	LastMaintenanceTime *metav1.Time `json:"lastMaintenanceTime,omitempty"`
+
+	// MaintenanceFailuresInRow is the number of failed repo maintenance attempts in a row.
+	// +optional
+	MaintenanceFailuresInRow int `json:"maintenanceFailuresInRow,omitempty"`
+
+	// RecentMaintenanceStatus is status of the recent repo maintenance.
+	// +optional
+	RecentMaintenanceStatus []BackupRepositoryMaintenanceStatus `json:"recentMaintenanceStatus,omitempty"`
+}
+
+type BackupRepositoryMaintenanceStatus struct {
+	// StartTimestamp is the start time of the repo maintenance.
+	// +optional
+	// +nullable
+	StartTimestamp *metav1.Time `json:"startTimestamp,omitempty"`
+
+	// CompleteTimestamp is the completion time of the repo maintenance.
+	// +optional
+	// +nullable
+	CompleteTimestamp *metav1.Time `json:"completeTimestamp,omitempty"`
+
+	// Message is a message about the current status of the repo maintenance.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runtime-controller client,
