@@ -345,6 +345,7 @@ func (s *server) setupBeforeControllerRun() error {
 	}
 
 	markInProgressCRsFailed(s.ctx, client, s.namespace, s.logger)
+	controller.RecallCompletedMaintenanceJob(s.ctx, client, s.namespace, s.logger)
 
 	if err := setDefaultBackupLocation(s.ctx, client, s.namespace, s.config.DefaultBackupLocation, s.logger); err != nil {
 		return err

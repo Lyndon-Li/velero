@@ -46,6 +46,8 @@ const (
 	GlobalKeyForRepoMaintenanceJobCM = "global"
 )
 
+var OngoingMaintenanceConflictError = errors.New("an incomplete repo maintenance job is ongoing")
+
 type JobConfigs struct {
 	// LoadAffinities is the config for repository maintenance job load affinity.
 	LoadAffinities []*kube.LoadAffinity `json:"loadAffinity,omitempty"`
@@ -88,7 +90,7 @@ func StartMaintenanceJob(ctx context.Context, cli client.Client, repo *velerov1a
 
 	if job != nil && job.Status.Succeeded == 0 && job.Status.Failed == 0 {
 		log.Debugf("There already has a unfinished maintenance job %s/%s for repository %s, please wait for it to complete", job.Namespace, job.Name, repo.Spec.BackupStorageLocation)
-		return nil
+		return OngoingMaintenanceConflictError
 	}
 
 	jobConfig, err := getMaintenanceJobConfig(ctx, cli, log, repo.Namespace, configs.JobConfigMap, repo)
@@ -179,7 +181,7 @@ func GetMaintenanceResultFromJob(cli client.Client, job *batchv1.Job) (string, e
 	return terminated.Message, nil
 }
 
-func getLatestMaintenanceJob(cli client.Client, ns string) (*batchv1.Job, error) {
+func GetLatestMaintenanceJob(cli client.Client, ns string) (*batchv1.Job, error) {
 	// Get the maintenance job list by label
 	jobList := &batchv1.JobList{}
 	err := cli.List(context.TODO(), jobList, &client.ListOptions{
@@ -300,7 +302,7 @@ func getMaintenanceJobConfig(
 func buildMaintenanceJob(ctx context.Context, client client.Client, repo *velerov1api.BackupRepository, config *JobConfigs, allConfigs AllMaintenanceJobConfigs) (*batchv1.Job, error) {
 	// Get the Velero server deployment
 	deployment := &appsv1.Deployment{}
-	err := client.Get(context.TODO(), types.NamespacedName{Name: "velero", Namespace: repo.Namespace}, deployment)
+	err := client.Get(ctx, types.NamespacedName{Name: "velero", Namespace: repo.Namespace}, deployment)
 	if err != nil {
 		return nil, err
 	}

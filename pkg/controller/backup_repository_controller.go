@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
@@ -49,12 +50,13 @@ import (
 )
 
 const (
-	repoSyncPeriod           = 5 * time.Minute
-	defaultMaintainFrequency = 7 * 24 * time.Hour
+	repoSyncPeriod                      = 5 * time.Minute
+	defaultMaintainFrequency            = 7 * 24 * time.Hour
+	defaultMaintenanceStatusQueueLength = 3
 )
 
 type BackupRepoReconciler struct {
-	client.Client
+	client                client.Client
 	namespace             string
 	logger                logrus.FieldLogger
 	clock                 clocks.WithTickerAndDelayedExecution
@@ -62,19 +64,20 @@ type BackupRepoReconciler struct {
 	backupRepoConfig      string
 	repositoryManager     repomanager.Manager
 	maintenanceJobConfigs repository.AllMaintenanceJobConfigs
+	backupRepoLock        sync.RWMutex
 }
 
 func NewBackupRepoReconciler(namespace string, logger logrus.FieldLogger, client client.Client,
 	maintenanceFrequency time.Duration, backupRepoConfig string, repositoryManager repomanager.Manager, jobConfig repository.AllMaintenanceJobConfigs) *BackupRepoReconciler {
 	c := &BackupRepoReconciler{
-		client,
-		namespace,
-		logger,
-		clocks.RealClock{},
-		maintenanceFrequency,
-		backupRepoConfig,
-		repositoryManager,
-		jobConfig,
+		client:                client,
+		namespace:             namespace,
+		logger:                logger,
+		clock:                 clocks.RealClock{},
+		maintenanceFrequency:  maintenanceFrequency,
+		backupRepoConfig:      backupRepoConfig,
+		repositoryManager:     repositoryManager,
+		maintenanceJobConfigs: jobConfig,
 	}
 
 	return c
@@ -106,7 +109,7 @@ func (r *BackupRepoReconciler) invalidateBackupReposForBSL(ctx context.Context, 
 			velerov1api.StorageLocationLabel: label.GetValidName(bsl.Name),
 		}).AsSelector(),
 	}
-	if err := r.List(context.TODO(), list, options); err != nil {
+	if err := r.client.List(context.TODO(), list, options); err != nil {
 		r.logger.WithField("BSL", bsl.Name).WithError(err).Error("unable to list BackupRepositories")
 		return []reconcile.Request{}
 	}
@@ -128,7 +131,7 @@ func (r *BackupRepoReconciler) updateMaintainStatus(ctx context.Context, jobObj 
 
 	repoName := maintainJob.Labels[repository.RepositoryNameLabel]
 	repo := &velerov1api.BackupRepository{}
-	if err := r.Client.Get(ctx, client.ObjectKey{
+	if err := r.client.Get(ctx, client.ObjectKey{
 		Namespace: r.namespace,
 		Name:      repoName,
 	}, repo); err != nil {
@@ -136,28 +139,72 @@ func (r *BackupRepoReconciler) updateMaintainStatus(ctx context.Context, jobObj 
 		return []reconcile.Request{}
 	}
 
-	result, err := repository.GetMaintenanceResultFromJob(r.Client, maintainJob)
+	result, err := repository.GetMaintenanceResultFromJob(r.client, maintainJob)
 	if err != nil {
-		r.logger.WithError(err).Error("Failed to get maintenance job result")
+		logger.WithError(err).Error("Failed to get maintenance job result")
 		result = err.Error()
 	}
 
 	if result != "" {
 		if err := r.patchBackupRepository(ctx, repo, func(rr *velerov1api.BackupRepository) {
-			rr.Status.Message = result
+			if !repoMaintenanceRecorded(repo, maintainJob, logger) {
+				repo.Status.MaintenanceFailuresInRow++
+				updateRepoMaintenanceHistory(repo, maintainJob, result)
+			}
 		}); err != nil {
 			logger.WithError(err).Errorf("Failed to patch backup repository %s/%s on maintenance failure [%s]", repo.Namespace, repo.Name, result)
 		}
 	} else {
 		if err := r.patchBackupRepository(ctx, repo, func(rr *velerov1api.BackupRepository) {
-			rr.Status.Message = ""
-			rr.Status.LastMaintenanceTime = &metav1.Time{Time: r.clock.Now()}
+			if !repoMaintenanceRecorded(repo, maintainJob, logger) {
+				repo.Status.LastMaintenanceTime = maintainJob.Status.CompletionTime
+				repo.Status.MaintenanceFailuresInRow = 0
+
+				updateRepoMaintenanceHistory(repo, maintainJob, result)
+			}
 		}); err != nil {
 			logger.WithError(err).Errorf("Failed to patch backup repository %s/%s on maintenance succeed", repo.Namespace, repo.Name)
 		}
 	}
 
 	return []reconcile.Request{}
+}
+
+func repoMaintenanceRecorded(repo *velerov1api.BackupRepository, maintainJob *batchv1.Job, log logrus.FieldLogger) bool {
+	if maintainJob.Status.CompletionTime == nil {
+		log.Warn("No completion time for maintenance job, skip it")
+		return true
+	}
+
+	status, err := repository.GetMaintenanceCompletionStatus(maintainJob)
+	if err != nil {
+		log.WithError(err).Warn("Failed to get maintenance job completion status, skip it")
+		return true
+	}
+
+	if status == repository.MaintenanceSucceeded {
+		return maintainJob.Status.CompletionTime.After(repo.Status.LastMaintenanceTime.Time)
+	} else {
+		latest := len(repo.Status.RecentMaintenanceStatus) - 1
+		if latest < 0 {
+			return false
+		}
+
+		return maintainJob.Status.CompletionTime.After(repo.Status.RecentMaintenanceStatus[latest].CompleteTimestamp.Time)
+	}
+}
+
+func updateRepoMaintenanceHistory(repo *velerov1api.BackupRepository, maintainJob *batchv1.Job, result string) {
+	lru := [defaultMaintenanceStatusQueueLength]velerov1api.BackupRepositoryMaintenanceStatus{}
+	copy(lru[:], repo.Status.RecentMaintenanceStatus[1:defaultMaintenanceStatusQueueLength])
+
+	lru[defaultMaintenanceStatusQueueLength-1] = velerov1api.BackupRepositoryMaintenanceStatus{
+		StartTimestamp:    maintainJob.Status.StartTime,
+		CompleteTimestamp: maintainJob.Status.CompletionTime,
+		Message:           result,
+	}
+
+	copy(repo.Status.RecentMaintenanceStatus, lru[:])
 }
 
 // needInvalidBackupRepo returns true if the BSL's storage type, bucket, prefix, CACert, or config has changed
@@ -224,7 +271,7 @@ func (r *BackupRepoReconciler) needUpdateMaintainStatus(oldObj client.Object, ne
 		return false
 	}
 
-	if newJob.Status.Succeeded == oldJob.Status.Succeeded && newJob.Status.Failed == oldJob.Status.Failed {
+	if newJob.Status.CompletionTime == oldJob.Status.CompletionTime {
 		return false
 	}
 
@@ -234,7 +281,7 @@ func (r *BackupRepoReconciler) needUpdateMaintainStatus(oldObj client.Object, ne
 func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.logger.WithField("backupRepo", req.String())
 	backupRepo := &velerov1api.BackupRepository{}
-	if err := r.Get(ctx, req.NamespacedName, backupRepo); err != nil {
+	if err := r.client.Get(ctx, req.NamespacedName, backupRepo); err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Warnf("backup repository %s in namespace %s is not found", req.Name, req.Namespace)
 			return ctrl.Result{}, nil
@@ -371,18 +418,29 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		return nil
 	}
 
+	count, err := repository.CountIncompleteMaintenanceJobs(r.client, req.Namespace)
+	if err != nil {
+		log.WithError(err).Error("Failed to count incomplete maintenance jobs, cannot start new maintenace job")
+		return errors.Wrap(err, "error counting incomplete maintenance jobs")
+	}
+
+	if count > 0 {
+		log.Debugf("Skip because %d incomplete maintenance job(s) exist", count)
+		return nil
+	}
+
 	log.Info("Running maintenance on backup repository")
 
 	// prune failures should be displayed in the `.status.message` field but
 	// should not cause the repo to move to `NotReady`.
-	if err := repository.StartMaintenanceJob(ctx, r.Client, req, r.maintenanceJobConfigs, log); err != nil {
+	if err := repository.StartMaintenanceJob(ctx, r.client, req, r.maintenanceJobConfigs, log); err != nil && err != repository.OngoingMaintenanceConflictError {
 		log.WithError(err).Warn("error starting to prune repository")
 		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
 			rr.Status.Message = err.Error()
 		})
+	} else {
+		log.Info("Maintenance on backup repository started")
 	}
-
-	log.Info("Maintenance on backup repository started")
 
 	return nil
 }
@@ -436,10 +494,10 @@ func repoReady() func(*velerov1api.BackupRepository) {
 // patchBackupRepository mutates req with the provided mutate function, and patches it
 // through the Kube API. After executing this function, req will be updated with both
 // the mutation and the results of the Patch() API call.
-func (r *BackupRepoReconciler) patchBackupRepository(ctx context.Context, req *velerov1api.BackupRepository, mutate func(*velerov1api.BackupRepository)) error {
+func (r *BackupRepoReconciler) patchBackupRepository(ctx context.Context, ctlclient client.Client, req *velerov1api.BackupRepository, mutate func(*velerov1api.BackupRepository)) error {
 	original := req.DeepCopy()
 	mutate(req)
-	if err := r.Patch(ctx, req, client.MergeFrom(original)); err != nil {
+	if err := ctlclient.Patch(ctx, req, client.MergeFrom(original)); err != nil {
 		return errors.Wrap(err, "error patching BackupRepository")
 	}
 	return nil
