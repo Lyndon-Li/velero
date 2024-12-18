@@ -33,6 +33,9 @@ import (
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 
 	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	batchv1 "k8s.io/api/batch/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const testMaintenanceFrequency = 10 * time.Minute
@@ -439,6 +442,87 @@ func TestGetBackupRepositoryConfig(t *testing.T) {
 			kubeClientObj: []runtime.Object{
 				configWithNoData,
 			},
+		},
+		{
+			name:      "unmarshall error",
+			congiName: "config-1",
+			repoName:  "fake-repo",
+			repoType:  "fake-repo-type",
+			kubeClientObj: []runtime.Object{
+				configWithWrongData,
+			},
+			expectedErr: "error unmarshalling config data from config-1 for repo fake-repo, repo type fake-repo-type: unexpected end of JSON input",
+		},
+		{
+			name:      "succeed",
+			congiName: "config-1",
+			repoName:  "fake-repo",
+			repoType:  "fake-repo-type",
+			kubeClientObj: []runtime.Object{
+				configWithData,
+			},
+			expectedResult: map[string]string{
+				"cacheLimitMB":      "1000",
+				"enableCompression": "true",
+			},
+		},
+	}
+
+	scheme := runtime.NewScheme()
+	corev1.AddToScheme(scheme)
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fakeClientBuilder := clientFake.NewClientBuilder()
+			fakeClientBuilder = fakeClientBuilder.WithScheme(scheme)
+
+			fakeClient := fakeClientBuilder.WithRuntimeObjects(test.kubeClientObj...).Build()
+
+			result, err := getBackupRepositoryConfig(context.Background(), fakeClient, test.congiName, velerov1api.DefaultNamespace, test.repoName, test.repoType, velerotest.NewLogger())
+
+			if test.expectedErr != "" {
+				assert.EqualError(t, err, test.expectedErr)
+			} else {
+				assert.NoError(t, err)
+				assert.Equal(t, test.expectedResult, result)
+			}
+		})
+	}
+}
+
+func fakeWaitIncompleteMaintenance1(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository) (*batchv1.Job, error) {
+	return nil, errors.New("fake-wait-error")
+}
+
+func fakeWaitIncompleteMaintenance2(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository) (*batchv1.Job, error) {
+	return nil, nil
+}
+
+func TestProcessInCompleteMaintenance(t *testing.T) {
+	repo := &velerov1api.BackupRepository{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: velerov1api.DefaultNamespace,
+			Name:      "repo",
+		},
+		Spec: velerov1api.BackupRepositorySpec{
+			MaintenanceFrequency: metav1.Duration{Duration: testMaintenanceFrequency},
+		},
+	}
+
+	tests := []struct {
+		name          string
+		waitFunc      func(context.Context, client.Client, *velerov1api.BackupRepository) (*batchv1.Job, error)
+		kubeClientObj []runtime.Object
+		expectedErr   string
+	}{
+		{
+			name:        "wait error",
+			waitFunc:    fakeWaitIncompleteMaintenance1,
+			expectedErr: "rror waiting incomplete repo maintenance job: fake-wait-error",
+		},
+		{
+			name:     "no job returned",
+			waitFunc: fakeWaitIncompleteMaintenance2,
 		},
 		{
 			name:      "unmarshall error",

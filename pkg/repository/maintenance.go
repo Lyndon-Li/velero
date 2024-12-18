@@ -250,3 +250,34 @@ func GetMaintenanceJobConfig(
 
 	return result, nil
 }
+
+func WaitIncompleteMaintenance(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, log logrus.FieldLogger) error {
+	jobList := &batchv1.JobList{}
+	err := cli.List(context.TODO(), jobList, &client.ListOptions{
+		Namespace: repo.Namespace,
+	},
+		client.MatchingLabels(map[string]string{RepositoryNameLabel: repo.Name}),
+	)
+
+	if err != nil {
+		return errors.Wrapf(err, "error listing maintenance job for repo %s", repo.Name)
+	}
+
+	if len(jobList.Items) == 0 {
+		return nil
+	}
+
+	for _, job := range jobList.Items {
+		if job.Status.Succeeded != 0 || job.Status.Failed != 0 {
+			continue
+		}
+
+		log.Infof("Waiting for maintenance job %s to complete", job.Name)
+
+		if err := WaitForJobComplete(ctx, cli, &job); err != nil {
+			return errors.Wrapf(err, "error waiting maintenance job[%s] complete", job.Name)
+		}
+	}
+
+	return nil
+}
