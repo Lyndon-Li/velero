@@ -40,6 +40,7 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/label"
+	velerorepo "github.com/vmware-tanzu/velero/pkg/repository"
 	repoconfig "github.com/vmware-tanzu/velero/pkg/repository/config"
 	repomanager "github.com/vmware-tanzu/velero/pkg/repository/manager"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -205,6 +206,10 @@ func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		fallthrough
 	case velerov1api.BackupRepositoryPhaseReady:
+		if err := r.processInCompleteMaintenance(ctx, backupRepo, log); err != nil {
+			return ctrl.Result{}, errors.Wrap(err, "error handling incomplete repo maintenance jobs")
+		}
+
 		return ctrl.Result{}, r.runMaintenanceIfDue(ctx, backupRepo, log)
 	}
 
@@ -296,6 +301,26 @@ func (r *BackupRepoReconciler) getRepositoryMaintenanceFrequency(req *velerov1ap
 // An error is returned if the repository can't be connected to or initialized.
 func ensureRepo(repo *velerov1api.BackupRepository, repoManager repomanager.Manager) error {
 	return repoManager.PrepareRepo(repo)
+}
+
+func (r *BackupRepoReconciler) processInCompleteMaintenance(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
+	job, err := velerorepo.WaitIncompleteMaintenance(ctx, r.Client, req)
+	if err != nil {
+		return errors.Wrap(err, "error waiting incomplete repo maintenance job")
+	}
+
+	if job == nil {
+		return nil
+	}
+
+	log.WithField("job name", job.Name).Info("An ongoing repo maintenance job has just completed")
+
+	now := r.clock.Now()
+
+	return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
+		rr.Status.Message = ""
+		rr.Status.LastMaintenanceTime = &metav1.Time{Time: now}
+	})
 }
 
 func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {

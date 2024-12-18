@@ -250,3 +250,46 @@ func GetMaintenanceJobConfig(
 
 	return result, nil
 }
+
+func WaitIncompleteMaintenance(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository) (*batchv1.Job, error) {
+	jobList := &batchv1.JobList{}
+	err := cli.List(context.TODO(), jobList, &client.ListOptions{
+		Namespace: repo.Namespace,
+	},
+		client.MatchingLabels(map[string]string{RepositoryNameLabel: repo.Name}),
+	)
+
+	if err != nil {
+		return nil, errors.Wrapf(err, "error listing maintenance job for repo %s", repo.Name)
+	}
+
+	if len(jobList.Items) == 0 {
+		return nil, nil
+	}
+
+	incompleted := []*batchv1.Job{}
+	for i, job := range jobList.Items {
+		if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
+			incompleted = append(incompleted, &jobList.Items[i])
+		}
+	}
+
+	if len(incompleted) == 0 {
+		return nil, nil
+	}
+
+	if len(incompleted) > 1 {
+		incompletedMsg := ""
+		for _, ic := range incompleted {
+			incompletedMsg += ic.Name + "/"
+		}
+
+		return nil, errors.Errorf("Multiple incompleted maintenace jobs [%s] found for repo %s", incompletedMsg, repo.Name)
+	}
+
+	if err := WaitForJobComplete(ctx, cli, incompleted[0]); err != nil {
+		return nil, errors.Wrapf(err, "error waiting maintenance job[%s] complete", incompleted[0].Name)
+	}
+
+	return incompleted[0], nil
+}
