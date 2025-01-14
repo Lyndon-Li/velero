@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -21,6 +22,8 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/repository/provider"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
+
+	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
 )
 
 type Options struct {
@@ -69,17 +72,7 @@ func (o *Options) Run(f velerocli.Factory) {
 	}()
 
 	if pruneError != nil {
-		logger.WithError(pruneError).Error("An error occurred when running repo prune")
-		terminationLogFile, err := os.Create("/dev/termination-log")
-		if err != nil {
-			logger.WithError(err).Error("Failed to create termination log file")
-			return
-		}
-		defer terminationLogFile.Close()
-
-		if _, errWrite := terminationLogFile.WriteString(fmt.Sprintf("An error occurred: %v", err)); errWrite != nil {
-			logger.WithError(errWrite).Error("Failed to write error to termination log file")
-		}
+		os.Stdout.WriteString(fmt.Sprintf("%s%v", repository.TerminationLogIndicator, pruneError))
 	}
 }
 
@@ -116,6 +109,42 @@ func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger log
 		return err
 	}
 
+	kubeClient, err := f.KubeClient()
+	if err != nil {
+		return err
+	}
+
+	var repo *velerov1api.BackupRepository
+	retry := 10
+	for {
+		repo, err = repository.GetBackupRepository(context.Background(), cli, namespace,
+			repository.BackupRepositoryKey{
+				VolumeNamespace: o.RepoName,
+				BackupLocation:  o.BackupStorageLocation,
+				RepositoryType:  o.RepoType,
+			}, true)
+		if err == nil {
+			break
+		}
+
+		retry--
+		if retry == 0 {
+			break
+		}
+
+		logger.WithError(err).Warn("Failed to retrieve backup repo, need retry")
+
+		time.Sleep(time.Second)
+	}
+
+	if err != nil {
+		return errors.Wrap(err, "failed to get backup repository")
+	}
+
+	if err := repokey.EnsureCommonRepositoryKey(kubeClient.CoreV1(), namespace); err != nil {
+		return errors.Wrap(err, "failed to ensure repository key")
+	}
+
 	credentialFileStore, err := credentials.NewNamespacedFileStore(
 		cli,
 		namespace,
@@ -140,18 +169,6 @@ func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger log
 				FromFile:   credentialFileStore,
 				FromSecret: credentialSecretStore,
 			}, o.RepoType, logger)
-	}
-
-	// backupRepository
-	repo, err := repository.GetBackupRepository(context.Background(), cli, namespace,
-		repository.BackupRepositoryKey{
-			VolumeNamespace: o.RepoName,
-			BackupLocation:  o.BackupStorageLocation,
-			RepositoryType:  o.RepoType,
-		}, true)
-
-	if err != nil {
-		return errors.Wrap(err, "failed to get backup repository")
 	}
 
 	// bsl

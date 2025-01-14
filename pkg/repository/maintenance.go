@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -40,6 +41,7 @@ import (
 const (
 	RepositoryNameLabel              = "velero.io/repo-name"
 	GlobalKeyForRepoMaintenanceJobCM = "global"
+	TerminationLogIndicator          = "Repo prune error: "
 )
 
 type JobConfigs struct {
@@ -113,7 +115,7 @@ func GetMaintenanceResultFromJob(cli client.Client, job *batchv1.Job) (string, e
 	}
 
 	if len(podList.Items) == 0 {
-		return "", fmt.Errorf("no pod found for job %s", job.Name)
+		return "", errors.Errorf("no pod found for job %s", job.Name)
 	}
 
 	// we only have one maintenance pod for the job
@@ -121,16 +123,29 @@ func GetMaintenanceResultFromJob(cli client.Client, job *batchv1.Job) (string, e
 
 	statuses := pod.Status.ContainerStatuses
 	if len(statuses) == 0 {
-		return "", fmt.Errorf("no container statuses found for job %s", job.Name)
+		return "", errors.Errorf("no container statuses found for job %s", job.Name)
 	}
 
 	// we only have one maintenance container
 	terminated := statuses[0].State.Terminated
 	if terminated == nil {
-		return "", fmt.Errorf("container for job %s is not terminated", job.Name)
+		return "", errors.Errorf("container for job %s is not terminated", job.Name)
 	}
 
-	return terminated.Message, nil
+	if terminated.Message == "" {
+		return "", nil
+	}
+
+	idx := strings.Index(terminated.Message, TerminationLogIndicator)
+	if idx == -1 {
+		return "", errors.New("error to locate repo maintenance error indicator from termination message")
+	}
+
+	if idx+len(TerminationLogIndicator) >= len(terminated.Message) {
+		return "", errors.New("nothing after repo maintenance error indicator in termination message")
+	}
+
+	return terminated.Message[idx+len(TerminationLogIndicator):], nil
 }
 
 func GetLatestMaintenanceJob(cli client.Client, ns string) (*batchv1.Job, error) {

@@ -34,6 +34,7 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/repository/provider"
+	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
@@ -399,6 +400,16 @@ func (m *manager) buildMaintenanceJob(
 		return nil, errors.Wrap(err, "failed to parse resource requirements for maintenance job")
 	}
 
+	labels := map[string]string{
+		repository.RepositoryNameLabel: param.BackupRepo.Name,
+	}
+
+	for _, k := range util.ThirdPartyLabels {
+		if v := veleroutil.GetVeleroServerLabelValue(deployment, k); v != "" {
+			labels[k] = v
+		}
+	}
+
 	// Set arguments
 	args := []string{"repo-maintenance"}
 	args = append(args, fmt.Sprintf("--repo-name=%s", param.BackupRepo.Spec.VolumeNamespace))
@@ -412,9 +423,7 @@ func (m *manager) buildMaintenanceJob(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      repository.GenerateJobName(param.BackupRepo.Name),
 			Namespace: param.BackupRepo.Namespace,
-			Labels: map[string]string{
-				repository.RepositoryNameLabel: param.BackupRepo.Name,
-			},
+			Labels:    labels,
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: new(int32), // Never retry
@@ -433,17 +442,26 @@ func (m *manager) buildMaintenanceJob(
 							Command: []string{
 								"/velero",
 							},
-							Args:            args,
-							ImagePullPolicy: v1.PullIfNotPresent,
-							Env:             envVars,
-							EnvFrom:         envFromSources,
-							VolumeMounts:    volumeMounts,
-							Resources:       resources,
+							Args:                     args,
+							ImagePullPolicy:          v1.PullIfNotPresent,
+							Env:                      envVars,
+							EnvFrom:                  envFromSources,
+							VolumeMounts:             volumeMounts,
+							Resources:                resources,
+							TerminationMessagePolicy: v1.TerminationMessageFallbackToLogsOnError,
 						},
 					},
 					RestartPolicy:      v1.RestartPolicyNever,
 					Volumes:            volumes,
 					ServiceAccountName: serviceAccount,
+					Tolerations: []v1.Toleration{
+						{
+							Key:      "os",
+							Operator: "Equal",
+							Effect:   "NoSchedule",
+							Value:    "windows",
+						},
+					},
 				},
 			},
 		},
@@ -452,22 +470,6 @@ func (m *manager) buildMaintenanceJob(
 	if config != nil && len(config.LoadAffinities) > 0 {
 		affinity := kube.ToSystemAffinity(config.LoadAffinities)
 		job.Spec.Template.Spec.Affinity = affinity
-	}
-
-	if tolerations := veleroutil.GetTolerationsFromVeleroServer(deployment); tolerations != nil {
-		job.Spec.Template.Spec.Tolerations = tolerations
-	}
-
-	if nodeSelector := veleroutil.GetNodeSelectorFromVeleroServer(deployment); nodeSelector != nil {
-		job.Spec.Template.Spec.NodeSelector = nodeSelector
-	}
-
-	if labels := veleroutil.GetVeleroServerLables(deployment); len(labels) > 0 {
-		job.Spec.Template.Labels = labels
-	}
-
-	if annotations := veleroutil.GetVeleroServerAnnotations(deployment); len(annotations) > 0 {
-		job.Spec.Template.Annotations = annotations
 	}
 
 	return job, nil
