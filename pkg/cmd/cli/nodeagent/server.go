@@ -22,6 +22,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/user"
 	"strings"
 	"time"
 
@@ -245,8 +246,13 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 	if err != nil {
 		return nil, err
 	}
+
 	if err := s.validatePodVolumesHostPath(s.kubeClient); err != nil {
-		return nil, err
+		s.logger.WithError(err).Warnf("Host path doesn't exists, pod volume is not supported on node %s", s.nodeName)
+	}
+
+	if err := s.validateUserForPodVolume(); err != nil {
+		s.logger.WithError(err).Warnf("Failed to validate user, pod volume is not supported on node %s", s.nodeName)
 	}
 
 	s.csiSnapshotClient, err = snapshotv1client.NewForConfig(clientConfig)
@@ -451,6 +457,19 @@ func (s *nodeAgentServer) validatePodVolumesHostPath(client kubernetes.Interface
 
 	if !valid {
 		return errors.New("unexpected directory structure for host-pods volume, ensure that the host-pods volume corresponds to the pods subdirectory of the kubelet root directory")
+	}
+
+	return nil
+}
+
+func (s *nodeAgentServer) validateUserForPodVolume() error {
+	curUser, err := user.Current()
+	if err != nil {
+		return errors.Wrap(err, "error getting current user")
+	}
+
+	if curUser.Name != "root" && curUser.Name != "ContainerAdministrator" {
+		return errors.Errorf("current user %s is not a privileged user", curUser.Name)
 	}
 
 	return nil

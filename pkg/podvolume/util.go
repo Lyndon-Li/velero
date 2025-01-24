@@ -32,6 +32,7 @@ const (
 	//
 	// TODO(2.0): remove
 	podAnnotationPrefix = "snapshot.velero.io/"
+	DenyOfServiceAnno   = "fs-backup-denied.velero.io"
 )
 
 // volumeBackupInfo describes the backup info of a volume backed up by PodVolumeBackups
