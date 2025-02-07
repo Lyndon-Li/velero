@@ -123,25 +123,18 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 
 	curLog.WithField("vsc name", vsc.Name).WithField("vs name", volumeSnapshot.Name).Infof("Got VSC from VS in namespace %s", volumeSnapshot.Namespace)
 
-	// backupVS, err := e.createBackupVS(ctx, ownerObject, volumeSnapshot)
-	// if err != nil {
-	// 	return errors.Wrap(err, "error to create backup volume snapshot")
-	// }
-
-	// curLog.WithField("vs name", backupVS.Name).Infof("Backup VS is created from %s/%s", volumeSnapshot.Namespace, volumeSnapshot.Name)
-
-	// defer func() {
-	// 	if err != nil {
-	// 		csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVS.Name, backupVS.Namespace, curLog)
-	// 	}
-	// }()
-
 	backupVSC, err := e.createBackupVSC(ctx, ownerObject, vsc)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup volume snapshot content")
 	}
 
 	curLog.WithField("vsc name", backupVSC.Name).Infof("Backup VSC is created from %s", vsc.Name)
+
+	defer func() {
+		if err != nil {
+			csi.DeleteVolumeSnapshotContentIfAny(ctx, e.csiSnapshotClient, backupVSC.Name, curLog)
+		}
+	}()
 
 	retained, err := csi.RetainVSC(ctx, e.csiSnapshotClient, vsc)
 	if err != nil {
@@ -163,6 +156,19 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 	}
 
 	curLog.WithField("vsc name", vsc.Name).Infof("VSC is deleted")
+
+	backupVS, err := e.createBackupVS(ctx, ownerObject, volumeSnapshot)
+	if err != nil {
+		return errors.Wrap(err, "error to create backup volume snapshot")
+	}
+
+	curLog.WithField("vs name", backupVS.Name).Infof("Backup VS is created from %s/%s", volumeSnapshot.Namespace, volumeSnapshot.Name)
+
+	defer func() {
+		if err != nil {
+			csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVS.Name, backupVS.Namespace, curLog)
+		}
+	}()
 
 	var volumeSize resource.Quantity
 	if volumeSnapshot.Status.RestoreSize != nil && !volumeSnapshot.Status.RestoreSize.IsZero() {
@@ -413,9 +419,9 @@ func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject cor
 
 	vs := &snapshotv1api.VolumeSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        backupVSName,
-			Namespace:   ownerObject.Namespace,
-			Annotations: snapshotVS.Annotations,
+			Name:      backupVSName,
+			Namespace: ownerObject.Namespace,
+			//Annotations: snapshotVS.Annotations,
 			// Don't add ownerReference to SnapshotBackup.
 			// The backupPVC should be deleted before backupVS, otherwise, the deletion of backupVS will fail since
 			// backupPVC has its dataSource referring to it
