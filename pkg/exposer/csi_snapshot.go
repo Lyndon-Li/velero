@@ -123,20 +123,20 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 
 	curLog.WithField("vsc name", vsc.Name).WithField("vs name", volumeSnapshot.Name).Infof("Got VSC from VS in namespace %s", volumeSnapshot.Namespace)
 
-	backupVS, err := e.createBackupVS(ctx, ownerObject, volumeSnapshot)
-	if err != nil {
-		return errors.Wrap(err, "error to create backup volume snapshot")
-	}
+	// backupVS, err := e.createBackupVS(ctx, ownerObject, volumeSnapshot)
+	// if err != nil {
+	// 	return errors.Wrap(err, "error to create backup volume snapshot")
+	// }
 
-	curLog.WithField("vs name", backupVS.Name).Infof("Backup VS is created from %s/%s", volumeSnapshot.Namespace, volumeSnapshot.Name)
+	// curLog.WithField("vs name", backupVS.Name).Infof("Backup VS is created from %s/%s", volumeSnapshot.Namespace, volumeSnapshot.Name)
 
-	defer func() {
-		if err != nil {
-			csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVS.Name, backupVS.Namespace, curLog)
-		}
-	}()
+	// defer func() {
+	// 	if err != nil {
+	// 		csi.DeleteVolumeSnapshotIfAny(ctx, e.csiSnapshotClient, backupVS.Name, backupVS.Namespace, curLog)
+	// 	}
+	// }()
 
-	backupVSC, err := e.createBackupVSC(ctx, ownerObject, vsc, backupVS)
+	backupVSC, err := e.createBackupVSC(ctx, ownerObject, vsc)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup volume snapshot content")
 	}
@@ -193,7 +193,7 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1.Obje
 		}
 	}
 
-	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupVS.Name, backupPVCStorageClass, csiExposeParam.AccessMode, volumeSize, backupPVCReadOnly)
+	backupPVC, err := e.createBackupPVC(ctx, ownerObject, backupPVCStorageClass, csiExposeParam.AccessMode, volumeSize, backupPVCReadOnly)
 	if err != nil {
 		return errors.Wrap(err, "error to create backup pvc")
 	}
@@ -431,8 +431,10 @@ func (e *csiSnapshotExposer) createBackupVS(ctx context.Context, ownerObject cor
 	return e.csiSnapshotClient.VolumeSnapshots(vs.Namespace).Create(ctx, vs, metav1.CreateOptions{})
 }
 
-func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject corev1.ObjectReference, snapshotVSC *snapshotv1api.VolumeSnapshotContent, vs *snapshotv1api.VolumeSnapshot) (*snapshotv1api.VolumeSnapshotContent, error) {
+func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject corev1.ObjectReference, snapshotVSC *snapshotv1api.VolumeSnapshotContent) (*snapshotv1api.VolumeSnapshotContent, error) {
 	backupVSCName := ownerObject.Name
+	backupVSName := ownerObject.Name
+	backupVSNamespace := ownerObject.Namespace
 
 	vsc := &snapshotv1api.VolumeSnapshotContent{
 		ObjectMeta: metav1.ObjectMeta{
@@ -441,10 +443,10 @@ func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject co
 		},
 		Spec: snapshotv1api.VolumeSnapshotContentSpec{
 			VolumeSnapshotRef: corev1.ObjectReference{
-				Name:            vs.Name,
-				Namespace:       vs.Namespace,
-				UID:             vs.UID,
-				ResourceVersion: vs.ResourceVersion,
+				Name:      backupVSName,
+				Namespace: backupVSNamespace,
+				// UID:             vs.UID,
+				// ResourceVersion: vs.ResourceVersion,
 			},
 			Source: snapshotv1api.VolumeSnapshotContentSource{
 				SnapshotHandle: snapshotVSC.Status.SnapshotHandle,
@@ -458,8 +460,9 @@ func (e *csiSnapshotExposer) createBackupVSC(ctx context.Context, ownerObject co
 	return e.csiSnapshotClient.VolumeSnapshotContents().Create(ctx, vsc, metav1.CreateOptions{})
 }
 
-func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject corev1.ObjectReference, backupVS, storageClass, accessMode string, resource resource.Quantity, readOnly bool) (*corev1.PersistentVolumeClaim, error) {
+func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject corev1.ObjectReference, storageClass, accessMode string, resource resource.Quantity, readOnly bool) (*corev1.PersistentVolumeClaim, error) {
 	backupPVCName := ownerObject.Name
+	backupVSName := ownerObject.Name
 
 	volumeMode, err := getVolumeModeByAccessMode(accessMode)
 	if err != nil {
@@ -475,7 +478,7 @@ func (e *csiSnapshotExposer) createBackupPVC(ctx context.Context, ownerObject co
 	dataSource := &corev1.TypedLocalObjectReference{
 		APIGroup: &snapshotv1api.SchemeGroupVersion.Group,
 		Kind:     "VolumeSnapshot",
-		Name:     backupVS,
+		Name:     backupVSName,
 	}
 
 	pvc := &corev1.PersistentVolumeClaim{
