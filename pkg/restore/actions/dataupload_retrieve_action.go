@@ -62,6 +62,22 @@ func (d *DataUploadRetrieveAction) Execute(input *velero.RestoreItemActionExecut
 		return nil, errors.Wrap(err, "unable to convert unstructured item to DataUpload.")
 	}
 
+	if dataUpload.Status.Phase != velerov2alpha1.DataUploadPhaseCompleted {
+		d.logger.Warnf("Skip DU %s as it is completed (%s)", dataUpload.Name, dataUpload.Status.Phase)
+
+		return &velero.RestoreItemActionExecuteOutput{
+			SkipRestore: true,
+		}, nil
+	}
+
+	if dataUpload.Labels[velerov1api.BackupNameLabel] != label.GetValidName(input.Restore.Spec.BackupName) {
+		d.logger.Warnf("Skip DU %s as it is not for backup %s (%s)", dataUpload.Name, input.Restore.Spec.BackupName, dataUpload.Labels[velerov1api.BackupNameLabel])
+
+		return &velero.RestoreItemActionExecuteOutput{
+			SkipRestore: true,
+		}, nil
+	}
+
 	backup := &velerov1api.Backup{}
 	err := d.client.Get(context.Background(), types.NamespacedName{
 		Namespace: input.Restore.Namespace,
