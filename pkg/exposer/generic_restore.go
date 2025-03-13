@@ -475,7 +475,7 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 				{
 					MaxSkew:           1,
 					TopologyKey:       "kubernetes.io/hostname",
-					WhenUnsatisfiable: corev1.ScheduleAnyway,
+					WhenUnsatisfiable: corev1.DoNotSchedule,
 					LabelSelector: &metav1.LabelSelector{
 						MatchLabels: map[string]string{
 							podGroupLabel: podGroupGenericRestore,
@@ -506,12 +506,13 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 			ServiceAccountName:            podInfo.serviceAccount,
 			TerminationGracePeriodSeconds: &gracePeriod,
 			Volumes:                       volumes,
-			NodeName:                      selectedNode,
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			SecurityContext:               securityCtx,
 			Tolerations:                   toleration,
 		},
 	}
+
+	e.log.Infof("selected node for restore pod %s is %s", restorePodName, selectedNode)
 
 	return e.kubeClient.CoreV1().Pods(ownerObject.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 }
