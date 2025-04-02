@@ -321,7 +321,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		original := du.DeepCopy()
 		du.Status.Phase = velerov2alpha1api.DataUploadPhaseInProgress
 		du.Status.StartTimestamp = &metav1.Time{Time: r.Clock.Now()}
-		du.Status.NodeOS = velerov2alpha1api.NodeOS(*res.ByPod.NodeOS)
+		du.Status.NodeOS = shared.NodeOS(*res.ByPod.NodeOS)
 		if err := r.client.Patch(ctx, du, client.MergeFrom(original)); err != nil {
 			log.WithError(err).Warnf("Failed to update dataupload %s to InProgress, will data path close and retry", du.Name)
 

@@ -152,7 +152,7 @@ func (d *DataUploadBuilder) Node(node string) *DataUploadBuilder {
 }
 
 // NodeOS sets the DataUpload's Node OS.
-func (d *DataUploadBuilder) NodeOS(nodeOS velerov2alpha1api.NodeOS) *DataUploadBuilder {
+func (d *DataUploadBuilder) NodeOS(nodeOS shared.NodeOS) *DataUploadBuilder {
 	d.object.Status.NodeOS = nodeOS
 	return d
 }

@@ -149,7 +149,7 @@ func (d *DataDownloadBuilder) Node(node string) *DataDownloadBuilder {
 }
 
 // NodeOS sets the DataDownload's Node OS.
-func (d *DataDownloadBuilder) NodeOS(nodeOS velerov2alpha1api.NodeOS) *DataDownloadBuilder {
+func (d *DataDownloadBuilder) NodeOS(nodeOS shared.NodeOS) *DataDownloadBuilder {
 	d.object.Spec.NodeOS = nodeOS
 	return d
 }

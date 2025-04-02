@@ -43,6 +43,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 	"github.com/vmware-tanzu/velero/pkg/builder"
@@ -68,7 +69,7 @@ func dataDownloadBuilder() *builder.DataDownloadBuilder {
 		PV:        "test-pv",
 		PVC:       "test-pvc",
 		Namespace: "test-ns",
-	}).NodeOS(velerov2alpha1api.NodeOS("linux"))
+	}).NodeOS(shared.NodeOS("linux"))
 }
 
 func initDataDownloadReconciler(objects []runtime.Object, needError ...bool) (*DataDownloadReconciler, error) {
@@ -329,12 +330,12 @@ func TestDataDownloadReconcile(t *testing.T) {
 		},
 		{
 			name:      "Restore is exposed",
-			dd:        dataDownloadBuilder().NodeOS(velerov2alpha1api.NodeOSLinux).Result(),
+			dd:        dataDownloadBuilder().NodeOS(shared.NodeOSLinux).Result(),
 			targetPVC: builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
 		},
 		{
 			name:              "Expected node doesn't exist",
-			dd:                dataDownloadBuilder().NodeOS(velerov2alpha1api.NodeOSWindows).Result(),
+			dd:                dataDownloadBuilder().NodeOS(shared.NodeOSWindows).Result(),
 			targetPVC:         builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
 			expectedStatusMsg: "no appropriate node to run datadownload",
 		},

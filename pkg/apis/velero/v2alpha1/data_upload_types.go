@@ -96,16 +96,6 @@ const (
 	DataUploadPhaseFailed     DataUploadPhase = "Failed"
 )
 
-// NodeOS represents OS of a node.
-// +kubebuilder:validation:Enum=auto;linux;windows
-type NodeOS string
-
-const (
-	NodeOSLinux   NodeOS = "linux"
-	NodeOSWindows NodeOS = "windows"
-	NodeOSAuto    NodeOS = "auto"
-)
-
 // DataUploadStatus is the current status of a DataUpload.
 type DataUploadStatus struct {
 	// Phase is the current state of the DataUpload.
@@ -157,7 +147,7 @@ type DataUploadStatus struct {
 
 	// NodeOS is OS of the node where the DataUpload is processed.
 	// +optional
-	NodeOS NodeOS `json:"nodeOS,omitempty"`
+	NodeOS shared.NodeOS `json:"nodeOS,omitempty"`
 
 	// AcceptedByNode is name of the node where the DataUpload is prepared.
 	// +optional
@@ -239,5 +229,5 @@ type DataUploadResult struct {
 
 	// NodeOS is OS of the node where the DataUpload is processed.
 	// +optional
-	NodeOS NodeOS `json:"nodeOS,omitempty"`
+	NodeOS shared.NodeOS `json:"nodeOS,omitempty"`
 }
