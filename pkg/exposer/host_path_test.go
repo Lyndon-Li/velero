@@ -95,7 +95,7 @@ func TestGetPodVolumeHostPath(t *testing.T) {
 				singlePathMatch = test.pathMatchFunc
 			}
 
-			_, err := GetPodVolumeHostPath(context.Background(), test.pod, test.pvc, nil, nil, velerotest.NewLogger())
+			_, err := GetPodVolumeHostPath(context.Background(), "", test.pod, test.pvc, nil, nil, velerotest.NewLogger())
 			if test.err != "" || err != nil {
 				assert.EqualError(t, err, test.err)
 			}

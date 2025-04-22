@@ -288,34 +288,6 @@ func (s *nodeAgentServer) run() {
 
 	s.logger.Info("Starting controllers")
 
-	credentialFileStore, err := credentials.NewNamespacedFileStore(
-		s.mgr.GetClient(),
-		s.namespace,
-		defaultCredentialsDirectory,
-		filesystem.NewFileSystem(),
-	)
-	if err != nil {
-		s.logger.Fatalf("Failed to create credentials file store: %v", err)
-	}
-
-	credSecretStore, err := credentials.NewNamespacedSecretStore(s.mgr.GetClient(), s.namespace)
-	if err != nil {
-		s.logger.Fatalf("Failed to create secret file store: %v", err)
-	}
-
-	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
-	repoEnsurer := repository.NewEnsurer(s.mgr.GetClient(), s.logger, s.config.resourceTimeout)
-	pvbReconciler := controller.NewPodVolumeBackupReconciler(s.mgr.GetClient(), s.dataPathMgr, repoEnsurer,
-		credentialGetter, s.nodeName, s.mgr.GetScheme(), s.metrics, s.logger)
-
-	if err := pvbReconciler.SetupWithManager(s.mgr); err != nil {
-		s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerPodVolumeBackup)
-	}
-
-	if err = controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.dataPathMgr, repoEnsurer, credentialGetter, s.logger).SetupWithManager(s.mgr); err != nil {
-		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
-	}
-
 	var loadAffinity *kube.LoadAffinity
 	if s.dataPathConfigs != nil && len(s.dataPathConfigs.LoadAffinity) > 0 {
 		loadAffinity = s.dataPathConfigs.LoadAffinity[0]
@@ -336,6 +308,35 @@ func (s *nodeAgentServer) run() {
 			podResources = res
 			s.logger.Infof("Using customized pod resource requirements %v", s.dataPathConfigs.PodResources)
 		}
+	}
+
+	credentialFileStore, err := credentials.NewNamespacedFileStore(
+		s.mgr.GetClient(),
+		s.namespace,
+		defaultCredentialsDirectory,
+		filesystem.NewFileSystem(),
+	)
+	if err != nil {
+		s.logger.Fatalf("Failed to create credentials file store: %v", err)
+	}
+
+	credSecretStore, err := credentials.NewNamespacedSecretStore(s.mgr.GetClient(), s.namespace)
+	if err != nil {
+		s.logger.Fatalf("Failed to create secret file store: %v", err)
+	}
+
+	credentialGetter := &credentials.CredentialGetter{FromFile: credentialFileStore, FromSecret: credSecretStore}
+	repoEnsurer := repository.NewEnsurer(s.mgr.GetClient(), s.logger, s.config.resourceTimeout)
+	pvbReconciler := controller.NewPodVolumeBackupReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, repoEnsurer,
+		credentialGetter, s.nodeName, podResources, s.mgr.GetScheme(), s.metrics, s.logger)
+
+	if err := pvbReconciler.SetupWithManager(s.mgr); err != nil {
+		s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerPodVolumeBackup)
+	}
+
+	if err = controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, repoEnsurer,
+		credentialGetter, s.nodeName, podResources, s.logger).SetupWithManager(s.mgr); err != nil {
+		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
 
 	dataUploadReconciler := controller.NewDataUploadReconciler(

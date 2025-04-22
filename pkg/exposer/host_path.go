@@ -19,6 +19,7 @@ package exposer
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -36,7 +37,7 @@ var getVolumeMode = kube.GetVolumeMode
 var singlePathMatch = kube.SinglePathMatch
 
 // GetPodVolumeHostPath returns a path that can be accessed from the host for a given volume of a pod
-func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, volumeName string,
+func GetPodVolumeHostPath(ctx context.Context, hostRoot string, pod *corev1.Pod, volumeName string,
 	cli ctrlclient.Client, fs filesystem.Interface, log logrus.FieldLogger) (datapath.AccessPoint, error) {
 	logger := log.WithField("pod name", pod.Name).WithField("pod UID", pod.GetUID()).WithField("volume", volumeName)
 
@@ -57,15 +58,29 @@ func GetPodVolumeHostPath(ctx context.Context, pod *corev1.Pod, volumeName strin
 		volSubDir = "volumeDevices"
 	}
 
-	pathGlob := fmt.Sprintf("/host_pods/%s/%s/*/%s", string(pod.GetUID()), volSubDir, volDir)
-	logger.WithField("pathGlob", pathGlob).Debug("Looking for path matching glob")
+	path := ""
+	_, err = fs.Stat("/host_pods")
+	if os.IsNotExist(err) {
+		root := "/var/lib/kubelet/pods"
+		if hostRoot != "" {
+			root = hostRoot
+		}
 
-	path, err := singlePathMatch(pathGlob, fs, logger)
-	if err != nil {
-		return datapath.AccessPoint{}, errors.Wrapf(err, "error identifying unique volume path on host for volume %s in pod %s", volumeName, pod.Name)
+		path = fmt.Sprintf("%s/%s/%s/kubernetes.io~csi/%s", root, string(pod.GetUID()), volSubDir, volDir)
+		logger.WithField("path", path).Info("Using static path for CSI")
+	} else if err != nil {
+		return datapath.AccessPoint{}, errors.Wrap(err, "error locating host path")
+	} else {
+		pathGlob := fmt.Sprintf("%s/%s/%s/*/%s", hostRoot, string(pod.GetUID()), volSubDir, volDir)
+		logger.WithField("pathGlob", pathGlob).Debug("Looking for path matching glob")
+
+		path, err = singlePathMatch(pathGlob, fs, logger)
+		if err != nil {
+			return datapath.AccessPoint{}, errors.Wrapf(err, "error identifying unique volume path on host for volume %s in pod %s", volumeName, pod.Name)
+		}
+
+		logger.WithField("path", path).Info("Found path matching glob")
 	}
-
-	logger.WithField("path", path).Info("Found path matching glob")
 
 	return datapath.AccessPoint{
 		ByPath:  path,

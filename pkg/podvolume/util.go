@@ -17,6 +17,7 @@ limitations under the License.
 package podvolume
 
 import (
+	"fmt"
 	"strings"
 
 	corev1api "k8s.io/api/core/v1"
@@ -141,6 +142,10 @@ func GetSnapshotIdentifier(podVolumeBackups *velerov1api.PodVolumeBackupList) ma
 	}
 
 	return res
+}
+
+func GetRealSource(sourceNamespace string, podName string, podVolume string) string {
+	return fmt.Sprintf("%s/%s/%s", sourceNamespace, podName, podVolume)
 }
 
 func getUploaderTypeOrDefault(uploaderType string) string {

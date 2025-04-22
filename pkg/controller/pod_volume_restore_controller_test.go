@@ -195,7 +195,7 @@ func TestShouldProcess(t *testing.T) {
 
 			c := &PodVolumeRestoreReconciler{
 				logger: logrus.New(),
-				Client: cli,
+				client: cli,
 				clock:  &clocks.RealClock{},
 			}
 
@@ -488,14 +488,14 @@ func TestFindVolumeRestoresForPod(t *testing.T) {
 
 	// no matching PVR
 	reconciler := &PodVolumeRestoreReconciler{
-		Client: clientBuilder.Build(),
+		client: clientBuilder.Build(),
 		logger: logrus.New(),
 	}
 	requests := reconciler.findVolumeRestoresForPod(context.Background(), pod)
 	assert.Empty(t, requests)
 
 	// contain one matching PVR
-	reconciler.Client = clientBuilder.WithLists(&velerov1api.PodVolumeRestoreList{
+	reconciler.client = clientBuilder.WithLists(&velerov1api.PodVolumeRestoreList{
 		Items: []velerov1api.PodVolumeRestore{
 			{
 				ObjectMeta: metav1.ObjectMeta{

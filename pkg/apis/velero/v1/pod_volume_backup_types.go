@@ -57,15 +57,22 @@ type PodVolumeBackupSpec struct {
 	// +optional
 	// +nullable
 	UploaderSettings map[string]string `json:"uploaderSettings,omitempty"`
+
+	// Cancel indicates request to cancel the ongoing PodVolumeBackup. It can be set
+	// when the PodVolumeBackup is in InProgress phase
+	Cancel bool `json:"cancel,omitempty"`
 }
 
 // PodVolumeBackupPhase represents the lifecycle phase of a PodVolumeBackup.
-// +kubebuilder:validation:Enum=New;InProgress;Completed;Failed
+// +kubebuilder:validation:Enum=New;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type PodVolumeBackupPhase string
 
 const (
 	PodVolumeBackupPhaseNew        PodVolumeBackupPhase = "New"
+	PodVolumeBackupPhasePrepared   PodVolumeBackupPhase = "Prepared"
 	PodVolumeBackupPhaseInProgress PodVolumeBackupPhase = "InProgress"
+	PodVolumeBackupPhaseCanceling  PodVolumeBackupPhase = "Canceling"
+	PodVolumeBackupPhaseCanceled   PodVolumeBackupPhase = "Canceled"
 	PodVolumeBackupPhaseCompleted  PodVolumeBackupPhase = "Completed"
 	PodVolumeBackupPhaseFailed     PodVolumeBackupPhase = "Failed"
 )
@@ -115,14 +122,15 @@ type PodVolumeBackupStatus struct {
 // the genclient and k8s:deepcopy markers will no longer be needed and should be removed.
 // +genclient
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
-// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="Pod Volume Backup status such as New/InProgress"
-// +kubebuilder:printcolumn:name="Created",type="date",JSONPath=".status.startTimestamp",description="Time when this backup was started"
-// +kubebuilder:printcolumn:name="Namespace",type="string",JSONPath=".spec.pod.namespace",description="Namespace of the pod containing the volume to be backed up"
-// +kubebuilder:printcolumn:name="Pod",type="string",JSONPath=".spec.pod.name",description="Name of the pod containing the volume to be backed up"
-// +kubebuilder:printcolumn:name="Volume",type="string",JSONPath=".spec.volume",description="Name of the volume to be backed up"
-// +kubebuilder:printcolumn:name="Uploader Type",type="string",JSONPath=".spec.uploaderType",description="The type of the uploader to handle data transfer"
+// +kubebuilder:storageversion
+// +kubebuilder:printcolumn:name="Status",type="string",JSONPath=".status.phase",description="PodVolumeBackup status such as New/InProgress"
+// +kubebuilder:printcolumn:name="Started",type="date",JSONPath=".status.startTimestamp",description="Time duration since this PodVolumeBackup was started"
+// +kubebuilder:printcolumn:name="Bytes Done",type="integer",format="int64",JSONPath=".status.progress.bytesDone",description="Completed bytes"
+// +kubebuilder:printcolumn:name="Total Bytes",type="integer",format="int64",JSONPath=".status.progress.totalBytes",description="Total bytes"
 // +kubebuilder:printcolumn:name="Storage Location",type="string",JSONPath=".spec.backupStorageLocation",description="Name of the Backup Storage Location where this backup should be stored"
-// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
+// +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time duration since this PodVolumeBackup was created"
+// +kubebuilder:printcolumn:name="Node",type="string",JSONPath=".status.node",description="Name of the node where the PodVolumeBackup is processed"
+// +kubebuilder:printcolumn:name="Uploader",type="string",JSONPath=".spec.uploaderType",description="The type of the uploader to handle data transfer"
 // +kubebuilder:object:root=true
 // +kubebuilder:object:generate=true
 

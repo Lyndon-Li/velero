@@ -188,7 +188,7 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 			// Setup reconciler
 			Expect(velerov1api.AddToScheme(scheme.Scheme)).To(Succeed())
 			r := PodVolumeBackupReconciler{
-				Client:           fakeClient,
+				client:           fakeClient,
 				clock:            testclocks.NewFakeClock(now),
 				metrics:          metrics.NewNodeMetrics(),
 				credentialGetter: &credentials.CredentialGetter{FromFile: credentialFileStore},
@@ -212,7 +212,7 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 			}
 
 			pvb := velerov1api.PodVolumeBackup{}
-			err = r.Client.Get(ctx, kbclient.ObjectKey{
+			err = r.client.Get(ctx, kbclient.ObjectKey{
 				Name:      test.pvb.Name,
 				Namespace: test.pvb.Namespace,
 			}, &pvb)
