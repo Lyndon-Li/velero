@@ -125,19 +125,22 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// Add finalizer
 	// Logic for clear resources when datadownload been deleted
 	if dd.DeletionTimestamp.IsZero() { // add finalizer for all cr at beginning
-		if !isDataDownloadInFinalState(dd) && !controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
-			succeeded, err := r.exclusiveUpdateDataDownload(ctx, dd, func(dd *velerov2alpha1api.DataDownload) {
+		if !IsDataDownloadInFinalState(dd) && !controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
+			if err := UpdateDataDownloadWithRetry(ctx, r.client, req.NamespacedName, log, func(dd *velerov2alpha1api.DataDownload) bool {
+				if controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
+					return false
+				}
+
 				controllerutil.AddFinalizer(dd, DataUploadDownloadFinalizer)
-			})
-			if err != nil {
+
+				return true
+
+			}); err != nil {
 				log.Errorf("failed to add finalizer with error %s for %s/%s", err.Error(), dd.Namespace, dd.Name)
 				return ctrl.Result{}, err
-			} else if !succeeded {
-				log.Warnf("failed to add finalizer for %s/%s and will requeue later", dd.Namespace, dd.Name)
-				return ctrl.Result{Requeue: true}, nil
 			}
 		}
-	} else if controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) && !dd.Spec.Cancel && !isDataDownloadInFinalState(dd) {
+	} else if controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) && !dd.Spec.Cancel && !IsDataDownloadInFinalState(dd) {
 		// when delete cr we need to clear up internal resources created by Velero, here we use the cancel mechanism
 		// to help clear up resources instead of clear them directly in case of some conflict with Expose action
 		log.Warnf("Cancel dd under phase %s because it is being deleted", dd.Status.Phase)
@@ -167,7 +170,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		accepted, err := r.acceptDataDownload(ctx, dd)
 		if err != nil {
-			return r.errorOut(ctx, dd, err, "error to accept the data download", log)
+			return ctrl.Result{}, errors.Wrapf(err, "error accepting the data download %s", dd.Name)
 		}
 
 		if !accepted {
@@ -198,7 +201,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 					return ctrl.Result{}, errors.Wrap(err, "getting DataUpload")
 				}
 			}
-			if isDataDownloadInFinalState(dd) {
+			if IsDataDownloadInFinalState(dd) {
 				log.Warnf("expose snapshot with err %v but it may caused by clean up resources in cancel action", err)
 				r.restoreExposer.CleanUp(ctx, getDataDownloadOwnerObject(dd))
 				return ctrl.Result{}, nil
@@ -208,21 +211,16 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 		log.Info("Restore is exposed")
 
-		// we need to get CR again for it may canceled by datadownload controller on other
-		// nodes when doing expose action, if detectd cancel action we need to clear up the internal
-		// resources created by velero during backup.
-		if err := r.client.Get(ctx, req.NamespacedName, dd); err != nil {
-			if apierrors.IsNotFound(err) {
-				log.Debug("Unable to find datadownload")
-				return ctrl.Result{}, nil
-			}
-			return ctrl.Result{}, errors.Wrap(err, "getting datadownload")
+		if err := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
+			dd.Status.Phase = velerov2alpha1api.DataDownloadPhasePreparing
+			dd.Status.StartTimestamp = &metav1.Time{Time: r.Clock.Now()}
+
+			return true
+		}); err != nil {
+			return r.errorOut(ctx, dd, err, "error updating dd to Preparing", log)
 		}
-		// we need to clean up resources as resources created in Expose it may later than cancel action or prepare time
-		// and need to clean up resources again
-		if isDataDownloadInFinalState(dd) {
-			r.restoreExposer.CleanUp(ctx, getDataDownloadOwnerObject(dd))
-		}
+
+		log.Info("du is marked as Preparing")
 
 		return ctrl.Result{}, nil
 	} else if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseAccepted {
@@ -343,7 +341,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// instead of intermediate state
 		// remove finalizer no matter whether the cr is being deleted or not for it is no longer needed when internal resources are all cleaned up
 		// also in final status cr won't block the direct delete of the velero namespace
-		if isDataDownloadInFinalState(dd) && controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
+		if IsDataDownloadInFinalState(dd) && controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
 			original := dd.DeepCopy()
 			controllerutil.RemoveFinalizer(dd, DataUploadDownloadFinalizer)
 			if err := r.client.Patch(ctx, dd, client.MergeFrom(original)); err != nil {
@@ -799,7 +797,7 @@ func findDataDownloadByPod(client client.Client, pod corev1api.Pod) (*velerov2al
 	return nil, nil
 }
 
-func isDataDownloadInFinalState(dd *velerov2alpha1api.DataDownload) bool {
+func IsDataDownloadInFinalState(dd *velerov2alpha1api.DataDownload) bool {
 	return dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseFailed ||
 		dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseCanceled ||
 		dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseCompleted

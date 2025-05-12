@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -33,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	clocks "k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -45,52 +47,48 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/vmware-tanzu/velero/internal/credentials"
 	veleroapishared "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/restorehelper"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
-	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
 func NewPodVolumeRestoreReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	ensurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter, nodeName string, podResources corev1.ResourceRequirements,
+	nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, podResources corev1.ResourceRequirements,
 	logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
 	return &PodVolumeRestoreReconciler{
-		client:            client,
-		mgr:               mgr,
-		kubeClient:        kubeClient,
-		logger:            logger.WithField("controller", "PodVolumeRestore"),
-		repositoryEnsurer: ensurer,
-		credentialGetter:  credentialGetter,
-		nodeName:          nodeName,
-		fileSystem:        filesystem.NewFileSystem(),
-		clock:             &clocks.RealClock{},
-		podResources:      podResources,
-		dataPathMgr:       dataPathMgr,
+		client:           client,
+		mgr:              mgr,
+		kubeClient:       kubeClient,
+		logger:           logger.WithField("controller", "PodVolumeRestore"),
+		nodeName:         nodeName,
+		clock:            &clocks.RealClock{},
+		podResources:     podResources,
+		dataPathMgr:      dataPathMgr,
+		preparingTimeout: preparingTimeout,
+		resourceTimeout:  resourceTimeout,
+		exposer:          exposer.NewPodVolumeExposer(kubeClient, logger),
 	}
 }
 
 type PodVolumeRestoreReconciler struct {
-	client            client.Client
-	mgr               manager.Manager
-	kubeClient        kubernetes.Interface
-	logger            logrus.FieldLogger
-	repositoryEnsurer *repository.Ensurer
-	credentialGetter  *credentials.CredentialGetter
-	nodeName          string
-	fileSystem        filesystem.Interface
-	clock             clocks.WithTickerAndDelayedExecution
-	podResources      corev1.ResourceRequirements
-	exposer           exposer.PodVolumeExposer
-	dataPathMgr       *datapath.Manager
+	client           client.Client
+	mgr              manager.Manager
+	kubeClient       kubernetes.Interface
+	logger           logrus.FieldLogger
+	nodeName         string
+	clock            clocks.WithTickerAndDelayedExecution
+	podResources     corev1.ResourceRequirements
+	exposer          exposer.PodVolumeExposer
+	dataPathMgr      *datapath.Manager
+	preparingTimeout time.Duration
+	resourceTimeout  time.Duration
 }
 
 // +kubebuilder:rbac:groups=velero.io,resources=podvolumerestores,verbs=get;list;watch;create;update;patch;delete
@@ -116,38 +114,36 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		log = log.WithField("restore", fmt.Sprintf("%s/%s", pvr.Namespace, pvr.OwnerReferences[0].Name))
 	}
 
-	shouldProcess, pod, err := c.shouldProcess(ctx, log, pvr)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !shouldProcess {
-		return ctrl.Result{}, nil
-	}
-
-	initContainerIndex := getInitContainerIndex(pod)
-	if initContainerIndex > 0 {
-		log.Warnf(`Init containers before the %s container may cause issues
-		          if they interfere with volumes being restored: %s index %d`, restorehelper.WaitInitContainer, restorehelper.WaitInitContainer, initContainerIndex)
-	}
-
 	// Logic for clear resources when pvb been deleted
 	if pvr.DeletionTimestamp.IsZero() { // add finalizer for all cr at beginning
-		if !isPVRInFinalState(pvr) && !controllerutil.ContainsFinalizer(pvr, PodVolumeFinalizer) {
-			if err := PathPVR(ctx, c.client, pvr, func(pvb *velerov1api.PodVolumeRestore) {
-				controllerutil.AddFinalizer(pvb, PodVolumeFinalizer)
+		if !IsPVRInFinalState(pvr) && !controllerutil.ContainsFinalizer(pvr, PodVolumeFinalizer) {
+			if err := UpdatePVRWithRetry(ctx, c.client, req.NamespacedName, log, func(pvr *velerov1api.PodVolumeRestore) bool {
+				if controllerutil.ContainsFinalizer(pvr, PodVolumeFinalizer) {
+					return false
+				}
+
+				controllerutil.AddFinalizer(pvr, PodVolumeFinalizer)
+
+				return true
 			}); err != nil {
 				log.Errorf("failed to add finalizer with error %s for %s/%s", err.Error(), pvr.Namespace, pvr.Name)
 				return ctrl.Result{}, err
 			}
 		}
-	} else if controllerutil.ContainsFinalizer(pvr, PodVolumeFinalizer) && !pvr.Spec.Cancel && !isPVRInFinalState(pvr) {
+	} else if controllerutil.ContainsFinalizer(pvr, PodVolumeFinalizer) && !pvr.Spec.Cancel && !IsPVRInFinalState(pvr) {
 		// when delete cr we need to clear up internal resources created by Velero, here we use the cancel mechanism
 		// to help clear up resources instead of clear them directly in case of some conflict with Expose action
-		log.Warnf("Cancel pvb under phase %s because it is being deleted", pvr.Status.Phase)
+		log.Warnf("Cancel pvr under phase %s because it is being deleted", pvr.Status.Phase)
 
-		if err := PathPVR(ctx, c.client, pvr, func(pvb *velerov1api.PodVolumeRestore) {
+		if err := UpdatePVRWithRetry(ctx, c.client, req.NamespacedName, log, func(pvr *velerov1api.PodVolumeRestore) bool {
+			if pvr.Spec.Cancel {
+				return false
+			}
+
 			pvr.Spec.Cancel = true
-			pvr.Status.Message = "Cancel pvb because it is being deleted"
+			pvr.Status.Message = "Cancel pvr because it is being deleted"
+
+			return true
 		}); err != nil {
 			log.Errorf("failed to set cancel flag with error %s for %s/%s", err.Error(), pvr.Namespace, pvr.Name)
 			return ctrl.Result{}, err
@@ -155,7 +151,39 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if pvr.Status.Phase == "" || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseNew {
-		log.Info("Restore starting")
+		if pvr.Spec.Cancel {
+			log.Infof("pvr %s is canceled in Phase %s", pvr.GetName(), pvr.Status.Phase)
+			if err := c.tryCancelPodVolumeRestore(ctx, pvr, ""); err != nil {
+				return ctrl.Result{}, err
+			}
+
+			return ctrl.Result{}, nil
+		}
+
+		shouldProcess, pod, err := c.shouldProcess(ctx, log, pvr)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !shouldProcess {
+			return ctrl.Result{}, nil
+		}
+
+		initContainerIndex := getInitContainerIndex(pod)
+		if initContainerIndex > 0 {
+			log.Warnf(`Init containers before the %s container may cause issues
+					  if they interfere with volumes being restored: %s index %d`, restorehelper.WaitInitContainer, restorehelper.WaitInitContainer, initContainerIndex)
+		}
+
+		log.Info("Accepting PVR")
+
+		if accepted, err := c.acceptPodVolumeRestore(ctx, pvr); err != nil {
+			return c.errorOut(ctx, pvr, err, "error to accept pvr", log)
+		} else if !accepted {
+			log.Debug("pvr is not accepted")
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		}
+
+		log.Info("Exposing PVR")
 
 		exposeParam, err := c.setupExposeParam(pvr)
 		if err != nil {
@@ -168,7 +196,7 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 					return ctrl.Result{}, errors.Wrap(err, "getting pvr")
 				}
 			}
-			if isPVRInFinalState(pvr) {
+			if IsPVRInFinalState(pvr) {
 				log.Warnf("expose pvr with err %v but it may caused by clean up resources in cancel action", err)
 				c.exposer.CleanUp(ctx, getPVROwnerObject(pvr))
 				return ctrl.Result{}, nil
@@ -177,14 +205,47 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			}
 		}
 
-		log.Info("PVR is exposed")
+		log.Info("pvr is exposed")
+
+		if err := UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log, func(pvr *velerov1api.PodVolumeRestore) bool {
+			pvr.Status.Phase = velerov1api.PodVolumeRestorePhasePreparing
+			pvr.Status.StartTimestamp = &metav1.Time{Time: c.clock.Now()}
+
+			return true
+		}); err != nil {
+			return c.errorOut(ctx, pvr, err, "error updating pvr to Preparing", log)
+		}
+
+		log.Info("pvr is marked as Preparing")
+
+		return ctrl.Result{}, nil
+	} else if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted || pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePreparing {
+		if pvr.Spec.Cancel {
+			log.Infof("pvr has been canceled %s in Phase %s", pvr.GetName(), pvr.Status.Phase)
+			if err := c.tryCancelPodVolumeRestore(ctx, pvr, ""); err != nil {
+				log.WithError(err).Warnf("Failed to set pvr to cancelled, will retry")
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+		} else if peekErr := c.exposer.PeekExposed(ctx, getPVROwnerObject(pvr)); peekErr != nil {
+			log.Errorf("Cancel PVR %s/%s because of expose error %s", pvr.Namespace, pvr.Name, peekErr)
+			if err := c.tryCancelPodVolumeRestore(ctx, pvr, fmt.Sprintf("found a pvr %s/%s with expose error: %s. mark it as cancel", pvr.Namespace, pvr.Name, peekErr)); err != nil {
+				log.WithError(err).Warnf("Failed to set pvr to cancelled, will retry")
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+		} else if pvr.Status.AcceptedTimestamp != nil {
+			if time.Since(pvr.Status.AcceptedTimestamp.Time) >= c.preparingTimeout {
+				if err := c.onPrepareTimeout(ctx, pvr); err != nil {
+					log.WithError(err).Warnf("Failed to handle pvr timeout, will retry")
+					return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+				}
+			}
+		}
 
 		return ctrl.Result{}, nil
 	} else if pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePrepared {
 		log.Info("PVR is prepared")
 
-		if pvr.Spec.Cancel {
-			c.OnDataPathCancelled(ctx, pvr.GetNamespace(), pvr.GetName())
+		if pvr.Status.Node != c.nodeName {
 			return ctrl.Result{}, nil
 		}
 
@@ -240,6 +301,18 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
 		}
 
+		if err := UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log, func(pvb *velerov1api.PodVolumeRestore) bool {
+			pvr.Status.Phase = velerov1api.PodVolumeRestorePhaseInProgress
+			pvr.Status.StartTimestamp = &metav1.Time{Time: c.clock.Now()}
+
+			return true
+		}); err != nil {
+			log.WithError(err).Warnf("Failed to update pvr %s to InProgress, will data path close and retry", pvr.Name)
+
+			c.closeDataPath(ctx, pvr.Name)
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		}
+
 		log.Info("pvr is marked as in progress")
 
 		if err := c.startCancelableDataPath(asyncBR, pvr, res, log); err != nil {
@@ -251,6 +324,10 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 		return ctrl.Result{}, nil
 	} else if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseInProgress {
+		if pvr.Status.Node != c.nodeName {
+			return ctrl.Result{}, nil
+		}
+
 		log.Info("pvr is in progress")
 		if pvr.Spec.Cancel {
 			log.Info("pvr is being canceled")
@@ -272,7 +349,7 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, nil
-	} else {
+	} else if IsPVRInFinalState(pvr) {
 		if err := PathPVR(ctx, c.client, pvr, func(pvr *velerov1api.PodVolumeRestore) {
 			controllerutil.RemoveFinalizer(pvr, PodVolumeFinalizer)
 		}); err != nil {
@@ -280,7 +357,107 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 
 		return ctrl.Result{}, nil
+	} else {
+		return ctrl.Result{}, nil
 	}
+}
+
+func (r *PodVolumeRestoreReconciler) acceptPodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore) (bool, error) {
+	updated := pvr.DeepCopy()
+
+	updateFunc := func(pvr *velerov1api.PodVolumeRestore) {
+		pvr.Status.AcceptedTimestamp = &metav1.Time{Time: r.clock.Now()}
+		pvr.Status.Phase = velerov1api.PodVolumeRestorePhaseAccepted
+		pvr.Status.Node = r.nodeName
+	}
+
+	succeeded, err := r.exclusiveUpdatePodVolumeRestore(ctx, updated, updateFunc)
+
+	if err != nil {
+		return false, err
+	}
+
+	if succeeded {
+		updateFunc(pvr) // If update success, it's need to update du values in memory
+		r.logger.WithField("pvr", pvr.Name).Infof("This pvr has been accepted by %s", r.nodeName)
+		return true, nil
+	}
+
+	r.logger.WithField("pvr", pvr.Name).Info("This pvr is not successfully accepted")
+	return false, nil
+}
+
+func (c *PodVolumeRestoreReconciler) tryCancelPodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore, message string) error {
+	if err := UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, c.logger.WithField("pvr", pvr.Name), func(pvb *velerov1api.PodVolumeRestore) bool {
+		if IsPVRInFinalState(pvr) {
+			return false
+		}
+
+		pvr.Status.Phase = velerov1api.PodVolumeRestorePhaseCanceled
+		if pvr.Status.StartTimestamp.IsZero() {
+			pvr.Status.StartTimestamp = &metav1.Time{Time: c.clock.Now()}
+		}
+		pvr.Status.CompletionTimestamp = &metav1.Time{Time: c.clock.Now()}
+
+		if message != "" {
+			pvb.Status.Message = message
+		}
+
+		return true
+	}); err != nil {
+		return errors.Wrapf(err, "error cancelling pvr %s/%s", pvr.Namespace, pvr.Name)
+	}
+
+	c.exposer.CleanUp(ctx, getPVROwnerObject(pvr))
+
+	return nil
+}
+
+func (c *PodVolumeRestoreReconciler) exclusiveUpdatePodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore,
+	updateFunc func(*velerov1api.PodVolumeRestore)) (bool, error) {
+	updateFunc(pvr)
+
+	err := c.client.Update(ctx, pvr)
+	if err == nil {
+		return true, nil
+	}
+
+	// warn we won't rollback du values in memory when error
+	if apierrors.IsConflict(err) {
+		return false, nil
+	} else {
+		return false, err
+	}
+}
+
+func (c *PodVolumeRestoreReconciler) onPrepareTimeout(ctx context.Context, pvr *velerov1api.PodVolumeRestore) error {
+	log := c.logger.WithField("PVR", pvr.Name)
+
+	log.Info("Timeout happened for preparing PVR")
+
+	if err := UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log, func(pvr *velerov1api.PodVolumeRestore) bool {
+		if IsPVRInFinalState(pvr) {
+			return false
+		}
+
+		pvr.Status.Phase = velerov1api.PodVolumeRestorePhaseFailed
+		pvr.Status.Message = "timeout on preparing pvr"
+
+		return true
+	}); err != nil {
+		return err
+	}
+
+	diags := strings.Split(c.exposer.DiagnoseExpose(ctx, getPVROwnerObject(pvr)), "\n")
+	for _, diag := range diags {
+		log.Warnf("[Diagnose PVR expose]%s", diag)
+	}
+
+	c.exposer.CleanUp(ctx, getPVROwnerObject(pvr))
+
+	log.Info("PVR has been cleaned up")
+
+	return nil
 }
 
 func (c *PodVolumeRestoreReconciler) initCancelableDataPath(ctx context.Context, asyncBR datapath.AsyncBR, res *exposer.ExposeResult, log logrus.FieldLogger) error {
@@ -439,27 +616,37 @@ func (c *PodVolumeRestoreReconciler) findPVRForPod(ctx context.Context, podObj c
 		"pvr": pvr.Name,
 	})
 
-	if !isPVRNew(pvr) {
+	if pvr.Status.Phase != velerov1api.PodVolumeRestorePhasePreparing {
 		return []reconcile.Request{}
 	}
 
 	if pod.Status.Phase == v1.PodRunning {
 		log.Info("Preparing pvr")
-		// we don't expect anyone else update the CR during the Prepare process
-		err := PathPVR(context.Background(), c.client, pvr, c.preparePVR)
-		if err != nil {
+
+		if err = UpdatePVRWithRetry(context.Background(), c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log,
+			func(pvr *velerov1api.PodVolumeRestore) bool {
+				pvr.Status.Phase = velerov1api.PodVolumeRestorePhasePrepared
+				return true
+			}); err != nil {
 			log.WithError(err).Warn("failed to update pvr, prepare will halt for this pvr")
 			return []reconcile.Request{}
 		}
 	} else if unrecoverable, reason := kube.IsPodUnrecoverable(pod, log); unrecoverable {
-		if !pvr.Spec.Cancel {
-			if err := PathPVR(context.Background(), c.client, pvr, func(pvr *velerov1api.PodVolumeRestore) {
+		err := UpdatePVRWithRetry(context.Background(), c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log,
+			func(pvr *velerov1api.PodVolumeRestore) bool {
+				if pvr.Spec.Cancel {
+					return false
+				}
+
 				pvr.Spec.Cancel = true
 				pvr.Status.Message = fmt.Sprintf("Cancel pvr because the exposing pod %s/%s is in abnormal status for reason %s", pod.Namespace, pod.Name, reason)
-			}); err != nil {
-				log.WithError(err).Warn("failed to cancel pvr, and it will wait for prepare timeout")
-				return []reconcile.Request{}
-			}
+
+				return true
+			})
+
+		if err != nil {
+			log.WithError(err).Warn("failed to cancel pvb, and it will wait for prepare timeout")
+			return []reconcile.Request{}
 		}
 
 		log.Infof("Exposed pod is in abnormal status(reason %s) and pvr is marked as cancel", reason)
@@ -610,16 +797,10 @@ func (c *PodVolumeRestoreReconciler) OnDataPathCancelled(ctx context.Context, na
 func (c *PodVolumeRestoreReconciler) OnDataPathProgress(ctx context.Context, namespace string, pvrName string, progress *uploader.Progress) {
 	log := c.logger.WithField("pvr", pvrName)
 
-	var pvr velerov1api.PodVolumeRestore
-	if err := c.client.Get(ctx, types.NamespacedName{Name: pvrName, Namespace: namespace}, &pvr); err != nil {
-		log.WithError(err).Warn("Failed to get PVB on progress")
-		return
-	}
-
-	original := pvr.DeepCopy()
-	pvr.Status.Progress = veleroapishared.DataMoveOperationProgress{TotalBytes: progress.TotalBytes, BytesDone: progress.BytesDone}
-
-	if err := c.client.Patch(ctx, &pvr, client.MergeFrom(original)); err != nil {
+	if err := UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: namespace, Name: pvrName}, log, func(pvr *velerov1api.PodVolumeRestore) bool {
+		pvr.Status.Progress = veleroapishared.DataMoveOperationProgress{TotalBytes: progress.TotalBytes, BytesDone: progress.BytesDone}
+		return true
+	}); err != nil {
 		log.WithError(err).Error("Failed to update progress")
 	}
 }
@@ -653,8 +834,10 @@ func (c *PodVolumeRestoreReconciler) setupExposeParam(pvr *velerov1api.PodVolume
 		Type:                  exposer.PodVolumeExposeTypeRestore,
 		ClientNamespace:       pvr.Spec.Pod.Namespace,
 		ClientPodName:         pvr.Spec.Pod.Name,
+		ClientPodVolume:       pvr.Spec.Volume,
 		HostingPodLabels:      hostingPodLabels,
 		HostingPodAnnotations: hostingPodAnnotation,
+		OperationTimeout:      c.resourceTimeout,
 		Resources:             c.podResources,
 	}, nil
 }
@@ -685,7 +868,7 @@ func findPVRByPod(client client.Client, pod corev1.Pod) (*velerov1api.PodVolumeR
 	return nil, nil
 }
 
-func isPVRInFinalState(pvr *velerov1api.PodVolumeRestore) bool {
+func IsPVRInFinalState(pvr *velerov1api.PodVolumeRestore) bool {
 	return pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseFailed ||
 		pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseCanceled ||
 		pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseCompleted
@@ -696,6 +879,29 @@ func PathPVR(ctx context.Context, cli client.Client, pvr *velerov1api.PodVolumeR
 	updateFunc(pvr)
 
 	return cli.Patch(ctx, pvr, client.MergeFrom(original))
+}
+
+func UpdatePVRWithRetry(ctx context.Context, client client.Client, namespacedName types.NamespacedName, log logrus.FieldLogger, updateFunc func(*velerov1api.PodVolumeRestore) bool) error {
+	return wait.PollUntilContextCancel(ctx, time.Millisecond*100, true, func(ctx context.Context) (bool, error) {
+		pvb := &velerov1api.PodVolumeRestore{}
+		if err := client.Get(ctx, namespacedName, pvb); err != nil {
+			return false, errors.Wrap(err, "getting pvb")
+		}
+
+		if updateFunc(pvb) {
+			err := client.Update(ctx, pvb)
+			if err != nil {
+				if apierrors.IsConflict(err) {
+					log.Warnf("failed to update pvb for %s/%s and will retry it", pvb.Namespace, pvb.Name)
+					return false, nil
+				} else {
+					return false, errors.Wrapf(err, "error updating pvb with error %s/%s", pvb.Namespace, pvb.Name)
+				}
+			}
+		}
+
+		return true, nil
+	})
 }
 
 var funcResumeCancellablePVR = (*PodVolumeRestoreReconciler).resumeCancellableDataPath
@@ -709,25 +915,54 @@ func (c *PodVolumeRestoreReconciler) AttemptPVBResume(ctx context.Context, logge
 
 	for i := range pvrs.Items {
 		pvr := &pvrs.Items[i]
-		if pvr.Status.Phase != velerov1api.PodVolumeRestorePhaseInProgress {
-			continue
-		}
+		if pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePreparing || pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePrepared {
+			logger.WithField("pvr", pvr.GetName()).Infof("Find a pvr with status %s", pvr.Status.Phase)
+		} else if pvr.Status.Phase != velerov1api.PodVolumeRestorePhaseInProgress {
+			if pvr.Status.Node != c.nodeName {
+				logger.WithField("pvr", pvr.Name).WithField("current node", c.nodeName).Infof("pvr should be resumed by another node %s", pvr.Status.Node)
+				continue
+			}
 
-		err := funcResumeCancellablePVR(c, ctx, pvr, logger)
-		if err == nil {
-			logger.WithField("pvr", pvr.Name).WithField("current node", c.nodeName).Info("Completed to resume in progress pvr")
-			continue
-		}
+			err := funcResumeCancellablePVR(c, ctx, pvr, logger)
+			if err == nil {
+				logger.WithField("pvr", pvr.Name).WithField("current node", c.nodeName).Info("Completed to resume in progress pvr")
+				continue
+			}
 
-		logger.WithField("pvr", pvr.GetName()).WithError(err).Warn("Failed to resume data path for pvr, have to cancel it")
+			logger.WithField("pvr", pvr.GetName()).WithError(err).Warn("Failed to resume data path for pvr, have to cancel it")
 
-		resumeErr := err
-		err = PathPVR(ctx, c.client, pvr, func(pvr *velerov1api.PodVolumeRestore) {
-			pvr.Spec.Cancel = true
-			pvr.Status.Message = fmt.Sprintf("Resume InProgress pvr failed with error %v, mark it as cancel", resumeErr)
-		})
-		if err != nil {
-			logger.WithField("pvr", pvr.GetName()).WithError(errors.WithStack(err)).Error("Failed to trigger pvr cancel")
+			resumeErr := err
+			err = UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, logger.WithField("pvr", pvr.Name),
+				func(pvr *velerov1api.PodVolumeRestore) bool {
+					if pvr.Spec.Cancel {
+						return false
+					}
+
+					pvr.Spec.Cancel = true
+					pvr.Status.Message = fmt.Sprintf("Resume InProgress pvr failed with error %v, mark it as cancel", resumeErr)
+
+					return true
+				})
+			if err != nil {
+				logger.WithField("pvr", pvr.GetName()).WithError(errors.WithStack(err)).Error("Failed to trigger pvr cancel")
+			}
+		} else if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted {
+			c.logger.WithField("pvr", pvr.GetName()).Warn("Cancel pvr under Accepted phase")
+
+			err := UpdatePVRWithRetry(ctx, c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, c.logger.WithField("pvr", pvr.Name),
+				func(pvr *velerov1api.PodVolumeRestore) bool {
+					if pvr.Spec.Cancel {
+						return false
+					}
+
+					pvr.Spec.Cancel = true
+					pvr.Status.Message = "pvr is in Accepted status during the node-agent starting, mark it as cancel"
+
+					return true
+				})
+			if err != nil {
+				c.logger.WithField("pvr", pvr.GetName()).WithError(errors.WithStack(err)).Error("Failed to trigger pvr cancel")
+			}
 		}
 	}
 

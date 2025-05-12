@@ -157,25 +157,36 @@ func newBackupper(
 
 	b.handlerRegistration, _ = pvbInformer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(_, obj any) {
-				pvb, ok := obj.(*velerov1api.PodVolumeBackup)
+			UpdateFunc: func(oldObj, newObj any) {
+				oldPVB, ok := oldObj.(*velerov1api.PodVolumeBackup)
 				if !ok {
-					log.Errorf("expected PodVolumeBackup, but got %T", obj)
+					log.Errorf("expected PodVolumeBackup for oldObj, but got %T", oldObj)
 					return
 				}
 
-				if pvb.GetLabels()[velerov1api.BackupUIDLabel] != string(backup.UID) {
+				newPVB, ok := newObj.(*velerov1api.PodVolumeBackup)
+				if !ok {
+					log.Errorf("expected PodVolumeBackup for newObj, but got %T", newObj)
 					return
 				}
 
-				if pvb.Status.Phase != velerov1api.PodVolumeBackupPhaseCompleted &&
-					pvb.Status.Phase != velerov1api.PodVolumeBackupPhaseFailed {
+				if newPVB.GetLabels()[velerov1api.BackupUIDLabel] != string(backup.UID) {
+					return
+				}
+
+				if newPVB.Status.Phase != velerov1api.PodVolumeBackupPhaseCompleted &&
+					newPVB.Status.Phase != velerov1api.PodVolumeBackupPhaseFailed && newPVB.Status.Phase != velerov1api.PodVolumeBackupPhaseCanceled {
+					return
+				}
+
+				if newPVB.Status.Phase == oldPVB.Status.Phase {
+					log.WithField("oldPVB", oldPVB).WithField("newPVB", newPVB).Info("Received PVB update in terminal state")
 					return
 				}
 
 				// the Indexer inserts PVB directly if the PVB to be updated doesn't exist
-				if err := b.pvbIndexer.Update(pvb); err != nil {
-					log.WithError(err).Errorf("failed to update PVB %s/%s in indexer", pvb.Namespace, pvb.Name)
+				if err := b.pvbIndexer.Update(newPVB); err != nil {
+					log.WithError(err).Errorf("failed to update PVB %s/%s in indexer", newPVB.Namespace, newPVB.Name)
 				}
 				b.wg.Done()
 			},
@@ -247,12 +258,6 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 	if err := kube.IsPodRunning(pod); err != nil {
 		skipAllPodVolumes(pod, volumesToBackup, err, pvcSummary, log)
 		return nil, pvcSummary, nil
-	}
-
-	if err := kube.IsLinuxNode(b.ctx, pod.Spec.NodeName, b.crClient); err != nil {
-		err := errors.Wrapf(err, "Pod %s/%s is not running in linux node(%s), skip", pod.Namespace, pod.Name, pod.Spec.NodeName)
-		skipAllPodVolumes(pod, volumesToBackup, err, pvcSummary, log)
-		return nil, pvcSummary, []error{err}
 	}
 
 	err := nodeagent.IsRunningInNode(b.ctx, backup.Namespace, pod.Spec.NodeName, b.crClient)
@@ -337,6 +342,11 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 			continue
 		}
 
+		if isEmptyDirVolume(&volume) {
+			log.Infof("Skip empty dir volume %s in pod %s/%s", volumeName, pod.Namespace, pod.Name)
+			continue
+		}
+
 		// check if volume is a block volume
 		if attachedPodDevices.Has(volumeName) {
 			msg := fmt.Sprintf("volume %s declared in pod %s/%s is a block volume. Block volumes are not supported for fs backup, skipping",
@@ -387,6 +397,8 @@ func (b *backupper) WaitAllPodVolumesProcessed(log logrus.FieldLogger) []*velero
 		}
 	}()
 
+	log.Info("Waiting for completion of PVB")
+
 	var podVolumeBackups []*velerov1api.PodVolumeBackup
 	// if no pod volume backups are tracked, return directly to avoid issue mentioned in
 	// https://github.com/vmware-tanzu/velero/issues/8723
@@ -411,7 +423,7 @@ func (b *backupper) WaitAllPodVolumesProcessed(log logrus.FieldLogger) []*velero
 				continue
 			}
 			podVolumeBackups = append(podVolumeBackups, pvb)
-			if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseFailed {
+			if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseFailed || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseCanceled {
 				log.Errorf("pod volume backup failed: %s", pvb.Status.Message)
 			}
 		}
@@ -475,6 +487,10 @@ func isHostPathVolume(volume *corev1api.Volume, pvc *corev1api.PersistentVolumeC
 	}
 
 	return pv.Spec.HostPath != nil, nil
+}
+
+func isEmptyDirVolume(volume *corev1api.Volume) bool {
+	return (volume.EmptyDir != nil)
 }
 
 func newPodVolumeBackup(backup *velerov1api.Backup, pod *corev1api.Pod, volume corev1api.Volume, repoIdentifier, uploaderType string, pvc *corev1api.PersistentVolumeClaim) *velerov1api.PodVolumeBackup {

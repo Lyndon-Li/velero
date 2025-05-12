@@ -32,7 +32,6 @@ import (
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
-	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
@@ -103,9 +102,7 @@ func NewPodVolumeExposer(kubeClient kubernetes.Interface, log logrus.FieldLogger
 }
 
 type podVolumeExposer struct {
-	client     client.Client
 	kubeClient kubernetes.Interface
-	fs         filesystem.Interface
 	log        logrus.FieldLogger
 }
 
@@ -118,11 +115,7 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1.Object
 		"type":              param.Type,
 	})
 
-	var pod corev1.Pod
-	err := e.client.Get(ctx, client.ObjectKey{
-		Namespace: param.ClientNamespace,
-		Name:      param.ClientPodName,
-	}, &pod)
+	pod, err := e.kubeClient.CoreV1().Pods(param.ClientNamespace).Get(ctx, param.ClientPodName, metav1.GetOptions{})
 	if err != nil {
 		return errors.Wrapf(err, "error to get client pod %s", param.ClientPodName)
 	}
@@ -136,7 +129,7 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1.Object
 		return errors.Wrapf(err, "error getting OS for node %s", pod.Spec.NodeName)
 	}
 
-	path, err := GetPodVolumeHostPath(ctx, "", &pod, param.ClientPodVolume, e.client, e.fs, e.log)
+	path, err := GetPodVolumeHostPathForCSI(ctx, "", pod, param.ClientPodVolume, e.kubeClient, e.log)
 	if err != nil {
 		return errors.Wrapf(err, "error to get pod volume path")
 	}
@@ -283,7 +276,6 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 	if label == nil {
 		label = make(map[string]string)
 	}
-	label[podGroupLabel] = podGroupGenericRestore
 
 	args := []string{
 		fmt.Sprintf("--volume-path=%s", clientVolumePath),
@@ -298,9 +290,11 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 	if exposeType == PodVolumeExposeTypeBackup {
 		args = append(args, fmt.Sprintf("--pod-volume-backup=%s", ownerObject.Name))
 		command = append(command, "backup")
+		label[podGroupLabel] = podGroupPodVolumeBackup
 	} else {
 		args = append(args, fmt.Sprintf("--pod-volume-restore=%s", ownerObject.Name))
 		command = append(command, "restore")
+		label[podGroupLabel] = podGroupPodVolumeRestore
 	}
 
 	args = append(args, podInfo.logFormatArgs...)

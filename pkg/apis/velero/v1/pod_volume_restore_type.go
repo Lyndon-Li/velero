@@ -61,11 +61,13 @@ type PodVolumeRestoreSpec struct {
 }
 
 // PodVolumeRestorePhase represents the lifecycle phase of a PodVolumeRestore.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type PodVolumeRestorePhase string
 
 const (
 	PodVolumeRestorePhaseNew        PodVolumeRestorePhase = "New"
+	PodVolumeRestorePhaseAccepted   PodVolumeRestorePhase = "Accepted"
+	PodVolumeRestorePhasePreparing  PodVolumeRestorePhase = "Preparing"
 	PodVolumeRestorePhasePrepared   PodVolumeRestorePhase = "Prepared"
 	PodVolumeRestorePhaseInProgress PodVolumeRestorePhase = "InProgress"
 	PodVolumeRestorePhaseCanceling  PodVolumeRestorePhase = "Canceling"
@@ -102,6 +104,16 @@ type PodVolumeRestoreStatus struct {
 	// about the restore operation.
 	// +optional
 	Progress shared.DataMoveOperationProgress `json:"progress,omitempty"`
+
+	// AcceptedTimestamp records the time the pod volume restore is to be prepared.
+	// The server's time is used for AcceptedTimestamp
+	// +optional
+	// +nullable
+	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
+
+	// Node is name of the node where the pod volume restore is processed.
+	// +optional
+	Node string `json:"node,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runtime-controller client, the genclient and k8s:deepcopy markers will no longer be needed and should be removed.

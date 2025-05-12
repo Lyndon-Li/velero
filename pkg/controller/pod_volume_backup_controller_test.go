@@ -35,7 +35,6 @@ import (
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
-	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
@@ -164,13 +163,6 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 			_, err = fakeFS.Create(pathGlob)
 			Expect(err).ToNot(HaveOccurred())
 
-			credentialFileStore, err := credentials.NewNamespacedFileStore(
-				fakeClient,
-				velerov1api.DefaultNamespace,
-				"/tmp/credentials",
-				fakeFS,
-			)
-
 			Expect(err).ToNot(HaveOccurred())
 
 			if test.dataMgr == nil {
@@ -188,14 +180,12 @@ var _ = Describe("PodVolumeBackup Reconciler", func() {
 			// Setup reconciler
 			Expect(velerov1api.AddToScheme(scheme.Scheme)).To(Succeed())
 			r := PodVolumeBackupReconciler{
-				client:           fakeClient,
-				clock:            testclocks.NewFakeClock(now),
-				metrics:          metrics.NewNodeMetrics(),
-				credentialGetter: &credentials.CredentialGetter{FromFile: credentialFileStore},
-				nodeName:         "test_node",
-				fileSystem:       fakeFS,
-				logger:           velerotest.NewLogger(),
-				dataPathMgr:      test.dataMgr,
+				client:      fakeClient,
+				clock:       testclocks.NewFakeClock(now),
+				metrics:     metrics.NewNodeMetrics(),
+				nodeName:    "test_node",
+				logger:      velerotest.NewLogger(),
+				dataPathMgr: test.dataMgr,
 			}
 
 			actualResult, err := r.Reconcile(ctx, ctrl.Request{

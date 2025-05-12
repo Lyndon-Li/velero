@@ -498,8 +498,11 @@ func describePodVolumeBackupsInSF(backups []velerov1api.PodVolumeBackup, details
 	// go through phases in a specific order
 	for _, phase := range []string{
 		string(velerov1api.PodVolumeBackupPhaseCompleted),
+		string(velerov1api.PodVolumeBackupPhaseCanceled),
 		string(velerov1api.PodVolumeBackupPhaseFailed),
 		"In Progress",
+		string(velerov1api.PodVolumeBackupPhasePrepared),
+		string(velerov1api.PodVolumeBackupPhaseAccepted),
 		string(velerov1api.PodVolumeBackupPhaseNew),
 	} {
 		if len(backupsByPhase[phase]) == 0 {

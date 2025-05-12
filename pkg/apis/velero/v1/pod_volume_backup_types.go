@@ -64,11 +64,13 @@ type PodVolumeBackupSpec struct {
 }
 
 // PodVolumeBackupPhase represents the lifecycle phase of a PodVolumeBackup.
-// +kubebuilder:validation:Enum=New;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type PodVolumeBackupPhase string
 
 const (
 	PodVolumeBackupPhaseNew        PodVolumeBackupPhase = "New"
+	PodVolumeBackupPhaseAccepted   PodVolumeBackupPhase = "Accepted"
+	PodVolumeBackupPhasePreparing  PodVolumeBackupPhase = "Preparing"
 	PodVolumeBackupPhasePrepared   PodVolumeBackupPhase = "Prepared"
 	PodVolumeBackupPhaseInProgress PodVolumeBackupPhase = "InProgress"
 	PodVolumeBackupPhaseCanceling  PodVolumeBackupPhase = "Canceling"
@@ -116,6 +118,12 @@ type PodVolumeBackupStatus struct {
 	// about the backup operation.
 	// +optional
 	Progress shared.DataMoveOperationProgress `json:"progress,omitempty"`
+
+	// AcceptedTimestamp records the time the pod volume backup is to be prepared.
+	// The server's time is used for AcceptedTimestamp
+	// +optional
+	// +nullable
+	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,

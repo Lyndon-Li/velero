@@ -26,7 +26,7 @@ import (
 
 func NewCommand(f client.Factory) *cobra.Command {
 	command := &cobra.Command{
-		Use:    "pod volume",
+		Use:    "pod-volume",
 		Short:  "Run the velero pod volume backup/restore",
 		Long:   "Run the velero pod volume backup/restore",
 		Hidden: true,

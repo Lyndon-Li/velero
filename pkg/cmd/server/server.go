@@ -960,6 +960,7 @@ func markInProgressBackupsFailed(ctx context.Context, client ctrlclient.Client, 
 		}
 		log.WithField("backup", backup.GetName()).Warn(updated.Status.FailureReason)
 		markDataUploadsCancel(ctx, client, backup, log)
+		markPodVolumeBackupsCancel(ctx, client, backup, log)
 	}
 }
 
@@ -984,6 +985,7 @@ func markInProgressRestoresFailed(ctx context.Context, client ctrlclient.Client,
 		}
 		log.WithField("restore", restore.GetName()).Warn(updated.Status.FailureReason)
 		markDataDownloadsCancel(ctx, client, restore, log)
+		markPodVolumeRestoresCancel(ctx, client, restore, log)
 	}
 }
 
@@ -1002,11 +1004,7 @@ func markDataUploadsCancel(ctx context.Context, client ctrlclient.Client, backup
 
 	for i := range dataUploads.Items {
 		du := dataUploads.Items[i]
-		if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted ||
-			du.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared ||
-			du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress ||
-			du.Status.Phase == velerov2alpha1api.DataUploadPhaseNew ||
-			du.Status.Phase == "" {
+		if !controller.IsDataUploadInFinalState(&du) {
 			err := controller.UpdateDataUploadWithRetry(ctx, client, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, log.WithField("dataupload", du.Name),
 				func(dataUpload *velerov2alpha1api.DataUpload) bool {
 					if dataUpload.Spec.Cancel {
@@ -1043,11 +1041,7 @@ func markDataDownloadsCancel(ctx context.Context, client ctrlclient.Client, rest
 
 	for i := range dataDownloads.Items {
 		dd := dataDownloads.Items[i]
-		if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseAccepted ||
-			dd.Status.Phase == velerov2alpha1api.DataDownloadPhasePrepared ||
-			dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseInProgress ||
-			dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseNew ||
-			dd.Status.Phase == "" {
+		if !controller.IsDataDownloadInFinalState(&dd) {
 			err := controller.UpdateDataDownloadWithRetry(ctx, client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log.WithField("datadownload", dd.Name),
 				func(dataDownload *velerov2alpha1api.DataDownload) bool {
 					if dataDownload.Spec.Cancel {
@@ -1065,6 +1059,80 @@ func markDataDownloadsCancel(ctx context.Context, client ctrlclient.Client, rest
 				continue
 			}
 			log.WithField("datadownload", dd.GetName()).Warn(dd.Status.Message)
+		}
+	}
+}
+
+func markPodVolumeBackupsCancel(ctx context.Context, client ctrlclient.Client, backup velerov1api.Backup, log logrus.FieldLogger) {
+	pvbs := &velerov1api.PodVolumeBackupList{}
+
+	if err := client.List(ctx, pvbs, &ctrlclient.ListOptions{
+		Namespace: backup.GetNamespace(),
+		LabelSelector: labels.Set(map[string]string{
+			velerov1api.BackupUIDLabel: string(backup.GetUID()),
+		}).AsSelector(),
+	}); err != nil {
+		log.WithError(errors.WithStack(err)).Error("failed to list pvbs")
+		return
+	}
+
+	for i := range pvbs.Items {
+		pvb := pvbs.Items[i]
+		if !controller.IsPVBInFinalState(&pvb) {
+			err := controller.UpdatePVBWithRetry(ctx, client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, log.WithField("pvb", pvb.Name),
+				func(pvb *velerov1api.PodVolumeBackup) bool {
+					if pvb.Spec.Cancel {
+						return false
+					}
+
+					pvb.Spec.Cancel = true
+					pvb.Status.Message = fmt.Sprintf("pvb is in status %q during the velero server starting, mark it as cancel", pvb.Status.Phase)
+
+					return true
+				})
+
+			if err != nil {
+				log.WithError(errors.WithStack(err)).Errorf("failed to mark pvb %q cancel", pvb.GetName())
+				continue
+			}
+			log.WithField("pvb", pvb.GetName()).Warn(pvb.Status.Message)
+		}
+	}
+}
+
+func markPodVolumeRestoresCancel(ctx context.Context, client ctrlclient.Client, restore velerov1api.Restore, log logrus.FieldLogger) {
+	pvrs := &velerov1api.PodVolumeRestoreList{}
+
+	if err := client.List(ctx, pvrs, &ctrlclient.ListOptions{
+		Namespace: restore.GetNamespace(),
+		LabelSelector: labels.Set(map[string]string{
+			velerov1api.RestoreUIDLabel: string(restore.GetUID()),
+		}).AsSelector(),
+	}); err != nil {
+		log.WithError(errors.WithStack(err)).Error("failed to list pvrs")
+		return
+	}
+
+	for i := range pvrs.Items {
+		pvr := pvrs.Items[i]
+		if !controller.IsPVRInFinalState(&pvr) {
+			err := controller.UpdatePVRWithRetry(ctx, client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log.WithField("pvr", pvr.Name),
+				func(pvr *velerov1api.PodVolumeRestore) bool {
+					if pvr.Spec.Cancel {
+						return false
+					}
+
+					pvr.Spec.Cancel = true
+					pvr.Status.Message = fmt.Sprintf("pvr is in status %q during the velero server starting, mark it as cancel", pvr.Status.Phase)
+
+					return true
+				})
+
+			if err != nil {
+				log.WithError(errors.WithStack(err)).Errorf("failed to mark pvr %q cancel", pvr.GetName())
+				continue
+			}
+			log.WithField("pvr", pvr.GetName()).Warn(pvr.Status.Message)
 		}
 	}
 }

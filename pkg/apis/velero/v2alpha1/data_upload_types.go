@@ -82,12 +82,13 @@ type CSISnapshotSpec struct {
 }
 
 // DataUploadPhase represents the lifecycle phase of a DataUpload.
-// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type DataUploadPhase string
 
 const (
 	DataUploadPhaseNew        DataUploadPhase = "New"
 	DataUploadPhaseAccepted   DataUploadPhase = "Accepted"
+	DataUploadPhasePreparing  DataUploadPhase = "Preparing"
 	DataUploadPhasePrepared   DataUploadPhase = "Prepared"
 	DataUploadPhaseInProgress DataUploadPhase = "InProgress"
 	DataUploadPhaseCanceling  DataUploadPhase = "Canceling"

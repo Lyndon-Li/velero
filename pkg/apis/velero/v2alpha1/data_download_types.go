@@ -73,12 +73,13 @@ type TargetVolumeSpec struct {
 }
 
 // DataDownloadPhase represents the lifecycle phase of a DataDownload.
-// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type DataDownloadPhase string
 
 const (
 	DataDownloadPhaseNew        DataDownloadPhase = "New"
 	DataDownloadPhaseAccepted   DataDownloadPhase = "Accepted"
+	DataDownloadPhasePreparing  DataDownloadPhase = "Preparing"
 	DataDownloadPhasePrepared   DataDownloadPhase = "Prepared"
 	DataDownloadPhaseInProgress DataDownloadPhase = "InProgress"
 	DataDownloadPhaseCanceling  DataDownloadPhase = "Canceling"
