@@ -102,6 +102,7 @@ OBJECT_STORE_PROVIDER ?=
 INSTALL_VELERO ?= true
 REGISTRY_CREDENTIAL_FILE ?=
 KIBISHII_DIRECTORY ?= github.com/vmware-tanzu-experiments/distributed-data-generator/kubernetes/yaml/
+IMAGE_REGISTRY_PROXY ?=
 
 
 # Flags to create an additional BSL for multiple credentials tests
@@ -115,6 +116,8 @@ ADDITIONAL_BSL_CONFIG ?=
 FEATURES ?=
 DEBUG_VELERO_POD_RESTART ?= false
 VELERO_SERVER_DEBUG_MODE ?= false
+
+ITEM_BLOCK_WORKER_COUNT ?= 1
 
 # Parameters to run migration tests along with all other E2E tests, and both of them should
 #   be provided or left them all empty to skip migration tests with no influence to other
@@ -167,7 +170,8 @@ COMMON_ARGS := --velerocli=$(VELERO_CLI) \
 	--uploader-type=$(UPLOADER_TYPE) \
 	--debug-velero-pod-restart=$(DEBUG_VELERO_POD_RESTART) \
 	--fail-fast=$(FAIL_FAST) \
-	--has-vsphere-plugin=$(HAS_VSPHERE_PLUGIN)
+	--has-vsphere-plugin=$(HAS_VSPHERE_PLUGIN) \
+	--item-block-worker-count=$(ITEM_BLOCK_WORKER_COUNT)
 
 # Make sure ginkgo is in $GOBIN
 .PHONY:ginkgo
@@ -216,7 +220,8 @@ run-e2e: ginkgo
 		--default-cls-service-account-name=$(DEFAULT_CLS_SERVICE_ACCOUNT_NAME) \
 		--standby-cls-service-account-name=$(STANDBY_CLS_SERVICE_ACCOUNT_NAME) \
 		--kibishii-directory=$(KIBISHII_DIRECTORY) \
-		--disable-informer-cache=$(DISABLE_INFORMER_CACHE)
+		--disable-informer-cache=$(DISABLE_INFORMER_CACHE) \
+		--image-registry-proxy=$(IMAGE_REGISTRY_PROXY)
 
 .PHONY: run-perf
 run-perf: ginkgo

@@ -24,7 +24,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -63,7 +63,7 @@ const (
 
 // NewPodVolumeBackupReconciler creates the PodVolumeBackupReconciler instance
 func NewPodVolumeBackupReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	ensurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter, nodeName string, podResources corev1.ResourceRequirements,
+	ensurer *repository.Ensurer, credentialGetter *credentials.CredentialGetter, nodeName string, podResources corev1api.ResourceRequirements,
 	scheme *runtime.Scheme, metrics *metrics.ServerMetrics, logger logrus.FieldLogger) *PodVolumeBackupReconciler {
 	return &PodVolumeBackupReconciler{
 		client:            client,
@@ -96,7 +96,7 @@ type PodVolumeBackupReconciler struct {
 	nodeName          string
 	fileSystem        filesystem.Interface
 	logger            logrus.FieldLogger
-	podResources      corev1.ResourceRequirements
+	podResources      corev1api.ResourceRequirements
 	dataPathMgr       *datapath.Manager
 }
 
@@ -568,8 +568,8 @@ func (r *PodVolumeBackupReconciler) setupExposeParam(pvb *velerov1api.PodVolumeB
 	}, nil
 }
 
-func getPVBOwnerObject(pvb *velerov1api.PodVolumeBackup) corev1.ObjectReference {
-	return corev1.ObjectReference{
+func getPVBOwnerObject(pvb *velerov1api.PodVolumeBackup) corev1api.ObjectReference {
+	return corev1api.ObjectReference{
 		Kind:       pvb.Kind,
 		Namespace:  pvb.Namespace,
 		Name:       pvb.Name,
@@ -578,7 +578,7 @@ func getPVBOwnerObject(pvb *velerov1api.PodVolumeBackup) corev1.ObjectReference 
 	}
 }
 
-func findPVBByPod(client client.Client, pod corev1.Pod) (*velerov1api.PodVolumeBackup, error) {
+func findPVBByPod(client client.Client, pod corev1api.Pod) (*velerov1api.PodVolumeBackup, error) {
 	if label, exist := pod.Labels[velerov1api.PVBLabel]; exist {
 		pvb := &velerov1api.PodVolumeBackup{}
 		err := client.Get(context.Background(), types.NamespacedName{
