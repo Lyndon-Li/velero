@@ -151,6 +151,14 @@ func (ms *microServiceBRWatcher) Init(ctx context.Context, param any) error {
 					ms.podCh <- pod
 				}
 			},
+			// DeleteFunc: func(obj any) {
+			// 	pod := obj.(*corev1api.Pod)
+			// 	if pod.Namespace != ms.namespace || pod.Name != ms.thisPod {
+			// 		return
+			// 	}
+
+			// 	ms.podCh <- pod
+			// },
 		},
 	)
 	if err != nil {
