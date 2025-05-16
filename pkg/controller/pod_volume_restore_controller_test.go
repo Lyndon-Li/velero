@@ -199,7 +199,7 @@ func TestShouldProcess(t *testing.T) {
 				clock:  &clocks.RealClock{},
 			}
 
-			shouldProcess, _, _ := c.shouldProcess(ctx, c.logger, ts.obj)
+			shouldProcess, _, _ := shouldProcess(ctx, c.client, c.logger, ts.obj)
 			require.Equal(t, ts.shouldProcessed, shouldProcess)
 		})
 	}

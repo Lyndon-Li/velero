@@ -59,6 +59,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
@@ -73,10 +74,6 @@ var (
 const (
 	// the port where prometheus metrics are exposed
 	defaultMetricsAddress = ":8085"
-
-	// defaultCredentialsDirectory is the path on disk where credential
-	// files will be written to
-	defaultCredentialsDirectory = "/tmp/credentials"
 
 	defaultHostPodsPath = "/host_pods"
 
@@ -282,8 +279,6 @@ func (s *nodeAgentServer) run() {
 	s.metrics.RegisterAllMetrics()
 	s.metrics.InitMetricsForNode(s.nodeName)
 
-	s.markInProgressCRsFailed()
-
 	s.logger.Info("Starting controllers")
 
 	var loadAffinity *kube.LoadAffinity
@@ -316,6 +311,10 @@ func (s *nodeAgentServer) run() {
 
 	if err := controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.resourceTimeout, podResources, s.logger).SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
+	}
+
+	if err := controller.InitLegacyPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.namespace, s.config.resourceTimeout, s.logger); err != nil {
+		s.logger.WithError(err).Fatal("Unable to create the legacy pod volume restore controller")
 	}
 
 	dataUploadReconciler := controller.NewDataUploadReconciler(
@@ -361,6 +360,12 @@ func (s *nodeAgentServer) run() {
 		if err := dataDownloadReconciler.AttemptDataDownloadResume(s.ctx, s.logger.WithField("node", s.nodeName), s.namespace); err != nil {
 			s.logger.WithError(errors.WithStack(err)).Error("Failed to attempt data download resume")
 		}
+
+		if err := pvbReconciler.AttemptPVBResume(s.ctx, s.logger.WithField("node", s.nodeName), s.namespace); err != nil {
+			s.logger.WithError(errors.WithStack(err)).Error("Failed to attempt pvb resume")
+		}
+
+		s.markInProgressPVRsFailed(s.mgr.GetClient())
 	}()
 
 	s.logger.Info("Controllers starting...")
@@ -444,47 +449,6 @@ func (s *nodeAgentServer) validatePodVolumesHostPath(client kubernetes.Interface
 	return nil
 }
 
-// if there is a restarting during the reconciling of pvbs/pvrs/etc, these CRs may be stuck in progress status
-// markInProgressCRsFailed tries to mark the in progress CRs as failed when starting the server to avoid the issue
-func (s *nodeAgentServer) markInProgressCRsFailed() {
-	// the function is called before starting the controller manager, the embedded client isn't ready to use, so create a new one here
-	client, err := ctrlclient.New(s.mgr.GetConfig(), ctrlclient.Options{Scheme: s.mgr.GetScheme()})
-	if err != nil {
-		s.logger.WithError(errors.WithStack(err)).Error("failed to create client")
-		return
-	}
-
-	s.markInProgressPVBsFailed(client)
-
-	s.markInProgressPVRsFailed(client)
-}
-
-func (s *nodeAgentServer) markInProgressPVBsFailed(client ctrlclient.Client) {
-	pvbs := &velerov1api.PodVolumeBackupList{}
-	if err := client.List(s.ctx, pvbs, &ctrlclient.ListOptions{Namespace: s.namespace}); err != nil {
-		s.logger.WithError(errors.WithStack(err)).Error("failed to list podvolumebackups")
-		return
-	}
-	for i, pvb := range pvbs.Items {
-		if pvb.Status.Phase != velerov1api.PodVolumeBackupPhaseInProgress {
-			s.logger.Debugf("the status of podvolumebackup %q is %q, skip", pvb.GetName(), pvb.Status.Phase)
-			continue
-		}
-		if pvb.Spec.Node != s.nodeName {
-			s.logger.Debugf("the node of podvolumebackup %q is %q, not %q, skip", pvb.GetName(), pvb.Spec.Node, s.nodeName)
-			continue
-		}
-
-		if err := controller.UpdatePVBStatusToFailed(s.ctx, client, &pvbs.Items[i],
-			fmt.Errorf("found a podvolumebackup with status %q during the server starting, mark it as %q", velerov1api.PodVolumeBackupPhaseInProgress, velerov1api.PodVolumeBackupPhaseFailed),
-			"", time.Now(), s.logger); err != nil {
-			s.logger.WithError(errors.WithStack(err)).Errorf("failed to patch podvolumebackup %q", pvb.GetName())
-			continue
-		}
-		s.logger.WithField("podvolumebackup", pvb.GetName()).Warn(pvb.Status.Message)
-	}
-}
-
 func (s *nodeAgentServer) markInProgressPVRsFailed(client ctrlclient.Client) {
 	pvrs := &velerov1api.PodVolumeRestoreList{}
 	if err := client.List(s.ctx, pvrs, &ctrlclient.ListOptions{Namespace: s.namespace}); err != nil {
@@ -492,6 +456,10 @@ func (s *nodeAgentServer) markInProgressPVRsFailed(client ctrlclient.Client) {
 		return
 	}
 	for i, pvr := range pvrs.Items {
+		if pvr.Spec.UploaderType != uploader.ResticType {
+			continue
+		}
+
 		if pvr.Status.Phase != velerov1api.PodVolumeRestorePhaseInProgress {
 			s.logger.Debugf("the status of podvolumerestore %q is %q, skip", pvr.GetName(), pvr.Status.Phase)
 			continue
@@ -511,12 +479,10 @@ func (s *nodeAgentServer) markInProgressPVRsFailed(client ctrlclient.Client) {
 			continue
 		}
 
-		if err := controller.UpdatePVRStatusToFailed(s.ctx, client, &pvrs.Items[i],
-			fmt.Sprintf("get a podvolumerestore with status %q during the server starting, mark it as %q", velerov1api.PodVolumeRestorePhaseInProgress, velerov1api.PodVolumeRestorePhaseFailed),
-			time.Now(), s.logger); err != nil {
-			s.logger.WithError(errors.WithStack(err)).Errorf("failed to patch podvolumerestore %q", pvr.GetName())
-			continue
-		}
+		controller.UpdatePVRStatusToFailed(s.ctx, client, &pvrs.Items[i], errors.New("cannot survive from node-agent restart"),
+			fmt.Sprintf("get a legacy podvolumerestore with status %q during the server starting, mark it as %q", velerov1api.PodVolumeRestorePhaseInProgress, velerov1api.PodVolumeRestorePhaseFailed),
+			time.Now(), s.logger)
+
 		s.logger.WithField("podvolumerestore", pvr.GetName()).Warn(pvr.Status.Message)
 	}
 }

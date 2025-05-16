@@ -18,6 +18,9 @@ package podvolume
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
@@ -34,6 +37,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 
 	cachetool "k8s.io/client-go/tools/cache"
@@ -217,12 +221,47 @@ func (r *RestoreMicroService) Shutdown() {
 func (r *RestoreMicroService) OnPvrCompleted(ctx context.Context, namespace string, pvrName string, result datapath.Result) {
 	log := r.logger.WithField("pvr", pvrName)
 
+	volumePath := result.Restore.Target.ByPath
+	if volumePath == "" {
+		r.recordPvrFailed(pvrName, "invalid restore target", errors.New("path is empty"))
+		return
+	}
+
+	// Remove the .velero directory from the restored volume (it may contain done files from previous restores
+	// of this volume, which we don't want to carry over). If this fails for any reason, log and continue, since
+	// this is non-essential cleanup (the done files are named based on restore UID and the init container looks
+	// for the one specific to the restore being executed).
+	if err := os.RemoveAll(filepath.Join(volumePath, ".velero")); err != nil {
+		log.WithError(err).Warnf("error removing .velero directory from directory %s", volumePath)
+	}
+
+	var restoreUID types.UID
+	for _, owner := range r.pvr.OwnerReferences {
+		if boolptr.IsSetToTrue(owner.Controller) {
+			restoreUID = owner.UID
+			break
+		}
+	}
+
+	// Create the .velero directory within the volume dir so we can write a done file
+	// for this restore.
+	if err := os.MkdirAll(filepath.Join(volumePath, ".velero"), 0755); err != nil {
+		r.recordPvrFailed(pvrName, "error creating .velero directory for done file", err)
+		return
+	}
+
+	// Write a done file with name=<restore-uid> into the just-created .velero dir
+	// within the volume. The velero init container on the pod is waiting
+	// for this file to exist in each restored volume before completing.
+	if err := os.WriteFile(filepath.Join(volumePath, ".velero", string(restoreUID)), nil, 0644); err != nil { //nolint:gosec // Internal usage. No need to check.
+		r.recordPvrFailed(pvrName, "error writing done file", err)
+		return
+	}
+
 	restoreBytes, err := funcMarshal(result.Restore)
 	if err != nil {
 		log.WithError(err).Errorf("Failed to marshal restore result %v", result.Restore)
-		r.resultSignal <- dataPathResult{
-			err: errors.Wrapf(err, "Failed to marshal restore result %v", result.Restore),
-		}
+		r.recordPvrFailed(pvrName, fmt.Sprintf("error marshaling restore result %v", result.Restore), err)
 	} else {
 		r.eventRecorder.Event(r.pvr, false, datapath.EventReasonCompleted, string(restoreBytes))
 		r.resultSignal <- dataPathResult{
@@ -233,14 +272,19 @@ func (r *RestoreMicroService) OnPvrCompleted(ctx context.Context, namespace stri
 	log.Info("Async fs restore data path completed")
 }
 
+func (r *RestoreMicroService) recordPvrFailed(pvrName string, msg string, err error) {
+	evtMsg := fmt.Sprintf("%s, error %v", msg, err)
+	r.eventRecorder.Event(r.pvr, false, datapath.EventReasonFailed, evtMsg)
+	r.resultSignal <- dataPathResult{
+		err: errors.Wrapf(err, msg, pvrName),
+	}
+}
+
 func (r *RestoreMicroService) OnPvrFailed(ctx context.Context, namespace string, pvrName string, err error) {
 	log := r.logger.WithField("pvr", pvrName)
 	log.WithError(err).Error("Async fs restore data path failed")
 
-	r.eventRecorder.Event(r.pvr, false, datapath.EventReasonFailed, "Data path for data pvr %s failed, error %v", r.pvrName, err)
-	r.resultSignal <- dataPathResult{
-		err: errors.Wrapf(err, "Data path for pvr %s failed", r.pvrName),
-	}
+	r.recordPvrFailed(pvrName, fmt.Sprintf("Data path for pvr %s failed", pvrName), err)
 }
 
 func (r *RestoreMicroService) OnPvrCancelled(ctx context.Context, namespace string, pvrName string) {

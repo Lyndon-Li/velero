@@ -42,7 +42,7 @@ import (
 )
 
 const (
-	podVolumeRequestor = "snapshot-pod-volume-backup-restore"
+	podVolumeRequestor = "snapshot-pod-volume"
 )
 
 // BackupMicroService process data mover backups inside the backup pod

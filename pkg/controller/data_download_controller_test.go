@@ -883,7 +883,7 @@ func TestTryCancelDataDownload(t *testing.T) {
 		err = r.client.Create(ctx, test.dd)
 		require.NoError(t, err)
 
-		r.tryCancelAcceptedDataDownload(ctx, test.dd, "")
+		r.tryCancelDataDownload(ctx, test.dd, "")
 
 		if test.expectedErr == "" {
 			assert.NoError(t, err)

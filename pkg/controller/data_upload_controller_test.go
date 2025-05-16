@@ -992,7 +992,7 @@ func TestTryCancelDataUpload(t *testing.T) {
 		err = r.client.Create(ctx, test.dd)
 		require.NoError(t, err)
 
-		r.tryCancelAcceptedDataUpload(ctx, test.dd, "")
+		r.tryCancelDataUpload(ctx, test.dd, "")
 
 		if test.expectedErr == "" {
 			assert.NoError(t, err)
