@@ -25,7 +25,6 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -44,6 +43,7 @@ import (
 
 	veleroapishared "github.com/vmware-tanzu/velero/pkg/apis/velero/shared"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
@@ -75,6 +75,7 @@ func NewPodVolumeBackupReconciler(client client.Client, mgr manager.Manager, kub
 		preparingTimeout: preparingTimeout,
 		resourceTimeout:  resourceTimeout,
 		exposer:          exposer.NewPodVolumeExposer(kubeClient, logger),
+		cancelledPVB:     make(map[string]time.Time),
 	}
 }
 
@@ -92,6 +93,7 @@ type PodVolumeBackupReconciler struct {
 	dataPathMgr      *datapath.Manager
 	preparingTimeout time.Duration
 	resourceTimeout  time.Duration
+	cancelledPVB     map[string]time.Time
 }
 
 // +kubebuilder:rbac:groups=velero.io,resources=podvolumebackups,verbs=get;list;watch;create;update;patch;delete
@@ -118,9 +120,8 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		)
 	}
 
-	// Logic for clear resources when pvb been deleted
-	if pvb.DeletionTimestamp.IsZero() { // add finalizer for all cr at beginning
-		if !IsPVBInFinalState(pvb) && !controllerutil.ContainsFinalizer(pvb, PodVolumeFinalizer) {
+	if !IsPVBInFinalState(pvb) {
+		if !controllerutil.ContainsFinalizer(pvb, PodVolumeFinalizer) {
 			if err := UpdatePVBWithRetry(ctx, r.client, req.NamespacedName, log, func(pvb *velerov1api.PodVolumeBackup) bool {
 				if controllerutil.ContainsFinalizer(pvb, PodVolumeFinalizer) {
 					return false
@@ -130,36 +131,77 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 				return true
 			}); err != nil {
-				log.Errorf("failed to add finalizer with error %s for %s/%s", err.Error(), pvb.Namespace, pvb.Name)
+				log.WithError(err).Errorf("failed to add finalizer for pvb %s/%s", pvb.Namespace, pvb.Name)
 				return ctrl.Result{}, err
 			}
-		}
-	} else if controllerutil.ContainsFinalizer(pvb, PodVolumeFinalizer) && !pvb.Spec.Cancel && !IsPVBInFinalState(pvb) {
-		// when delete cr we need to clear up internal resources created by Velero, here we use the cancel mechanism
-		// to help clear up resources instead of clear them directly in case of some conflict with Expose action
-		log.Warnf("Cancel pvb under phase %s because it is being deleted", pvb.Status.Phase)
 
-		if err := UpdatePVBWithRetry(ctx, r.client, req.NamespacedName, log, func(pvb *velerov1api.PodVolumeBackup) bool {
-			if pvb.Spec.Cancel {
-				return false
+			return ctrl.Result{}, nil
+		}
+
+		if !pvb.DeletionTimestamp.IsZero() {
+			if !pvb.Spec.Cancel {
+				log.Warnf("Cancel pvb under phase %s because it is being deleted", pvb.Status.Phase)
+
+				if err := UpdatePVBWithRetry(ctx, r.client, req.NamespacedName, log, func(pvb *velerov1api.PodVolumeBackup) bool {
+					if pvb.Spec.Cancel {
+						return false
+					}
+
+					pvb.Spec.Cancel = true
+					pvb.Status.Message = "Cancel pvb because it is being deleted"
+
+					return true
+				}); err != nil {
+					log.WithError(err).Errorf("failed to set cancel flag for pvb %s/%s", pvb.Namespace, pvb.Name)
+					return ctrl.Result{}, err
+				}
+
+				return ctrl.Result{}, nil
+			}
+		}
+	} else {
+		if controllerutil.ContainsFinalizer(pvb, PodVolumeFinalizer) {
+			if err := UpdatePVBWithRetry(ctx, r.client, req.NamespacedName, log, func(pvb *velerov1api.PodVolumeBackup) bool {
+				if !controllerutil.ContainsFinalizer(pvb, PodVolumeFinalizer) {
+					return false
+				}
+
+				controllerutil.RemoveFinalizer(pvb, PodVolumeFinalizer)
+
+				return true
+			}); err != nil {
+				log.WithError(err).Error("error to remove finalizer")
+				return ctrl.Result{}, err
 			}
 
-			pvb.Spec.Cancel = true
-			pvb.Status.Message = "Cancel pvb because it is being deleted"
+			return ctrl.Result{}, nil
+		}
+	}
 
-			return true
-		}); err != nil {
-			log.Errorf("failed to set cancel flag with error %s for %s/%s", err.Error(), pvb.Namespace, pvb.Name)
-			return ctrl.Result{}, err
+	if pvb.Spec.Cancel {
+		if spotted, found := r.cancelledPVB[pvb.Name]; !found {
+			r.cancelledPVB[pvb.Name] = r.clock.Now()
+		} else {
+			var delay time.Duration = 0
+			if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress {
+				delay = time.Hour
+			}
+
+			if time.Since(spotted) > delay {
+				log.Infof("pvb %s is canceled in Phase %s but not handled in rasonable time", pvb.GetName(), pvb.Status.Phase)
+				if r.tryCancelPodVolumeBackup(ctx, pvb, "") {
+					delete(r.cancelledPVB, pvb.Name)
+				}
+
+				return ctrl.Result{}, nil
+			}
 		}
 	}
 
 	if pvb.Status.Phase == "" || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseNew {
 		if pvb.Spec.Cancel {
-			log.Infof("PVB %s is canceled in Phase %s", pvb.GetName(), pvb.Status.Phase)
-			if err := r.tryCancelPodVolumeBackup(ctx, pvb, ""); err != nil {
-				return ctrl.Result{}, err
-			}
+			log.Infof("pvb %s is canceled in Phase %s", pvb.GetName(), pvb.Status.Phase)
+			r.tryCancelPodVolumeBackup(ctx, pvb, "")
 
 			return ctrl.Result{}, nil
 		}
@@ -169,16 +211,16 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, nil
 		}
 
-		log.Info("Accepting PVB")
+		log.Info("Accepting pvb")
 
 		if accepted, err := r.acceptPodVolumeBackup(ctx, pvb); err != nil {
-			return r.errorOut(ctx, pvb, err, "error to accept pvb", log)
+			return ctrl.Result{}, errors.Wrapf(err, "error accepting pvb %s", pvb.Name)
 		} else if !accepted {
-			log.Debug("Data upload is not accepted")
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			log.Debug("pvb is not accepted")
+			return ctrl.Result{Requeue: true}, nil
 		}
 
-		log.Info("Exposing PVB")
+		log.Info("Exposing pvb")
 
 		exposeParam, err := r.setupExposeParam(pvb)
 		if err != nil {
@@ -202,45 +244,28 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		log.Info("pvb is exposed")
 
-		if err := UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, log, func(pvb *velerov1api.PodVolumeBackup) bool {
-			pvb.Status.Phase = velerov1api.PodVolumeBackupPhasePreparing
-			pvb.Status.StartTimestamp = &metav1.Time{Time: r.clock.Now()}
-
-			return true
-		}); err != nil {
-			return r.errorOut(ctx, pvb, err, "error updating pvb to Preparing", log)
-		}
-
-		log.Info("pvb is marked as Preparing")
-
 		return ctrl.Result{}, nil
-	} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted || pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePreparing {
-		if pvb.Spec.Cancel {
-			log.Debugf("PVB has been canceled %s in Phase %s", pvb.GetName(), pvb.Status.Phase)
-			if err := r.tryCancelPodVolumeBackup(ctx, pvb, ""); err != nil {
-				log.WithError(err).Warnf("Failed to set PVB to cancelled, will retry")
-				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-			}
-		} else if peekErr := r.exposer.PeekExposed(ctx, getPVBOwnerObject(pvb)); peekErr != nil {
+	} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted {
+		if peekErr := r.exposer.PeekExposed(ctx, getPVBOwnerObject(pvb)); peekErr != nil {
 			log.Errorf("Cancel PVB %s/%s because of expose error %s", pvb.Namespace, pvb.Name, peekErr)
-			if err := r.tryCancelPodVolumeBackup(ctx, pvb, fmt.Sprintf("found a PVB %s/%s with expose error: %s. mark it as cancel", pvb.Namespace, pvb.Name, peekErr)); err != nil {
-				log.WithError(err).Warnf("Failed to set PVB to cancelled, will retry")
-				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-			}
+			r.tryCancelPodVolumeBackup(ctx, pvb, fmt.Sprintf("found a pvb %s/%s with expose error: %s. mark it as cancel", pvb.Namespace, pvb.Name, peekErr))
 		} else if pvb.Status.AcceptedTimestamp != nil {
 			if time.Since(pvb.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
-				if err := r.onPrepareTimeout(ctx, pvb); err != nil {
-					log.WithError(err).Warnf("Failed to handle PVB timeout, will retry")
-					return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-				}
+				r.onPrepareTimeout(ctx, pvb)
 			}
 		}
 
 		return ctrl.Result{}, nil
 	} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePrepared {
-		log.Info("PVB is prepared")
-
 		if pvb.Spec.Node != r.nodeName {
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("pvb is prepared")
+
+		if pvb.Spec.Cancel {
+			log.Info("Prepared pvb is being cancelled")
+			r.OnDataPathCancelled(ctx, pvb.GetNamespace(), pvb.GetName())
 			return ctrl.Result{}, nil
 		}
 
@@ -254,8 +279,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		if err != nil {
 			return r.errorOut(ctx, pvb, err, "exposed pvb is not ready", log)
 		} else if res == nil {
-			log.Debug("Get empty exposer")
-			return ctrl.Result{}, nil
+			return r.errorOut(ctx, pvb, errors.New("no expose result is available for the current node"), "exposed snapshot is not ready", log)
 		}
 
 		log.Info("Exposed pvb is ready and creating data path routine")
@@ -310,13 +334,12 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		return ctrl.Result{}, nil
 	} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress {
-		if pvb.Spec.Node != r.nodeName {
-			return ctrl.Result{}, nil
-		}
-
-		log.Info("PVB is in progress")
 		if pvb.Spec.Cancel {
-			log.Info("PVB is being canceled")
+			if pvb.Spec.Node != r.nodeName {
+				return ctrl.Result{}, nil
+			}
+
+			log.Info("In progress PVB is being canceled")
 
 			asyncBR := r.dataPathMgr.GetAsyncBR(pvb.Name)
 			if asyncBR == nil {
@@ -337,17 +360,9 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, nil
-	} else if IsPVBInFinalState(pvb) {
-		if err := PathPVB(ctx, r.client, pvb, func(pvb *velerov1api.PodVolumeBackup) {
-			controllerutil.RemoveFinalizer(pvb, PodVolumeFinalizer)
-		}); err != nil {
-			log.WithError(err).Error("error to remove finalizer")
-		}
-
-		return ctrl.Result{}, nil
-	} else {
-		return ctrl.Result{}, nil
 	}
+
+	return ctrl.Result{}, nil
 }
 
 func (r *PodVolumeBackupReconciler) acceptPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup) (bool, error) {
@@ -376,12 +391,10 @@ func (r *PodVolumeBackupReconciler) acceptPodVolumeBackup(ctx context.Context, p
 	return false, nil
 }
 
-func (r *PodVolumeBackupReconciler) tryCancelPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup, message string) error {
-	if err := UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, r.logger.WithField("PVB", pvb.Name), func(pvb *velerov1api.PodVolumeBackup) bool {
-		if IsPVBInFinalState(pvb) {
-			return false
-		}
-
+func (r *PodVolumeBackupReconciler) tryCancelPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup, message string) bool {
+	log := r.logger.WithField("pvb", pvb.Name)
+	log.Warn("Accepted pvb is canceled")
+	succeeded, err := r.exclusiveUpdatePodVolumeBackup(ctx, pvb, func(pvb *velerov1api.PodVolumeBackup) {
 		pvb.Status.Phase = velerov1api.PodVolumeBackupPhaseCanceled
 		if pvb.Status.StartTimestamp.IsZero() {
 			pvb.Status.StartTimestamp = &metav1.Time{Time: r.clock.Now()}
@@ -391,15 +404,19 @@ func (r *PodVolumeBackupReconciler) tryCancelPodVolumeBackup(ctx context.Context
 		if message != "" {
 			pvb.Status.Message = message
 		}
+	})
 
-		return true
-	}); err != nil {
-		return errors.Wrapf(err, "error cancelling pvb %s/%s", pvb.Namespace, pvb.Name)
+	if err != nil {
+		log.WithError(err).Error("error updating dataupload status")
+		return false
+	} else if !succeeded {
+		log.Warn("conflict in updating dataupload status and will try it again later")
+		return false
 	}
 
 	r.exposer.CleanUp(ctx, getPVBOwnerObject(pvb))
 
-	return nil
+	return true
 }
 
 func (r *PodVolumeBackupReconciler) exclusiveUpdatePodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup,
@@ -418,34 +435,34 @@ func (r *PodVolumeBackupReconciler) exclusiveUpdatePodVolumeBackup(ctx context.C
 	}
 }
 
-func (r *PodVolumeBackupReconciler) onPrepareTimeout(ctx context.Context, pvb *velerov1api.PodVolumeBackup) error {
-	log := r.logger.WithField("PVB", pvb.Name)
+func (r *PodVolumeBackupReconciler) onPrepareTimeout(ctx context.Context, pvb *velerov1api.PodVolumeBackup) {
+	log := r.logger.WithField("pvb", pvb.Name)
 
-	log.Info("Timeout happened for preparing PVB")
+	log.Info("Timeout happened for preparing pvb")
 
-	if err := UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, log, func(pvb *velerov1api.PodVolumeBackup) bool {
-		if IsPVBInFinalState(pvb) {
-			return false
-		}
-
+	succeeded, err := r.exclusiveUpdatePodVolumeBackup(ctx, pvb, func(pvb *velerov1api.PodVolumeBackup) {
 		pvb.Status.Phase = velerov1api.PodVolumeBackupPhaseFailed
 		pvb.Status.Message = "timeout on preparing pvb"
+	})
 
-		return true
-	}); err != nil {
-		return err
+	if err != nil {
+		log.WithError(err).Warn("Failed to update pvb")
+		return
+	}
+
+	if !succeeded {
+		log.Warn("pvb has been updated by others")
+		return
 	}
 
 	diags := strings.Split(r.exposer.DiagnoseExpose(ctx, getPVBOwnerObject(pvb)), "\n")
 	for _, diag := range diags {
-		log.Warnf("[Diagnose PVB expose]%s", diag)
+		log.Warnf("[Diagnose pvb expose]%s", diag)
 	}
 
 	r.exposer.CleanUp(ctx, getPVBOwnerObject(pvb))
 
-	log.Info("PVB has been cleaned up")
-
-	return nil
+	log.Info("pvb has been cleaned up")
 }
 
 func (r *PodVolumeBackupReconciler) initCancelableDataPath(ctx context.Context, asyncBR datapath.AsyncBR, res *exposer.ExposeResult, log logrus.FieldLogger) error {
@@ -567,12 +584,22 @@ func (r *PodVolumeBackupReconciler) OnDataPathProgress(ctx context.Context, name
 
 // SetupWithManager registers the PVB controller.
 func (r *PodVolumeBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
+		pvb := object.(*velerov1api.PodVolumeBackup)
+		return (pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted || pvb.Spec.Cancel)
+	})
+
+	s := kube.NewPeriodicalEnqueueSource(r.logger.WithField("controller", constant.ControllerPodVolumeBackup), r.client, &velerov1api.PodVolumeBackupList{}, preparingMonitorFrequency, kube.PeriodicalEnqueueSourceOption{
+		Predicates: []predicate.Predicate{gp},
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.PodVolumeBackup{}).
-		Watches(&v1.Pod{}, kube.EnqueueRequestsFromMapUpdateFunc(r.findPVBForPod),
+		WatchesRawSource(s).
+		Watches(&corev1api.Pod{}, kube.EnqueueRequestsFromMapUpdateFunc(r.findPVBForPod),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(ue event.UpdateEvent) bool {
-					newObj := ue.ObjectNew.(*v1.Pod)
+					newObj := ue.ObjectNew.(*corev1api.Pod)
 
 					if _, ok := newObj.Labels[velerov1api.PVBLabel]; !ok {
 						return false
@@ -598,7 +625,7 @@ func (r *PodVolumeBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (r *PodVolumeBackupReconciler) findPVBForPod(ctx context.Context, podObj client.Object) []reconcile.Request {
-	pod := podObj.(*v1.Pod)
+	pod := podObj.(*corev1api.Pod)
 	pvb, err := findPVBByPod(r.client, *pod)
 
 	log := r.logger.WithField("pod", pod.Name)
@@ -613,11 +640,11 @@ func (r *PodVolumeBackupReconciler) findPVBForPod(ctx context.Context, podObj cl
 		"pvb": pvb.Name,
 	})
 
-	if pvb.Status.Phase != velerov1api.PodVolumeBackupPhasePreparing {
+	if pvb.Status.Phase != velerov1api.PodVolumeBackupPhaseAccepted {
 		return []reconcile.Request{}
 	}
 
-	if pod.Status.Phase == v1.PodRunning {
+	if pod.Status.Phase == corev1api.PodRunning {
 		log.Info("Preparing pvb")
 
 		if err = UpdatePVBWithRetry(context.Background(), r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, log,
@@ -801,9 +828,7 @@ func (r *PodVolumeBackupReconciler) AttemptPVBResume(ctx context.Context, logger
 
 	for i := range pvbs.Items {
 		pvb := &pvbs.Items[i]
-		if pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePreparing || pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePrepared {
-			logger.WithField("pvb", pvb.GetName()).Infof("Find a pvb with status %s", pvb.Status.Phase)
-		} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress {
+		if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress {
 			if pvb.Spec.Node != r.nodeName {
 				logger.WithField("pvb", pvb.Name).WithField("current node", r.nodeName).Infof("pvb should be resumed by another node %s", pvb.Spec.Node)
 				continue
@@ -832,23 +857,8 @@ func (r *PodVolumeBackupReconciler) AttemptPVBResume(ctx context.Context, logger
 			if err != nil {
 				logger.WithField("pvb", pvb.GetName()).WithError(errors.WithStack(err)).Error("Failed to trigger pvb cancel")
 			}
-		} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted {
-			r.logger.WithField("pvb", pvb.GetName()).Warn("Cancel pvb under Accepted phase")
-
-			err := UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, r.logger.WithField("pvb", pvb.Name),
-				func(pvb *velerov1api.PodVolumeBackup) bool {
-					if pvb.Spec.Cancel {
-						return false
-					}
-
-					pvb.Spec.Cancel = true
-					pvb.Status.Message = "pvb is in Accepted status during the node-agent starting, mark it as cancel"
-
-					return true
-				})
-			if err != nil {
-				r.logger.WithField("pvb", pvb.GetName()).WithError(errors.WithStack(err)).Error("Failed to trigger pvb cancel")
-			}
+		} else {
+			logger.WithField("pvb", pvb.GetName()).Infof("find a pvb with status %s", pvb.Status.Phase)
 		}
 	}
 

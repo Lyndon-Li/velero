@@ -201,7 +201,6 @@ spec:
                 enum:
                 - New
                 - Accepted
-                - Preparing
                 - Prepared
                 - InProgress
                 - Canceling

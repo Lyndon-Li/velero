@@ -64,13 +64,12 @@ type PodVolumeBackupSpec struct {
 }
 
 // PodVolumeBackupPhase represents the lifecycle phase of a PodVolumeBackup.
-// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type PodVolumeBackupPhase string
 
 const (
 	PodVolumeBackupPhaseNew        PodVolumeBackupPhase = "New"
 	PodVolumeBackupPhaseAccepted   PodVolumeBackupPhase = "Accepted"
-	PodVolumeBackupPhasePreparing  PodVolumeBackupPhase = "Preparing"
 	PodVolumeBackupPhasePrepared   PodVolumeBackupPhase = "Prepared"
 	PodVolumeBackupPhaseInProgress PodVolumeBackupPhase = "InProgress"
 	PodVolumeBackupPhaseCanceling  PodVolumeBackupPhase = "Canceling"
