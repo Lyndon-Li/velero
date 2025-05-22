@@ -32,6 +32,7 @@ import (
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
+	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
@@ -97,12 +98,14 @@ type PodVolumeExposer interface {
 func NewPodVolumeExposer(kubeClient kubernetes.Interface, log logrus.FieldLogger) PodVolumeExposer {
 	return &podVolumeExposer{
 		kubeClient: kubeClient,
+		fs:         filesystem.NewFileSystem(),
 		log:        log,
 	}
 }
 
 type podVolumeExposer struct {
 	kubeClient kubernetes.Interface
+	fs         filesystem.Interface
 	log        logrus.FieldLogger
 }
 
@@ -129,7 +132,7 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1.Object
 		return errors.Wrapf(err, "error getting OS for node %s", pod.Spec.NodeName)
 	}
 
-	path, err := GetPodVolumeHostPathForCSI(ctx, "", pod, param.ClientPodVolume, e.kubeClient, e.log)
+	path, err := GetPodVolumeHostPath(ctx, pod, param.ClientPodVolume, e.kubeClient, e.fs, e.log)
 	if err != nil {
 		return errors.Wrapf(err, "error to get pod volume path")
 	}

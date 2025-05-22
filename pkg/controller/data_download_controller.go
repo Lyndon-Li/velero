@@ -120,12 +120,8 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, nil
 	}
 
-	if r.restoreExposer == nil {
-		return r.errorOut(ctx, dd, errors.New("uninitialized generic exposer"), "uninitialized exposer", log)
-	}
-
 	// Logic for clear resources when datadownload been deleted
-	if !IsDataDownloadInFinalState(dd) {
+	if !isDataDownloadInFinalState(dd) {
 		if !controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
 			if err := UpdateDataDownloadWithRetry(ctx, r.client, req.NamespacedName, log, func(dd *velerov2alpha1api.DataDownload) bool {
 				if controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
@@ -166,15 +162,38 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 				return ctrl.Result{}, nil
 			}
 		}
+	} else {
+		delete(r.cancelledDataDownload, dd.Name)
+
+		// put the finalizer remove action here for all cr will goes to the final status, we could check finalizer and do remove action in final status
+		// instead of intermediate state.
+		// remove finalizer no matter whether the cr is being deleted or not for it is no longer needed when internal resources are all cleaned up
+		// also in final status cr won't block the direct delete of the velero namespace
+		if controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
+			if err := UpdateDataDownloadWithRetry(ctx, r.client, req.NamespacedName, log, func(dd *velerov2alpha1api.DataDownload) bool {
+				if !controllerutil.ContainsFinalizer(dd, DataUploadDownloadFinalizer) {
+					return false
+				}
+
+				controllerutil.RemoveFinalizer(dd, DataUploadDownloadFinalizer)
+
+				return true
+			}); err != nil {
+				log.WithError(err).Error("error to remove finalizer")
+				return ctrl.Result{}, err
+			}
+
+			return ctrl.Result{}, nil
+		}
 	}
 
 	if dd.Spec.Cancel {
 		if spotted, found := r.cancelledDataDownload[dd.Name]; !found {
 			r.cancelledDataDownload[dd.Name] = r.Clock.Now()
 		} else {
-			var delay time.Duration = time.Minute * 5
+			delay := cancelDelayOthers
 			if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseInProgress {
-				delay = time.Hour
+				delay = cancelDelayInProgress
 			}
 
 			if time.Since(spotted) > delay {
@@ -198,7 +217,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 		accepted, err := r.acceptDataDownload(ctx, dd)
 		if err != nil {
-			return r.errorOut(ctx, dd, err, "error to accept the data download", log)
+			return ctrl.Result{}, errors.Wrapf(err, "error accepting the data download %s", dd.Name)
 		}
 
 		if !accepted {
@@ -224,18 +243,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// And then only the controller who is in the same node could do the rest work.
 		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), exposeParam)
 		if err != nil {
-			if err := r.client.Get(ctx, req.NamespacedName, dd); err != nil {
-				if !apierrors.IsNotFound(err) {
-					return ctrl.Result{}, errors.Wrap(err, "getting Datadownload")
-				}
-			}
-			if IsDataDownloadInFinalState(dd) {
-				log.Warnf("expose snapshot with err %v but it may caused by clean up resources in cancel action", err)
-				r.restoreExposer.CleanUp(ctx, getDataDownloadOwnerObject(dd))
-				return ctrl.Result{}, nil
-			} else {
-				return r.errorOut(ctx, dd, err, "error to expose snapshot", log)
-			}
+			return r.errorOut(ctx, dd, err, "error to expose snapshot", log)
 		}
 		log.Info("Restore is exposed")
 
@@ -309,7 +317,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// Update status to InProgress
 		terminated := false
 		if err := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
-			if IsDataDownloadInFinalState(dd) {
+			if isDataDownloadInFinalState(dd) {
 				terminated = true
 				return false
 			}
@@ -357,8 +365,8 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 			// Update status to Canceling.
 			if err := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
-				if IsDataDownloadInFinalState(dd) {
-					log.Warnf("datadownload %s is terminated, abort setting it to cancelling", dd.Name)
+				if isDataDownloadInFinalState(dd) {
+					log.Warnf("datadownload %s is terminated, abort setting it to canceling", dd.Name)
 					return false
 				}
 
@@ -426,10 +434,16 @@ func (r *DataDownloadReconciler) OnDataDownloadCompleted(ctx context.Context, na
 	log.Info("Cleaning up exposed environment")
 	r.restoreExposer.CleanUp(ctx, objRef)
 
-	original := dd.DeepCopy()
-	dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseCompleted
-	dd.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
-	if err := r.client.Patch(ctx, &dd, client.MergeFrom(original)); err != nil {
+	if err := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
+		if isDataDownloadInFinalState(dd) {
+			return false
+		}
+
+		dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseCompleted
+		dd.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
+
+		return true
+	}); err != nil {
 		log.WithError(err).Error("error updating data download status")
 	} else {
 		log.Infof("Data download is marked as %s", dd.Status.Phase)
@@ -462,27 +476,34 @@ func (r *DataDownloadReconciler) OnDataDownloadCancelled(ctx context.Context, na
 	var dd velerov2alpha1api.DataDownload
 	if getErr := r.client.Get(ctx, types.NamespacedName{Name: ddName, Namespace: namespace}, &dd); getErr != nil {
 		log.WithError(getErr).Warn("Failed to get datadownload on cancel")
-	} else {
-		// cleans up any objects generated during the snapshot expose
-		r.restoreExposer.CleanUp(ctx, getDataDownloadOwnerObject(&dd))
+		return
+	}
+	// cleans up any objects generated during the snapshot expose
+	r.restoreExposer.CleanUp(ctx, getDataDownloadOwnerObject(&dd))
 
-		original := dd.DeepCopy()
+	if err := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
+		if isDataDownloadInFinalState(dd) {
+			return false
+		}
+
 		dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseCanceled
 		if dd.Status.StartTimestamp.IsZero() {
 			dd.Status.StartTimestamp = &metav1.Time{Time: r.Clock.Now()}
 		}
 		dd.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
-		if err := r.client.Patch(ctx, &dd, client.MergeFrom(original)); err != nil {
-			log.WithError(err).Error("error updating data download status")
-		} else {
-			r.metrics.RegisterDataDownloadCancel(r.nodeName)
-		}
+
+		return true
+	}); err != nil {
+		log.WithError(err).Error("error updating data download status")
+	} else {
+		r.metrics.RegisterDataDownloadCancel(r.nodeName)
+		delete(r.cancelledDataDownload, dd.Name)
 	}
 }
 
 func (r *DataDownloadReconciler) tryCancelDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload, message string) bool {
 	log := r.logger.WithField("datadownload", dd.Name)
-	succeeded, err := r.exclusiveUpdateDataDownload(ctx, dd, func(dataDownload *velerov2alpha1api.DataDownload) {
+	succeeded, err := funcExclusiveUpdateDataDownload(ctx, r.client, dd, func(dataDownload *velerov2alpha1api.DataDownload) {
 		dataDownload.Status.Phase = velerov2alpha1api.DataDownloadPhaseCanceled
 		if dataDownload.Status.StartTimestamp.IsZero() {
 			dataDownload.Status.StartTimestamp = &metav1.Time{Time: r.Clock.Now()}
@@ -534,7 +555,11 @@ func (r *DataDownloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return true
 		}
 
-		if dd.Spec.Cancel && !IsDataDownloadInFinalState(dd) {
+		if dd.Spec.Cancel && !isDataDownloadInFinalState(dd) {
+			return true
+		}
+
+		if isDataDownloadInFinalState(dd) && !dd.DeletionTimestamp.IsZero() {
 			return true
 		}
 
@@ -599,7 +624,7 @@ func (r *DataDownloadReconciler) findSnapshotRestoreForPod(ctx context.Context, 
 		log.Info("Preparing data download")
 		if err = UpdateDataDownloadWithRetry(context.Background(), r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log,
 			func(dd *velerov2alpha1api.DataDownload) bool {
-				if IsDataDownloadInFinalState(dd) {
+				if isDataDownloadInFinalState(dd) {
 					log.Warnf("datadownload %s is terminated, abort setting it to prepared", dd.Name)
 					return false
 				}
@@ -654,13 +679,19 @@ func (r *DataDownloadReconciler) errorOut(ctx context.Context, dd *velerov2alpha
 }
 
 func (r *DataDownloadReconciler) updateStatusToFailed(ctx context.Context, dd *velerov2alpha1api.DataDownload, err error, msg string, log logrus.FieldLogger) error {
-	log.Infof("update data download status to %v", dd.Status.Phase)
-	original := dd.DeepCopy()
-	dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseFailed
-	dd.Status.Message = errors.WithMessage(err, msg).Error()
-	dd.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
+	log.Info("update data download status to Failed")
 
-	if patchErr := r.client.Patch(ctx, dd, client.MergeFrom(original)); patchErr != nil {
+	if patchErr := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
+		if isDataDownloadInFinalState(dd) {
+			return false
+		}
+
+		dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseFailed
+		dd.Status.Message = errors.WithMessage(err, msg).Error()
+		dd.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
+
+		return true
+	}); patchErr != nil {
 		log.WithError(patchErr).Error("error updating DataDownload status")
 	} else {
 		r.metrics.RegisterDataDownloadFailure(r.nodeName)
@@ -683,7 +714,7 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 		datadownload.Status.AcceptedTimestamp = &metav1.Time{Time: r.Clock.Now()}
 	}
 
-	succeeded, err := r.exclusiveUpdateDataDownload(ctx, updated, updateFunc)
+	succeeded, err := funcExclusiveUpdateDataDownload(ctx, r.client, updated, updateFunc)
 
 	if err != nil {
 		return false, err
@@ -703,7 +734,7 @@ func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *veler
 	log := r.logger.WithField("DataDownload", dd.Name)
 
 	log.Info("Timeout happened for preparing datadownload")
-	succeeded, err := r.exclusiveUpdateDataDownload(ctx, dd, func(dd *velerov2alpha1api.DataDownload) {
+	succeeded, err := funcExclusiveUpdateDataDownload(ctx, r.client, dd, func(dd *velerov2alpha1api.DataDownload) {
 		dd.Status.Phase = velerov2alpha1api.DataDownloadPhaseFailed
 		dd.Status.Message = "timeout on preparing data download"
 	})
@@ -730,11 +761,13 @@ func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *veler
 	r.metrics.RegisterDataDownloadFailure(r.nodeName)
 }
 
-func (r *DataDownloadReconciler) exclusiveUpdateDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload,
+var funcExclusiveUpdateDataDownload = exclusiveUpdateDataDownload
+
+func exclusiveUpdateDataDownload(ctx context.Context, cli client.Client, dd *velerov2alpha1api.DataDownload,
 	updateFunc func(*velerov2alpha1api.DataDownload)) (bool, error) {
 	updateFunc(dd)
 
-	err := r.client.Update(ctx, dd)
+	err := cli.Update(ctx, dd)
 
 	if err == nil {
 		return true, nil
@@ -835,13 +868,13 @@ func findDataDownloadByPod(client client.Client, pod corev1api.Pod) (*velerov2al
 	return nil, nil
 }
 
-func IsDataDownloadInFinalState(dd *velerov2alpha1api.DataDownload) bool {
+func isDataDownloadInFinalState(dd *velerov2alpha1api.DataDownload) bool {
 	return dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseFailed ||
 		dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseCanceled ||
 		dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseCompleted
 }
 
-func UpdateDataDownloadWithRetry(ctx context.Context, client client.Client, namespacedName types.NamespacedName, log *logrus.Entry, updateFunc func(*velerov2alpha1api.DataDownload) bool) error {
+func UpdateDataDownloadWithRetry(ctx context.Context, client client.Client, namespacedName types.NamespacedName, log logrus.FieldLogger, updateFunc func(*velerov2alpha1api.DataDownload) bool) error {
 	return wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
 		dd := &velerov2alpha1api.DataDownload{}
 		if err := client.Get(ctx, namespacedName, dd); err != nil {

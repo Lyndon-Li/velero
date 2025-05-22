@@ -173,7 +173,7 @@ func (c *PodVolumeRestoreReconcilerLegacy) Reconcile(ctx context.Context, req ct
 		return c.errorOut(ctx, pvr, err, "error to update status to in progress", log)
 	}
 
-	volumePath, err := exposer.GetPodVolumeHostPath(ctx, "", pod, pvr.Spec.Volume, c.kubeClient, c.fileSystem, log)
+	volumePath, err := exposer.GetPodVolumeHostPath(ctx, pod, pvr.Spec.Volume, c.kubeClient, c.fileSystem, log)
 	if err != nil {
 		c.closeDataPath(ctx, pvr.Name)
 		return c.errorOut(ctx, pvr, err, "error exposing host path for pod volume", log)
