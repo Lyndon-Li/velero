@@ -217,7 +217,7 @@ func (c *PodVolumeRestoreReconcilerLegacy) SetupWithManager(mgr ctrl.Manager) er
 		return (pvr.Spec.UploaderType == uploader.ResticType)
 	})
 
-	return ctrl.NewControllerManagedBy(mgr).
+	return ctrl.NewControllerManagedBy(mgr).Named("podvolumerestorelegacy").
 		For(&velerov1api.PodVolumeRestore{}, builder.WithPredicates(kube.SpecChangePredicate{}, pred)).
 		Watches(&corev1api.Pod{}, handler.EnqueueRequestsFromMapFunc(c.findVolumeRestoresForPod)).
 		Complete(c)

@@ -137,6 +137,11 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1.Object
 		return errors.Wrapf(err, "error to get pod volume path")
 	}
 
+	path.ByPath, err = ExtractPodVolumeHostPath(ctx, path.ByPath, e.kubeClient, ownerObject.Namespace, nodeOS)
+	if err != nil {
+		return errors.Wrapf(err, "error to extract pod volume path")
+	}
+
 	curLog.WithField("path", path).Infof("Host path is retrieved for pod %s, volume %s", param.ClientPodName, param.ClientPodVolume)
 
 	hostingPod, err := e.createHostingPod(ctx, ownerObject, param.Type, path.ByPath, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, pod.Spec.NodeName, param.Resources, nodeOS)

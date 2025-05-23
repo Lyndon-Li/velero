@@ -29,7 +29,6 @@ import (
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -940,7 +939,7 @@ var funcResumeCancellablePVR = (*PodVolumeRestoreReconciler).resumeCancellableDa
 
 func (c *PodVolumeRestoreReconciler) AttemptPVRResume(ctx context.Context, logger *logrus.Entry, ns string) error {
 	pvrs := &velerov1api.PodVolumeRestoreList{}
-	if err := c.client.List(ctx, pvrs, &client.ListOptions{Namespace: ns, FieldSelector: fields.OneTermEqualSelector("spec.node", c.nodeName)}); err != nil {
+	if err := c.client.List(ctx, pvrs, &client.ListOptions{Namespace: ns}); err != nil {
 		c.logger.WithError(errors.WithStack(err)).Error("failed to list pvrs")
 		return errors.Wrapf(err, "error to list pvrs")
 	}
