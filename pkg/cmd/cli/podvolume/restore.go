@@ -52,6 +52,7 @@ type pvrConfig struct {
 	volumePath      string
 	pvrName         string
 	resourceTimeout time.Duration
+	winHPC          bool
 }
 
 func NewRestoreCommand(f client.Factory) *cobra.Command {
@@ -86,6 +87,7 @@ func NewRestoreCommand(f client.Factory) *cobra.Command {
 	command.Flags().Var(formatFlag, "log-format", fmt.Sprintf("The format for log output. Valid values are %s.", strings.Join(formatFlag.AllowedValues(), ", ")))
 	command.Flags().StringVar(&config.volumePath, "volume-path", config.volumePath, "The full path of the volume to be restored")
 	command.Flags().StringVar(&config.pvrName, "pod-volume-restore", config.pvrName, "The PVR name")
+	command.Flags().BoolVar(&config.winHPC, "windows-hpc", config.winHPC, "The restore pod is running as Windows HPC.")
 	command.Flags().DurationVar(&config.resourceTimeout, "resource-timeout", config.resourceTimeout, "How long to wait for resource processes which are not covered by other specific timeout parameters.")
 
 	_ = command.MarkFlagRequired("volume-path")
@@ -260,7 +262,7 @@ func (s *podVolumeRestore) createDataPathService() (dataPathService, error) {
 	credentialFileStore, err := funcNewCredentialFileStore(
 		s.client,
 		s.namespace,
-		defaultCredentialsDirectory,
+		filesystem.DefaultCredentialsDirectory(s.config.winHPC),
 		filesystem.NewFileSystem(),
 	)
 	if err != nil {

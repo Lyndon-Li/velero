@@ -111,3 +111,19 @@ func (fs *osFileSystem) TempFile(dir, prefix string) (NameWriteCloser, error) {
 func (fs *osFileSystem) Stat(path string) (os.FileInfo, error) {
 	return os.Stat(path)
 }
+
+func DefaultCredentialsDirectory(winHPC bool) string {
+	if winHPC {
+		return "/hpc/tmp/credentials"
+	} else {
+		return os.TempDir() + "/credentials"
+	}
+}
+
+func GetRootDir(winHPC bool) string {
+	if winHPC {
+		return "/hpc"
+	} else {
+		return "/"
+	}
+}

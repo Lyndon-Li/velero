@@ -38,6 +38,7 @@ type inheritedPodInfo struct {
 	logFormatArgs  []string
 	dnsPolicy      corev1api.DNSPolicy
 	dnsConfig      *corev1api.PodDNSConfig
+	privileged     bool
 }
 
 func getInheritedPodInfo(ctx context.Context, client kubernetes.Interface, veleroNamespace string, osType string) (inheritedPodInfo, error) {
@@ -62,6 +63,19 @@ func getInheritedPodInfo(ctx context.Context, client kubernetes.Interface, veler
 
 	podInfo.dnsPolicy = podSpec.DNSPolicy
 	podInfo.dnsConfig = podSpec.DNSConfig
+
+	if podSpec.Containers[0].SecurityContext != nil &&
+		podSpec.Containers[0].SecurityContext.Privileged != nil {
+		podInfo.privileged = *podSpec.Containers[0].SecurityContext.Privileged
+	}
+
+	if !podInfo.privileged {
+		if podSpec.SecurityContext != nil &&
+			podSpec.SecurityContext.WindowsOptions != nil &&
+			podSpec.SecurityContext.WindowsOptions.HostProcess != nil {
+			podInfo.privileged = *podSpec.SecurityContext.WindowsOptions.HostProcess
+		}
+	}
 
 	args := podSpec.Containers[0].Args
 	for i, arg := range args {

@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/vmware-tanzu/velero/internal/velero"
+	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 )
 
 func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet {
@@ -212,8 +213,20 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 	}
 
 	if c.forWindows {
-		daemonSet.Spec.Template.Spec.SecurityContext = nil
+		userID := "ContainerAdministrator"
+		if c.privilegedNodeAgent {
+			userID = "NT AUTHORITY\\SYSTEM"
+		}
+
+		daemonSet.Spec.Template.Spec.SecurityContext = &corev1api.PodSecurityContext{
+			WindowsOptions: &corev1api.WindowsSecurityContextOptions{
+				RunAsUserName: &userID,
+				HostProcess:   &c.privilegedNodeAgent,
+			},
+		}
+
 		daemonSet.Spec.Template.Spec.Containers[0].SecurityContext = nil
+
 		daemonSet.Spec.Template.Spec.NodeSelector = map[string]string{
 			"kubernetes.io/os": "windows",
 		}
@@ -227,6 +240,12 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 				Effect:   "NoSchedule",
 				Value:    "windows",
 			},
+		}
+
+		daemonSet.Spec.Template.Spec.HostNetwork = c.privilegedNodeAgent
+
+		if c.privilegedNodeAgent {
+			daemonSet.Spec.Template.Spec.Containers[0].Command = []string{filesystem.GetRootDir(true) + "/velero"}
 		}
 	} else {
 		daemonSet.Spec.Template.Spec.NodeSelector = map[string]string{

@@ -275,7 +275,7 @@ func newServer(f client.Factory, config *config.Config, logger *logrus.Logger) (
 	credentialFileStore, err := credentials.NewNamespacedFileStore(
 		mgr.GetClient(),
 		f.Namespace(),
-		config.CredentialsDirectory,
+		filesystem.DefaultCredentialsDirectory(false),
 		filesystem.NewFileSystem(),
 	)
 	if err != nil {

@@ -28,6 +28,7 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	clocks "k8s.io/utils/clock"
@@ -53,17 +54,11 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
-const (
-	// defaultCredentialsDirectory is the path on disk where credential
-	// files will be written to
-	defaultCredentialsDirectory = "/tmp/credentials"
-)
-
 func InitLegacyPodVolumeRestoreReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager, namespace string,
 	resourceTimeout time.Duration, logger logrus.FieldLogger) error {
 	log := logger.WithField("controller", "PodVolumeRestoreLegacy")
 
-	credentialFileStore, err := credentials.NewNamespacedFileStore(client, namespace, defaultCredentialsDirectory, filesystem.NewFileSystem())
+	credentialFileStore, err := credentials.NewNamespacedFileStore(client, namespace, filesystem.DefaultCredentialsDirectory(false), filesystem.NewFileSystem())
 	if err != nil {
 		return errors.Wrapf(err, "error creating credentials file store")
 	}
@@ -113,6 +108,7 @@ type PodVolumeRestoreReconcilerLegacy struct {
 
 func (c *PodVolumeRestoreReconcilerLegacy) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := c.logger.WithField("PodVolumeRestore", req.NamespacedName.String())
+	log.Info("Reconciling PVR by legacy controller")
 
 	pvr := &velerov1api.PodVolumeRestore{}
 	if err := c.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Name}, pvr); err != nil {
@@ -122,10 +118,6 @@ func (c *PodVolumeRestoreReconcilerLegacy) Reconcile(ctx context.Context, req ct
 		}
 		log.WithError(err).Error("Unable to get the PodVolumeRestore")
 		return ctrl.Result{}, err
-	}
-
-	if pvr.Spec.UploaderType != uploader.ResticType {
-		return ctrl.Result{}, nil
 	}
 
 	log = log.WithField("pod", fmt.Sprintf("%s/%s", pvr.Spec.Pod.Namespace, pvr.Spec.Pod.Name))
@@ -214,17 +206,42 @@ func (c *PodVolumeRestoreReconcilerLegacy) SetupWithManager(mgr ctrl.Manager) er
 	// By watching the pods, we can trigger the PVR reconciliation again once the pod is finally scheduled on the node.
 	pred := kube.NewAllEventPredicate(func(obj client.Object) bool {
 		pvr := obj.(*velerov1.PodVolumeRestore)
-		return (pvr.Spec.UploaderType == uploader.ResticType)
+		return isLegacyPVR(pvr)
 	})
 
-	return ctrl.NewControllerManagedBy(mgr).
-		For(&velerov1api.PodVolumeRestore{}, builder.WithPredicates(kube.SpecChangePredicate{}, pred)).
+	return ctrl.NewControllerManagedBy(mgr).Named("podvolumerestorelegacy").
+		For(&velerov1api.PodVolumeRestore{}, builder.WithPredicates(pred)).
 		Watches(&corev1api.Pod{}, handler.EnqueueRequestsFromMapFunc(c.findVolumeRestoresForPod)).
 		Complete(c)
 }
 
 func (c *PodVolumeRestoreReconcilerLegacy) findVolumeRestoresForPod(ctx context.Context, pod client.Object) []reconcile.Request {
-	return findVolumeRestoresForPodHelper(c.Client, pod, c.logger)
+	list := &velerov1api.PodVolumeRestoreList{}
+	options := &client.ListOptions{
+		LabelSelector: labels.Set(map[string]string{
+			velerov1api.PodUIDLabel: string(pod.GetUID()),
+		}).AsSelector(),
+	}
+	if err := c.Client.List(context.TODO(), list, options); err != nil {
+		c.logger.WithField("pod", fmt.Sprintf("%s/%s", pod.GetNamespace(), pod.GetName())).WithError(err).
+			Error("unable to list PodVolumeRestores")
+		return []reconcile.Request{}
+	}
+
+	requests := []reconcile.Request{}
+	for _, item := range list.Items {
+		if !isLegacyPVR(&item) {
+			continue
+		}
+
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Namespace: item.GetNamespace(),
+				Name:      item.GetName(),
+			},
+		})
+	}
+	return requests
 }
 
 func (c *PodVolumeRestoreReconcilerLegacy) OnDataPathCompleted(ctx context.Context, namespace string, pvrName string, result datapath.Result) {
@@ -341,4 +358,8 @@ func (c *PodVolumeRestoreReconcilerLegacy) closeDataPath(ctx context.Context, pv
 	}
 
 	c.dataPathMgr.RemoveAsyncBR(pvbName)
+}
+
+func isLegacyPVR(pvr *velerov1api.PodVolumeRestore) bool {
+	return pvr.Spec.UploaderType == uploader.ResticType
 }

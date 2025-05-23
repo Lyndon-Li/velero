@@ -19,6 +19,7 @@ package exposer
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -26,6 +27,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -61,20 +63,37 @@ func GetPodVolumeHostPath(ctx context.Context, pod *corev1api.Pod, volumeName st
 	_, err = fs.Stat("/host_pods")
 	if err != nil {
 		return datapath.AccessPoint{}, errors.Wrap(err, "error locating host path")
-	} else {
-		pathGlob := fmt.Sprintf("/host_pods/%s/%s/*/%s", string(pod.GetUID()), volSubDir, volDir)
-		logger.WithField("pathGlob", pathGlob).Debug("Looking for path matching glob")
-
-		path, err = singlePathMatch(pathGlob, fs, logger)
-		if err != nil {
-			return datapath.AccessPoint{}, errors.Wrapf(err, "error identifying unique volume path on host for volume %s in pod %s", volumeName, pod.Name)
-		}
-
-		logger.WithField("path", path).Info("Found path matching glob")
 	}
+
+	pathGlob := fmt.Sprintf("/host_pods/%s/%s/*/%s", string(pod.GetUID()), volSubDir, volDir)
+	logger.WithField("pathGlob", pathGlob).Debug("Looking for path matching glob")
+
+	path, err = singlePathMatch(pathGlob, fs, logger)
+	if err != nil {
+		return datapath.AccessPoint{}, errors.Wrapf(err, "error identifying unique volume path on host for volume %s in pod %s", volumeName, pod.Name)
+	}
+
+	logger.WithField("path", path).Info("Found path matching glob")
 
 	return datapath.AccessPoint{
 		ByPath:  path,
 		VolMode: volMode,
 	}, nil
+}
+
+func ExtractPodVolumeHostPath(ctx context.Context, path string, kubeClient kubernetes.Interface, veleroNamespace string, osType string) (string, error) {
+	podPath, err := nodeagent.GetPodHostPath(ctx, kubeClient, veleroNamespace, osType)
+	if err != nil {
+		return "", errors.Wrap(err, "error getting pod host path from node-agent")
+	}
+
+	if osType == kube.NodeOSWindows {
+		podPath = strings.Replace(podPath, "/", "\\", -1)
+	}
+
+	if osType == kube.NodeOSWindows {
+		return strings.Replace(path, "\\host_pods", podPath, 1), nil
+	} else {
+		return strings.Replace(path, "/host_pods", podPath, 1), nil
+	}
 }

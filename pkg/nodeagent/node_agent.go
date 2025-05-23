@@ -249,3 +249,30 @@ func GetAnnotationValue(ctx context.Context, kubeClient kubernetes.Interface, na
 
 	return val, nil
 }
+
+func GetPodHostPath(ctx context.Context, kubeClient kubernetes.Interface, namespace string, osType string) (string, error) {
+	dsName := daemonSet
+	if osType == kube.NodeOSWindows {
+		dsName = daemonsetWindows
+	}
+
+	ds, err := kubeClient.AppsV1().DaemonSets(namespace).Get(ctx, dsName, metav1.GetOptions{})
+	if err != nil {
+		return "", errors.Wrapf(err, "error getting %s daemonset", dsName)
+	}
+
+	path := ""
+	volumeName := "host-pods"
+	for _, volume := range ds.Spec.Template.Spec.Volumes {
+		if volume.Name == volumeName {
+			path = volume.HostPath.Path
+			break
+		}
+	}
+
+	if path == "" {
+		return "", errors.Errorf("path for volume %s is not found", volumeName)
+	}
+
+	return path, nil
+}

@@ -27,7 +27,6 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
@@ -516,7 +515,10 @@ func (r *PodVolumeBackupReconciler) OnDataPathCompleted(ctx context.Context, nam
 	r.exposer.CleanUp(ctx, getPVBOwnerObject(pvb))
 
 	// Update status to Completed with path & snapshot ID.
+	var completionTime metav1.Time
 	if err := UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, log, func(pvb *velerov1api.PodVolumeBackup) bool {
+		completionTime = metav1.Time{Time: r.clock.Now()}
+
 		if isPVBInFinalState(pvb) {
 			return false
 		}
@@ -524,7 +526,7 @@ func (r *PodVolumeBackupReconciler) OnDataPathCompleted(ctx context.Context, nam
 		pvb.Status.Path = result.Backup.Source.ByPath
 		pvb.Status.Phase = velerov1api.PodVolumeBackupPhaseCompleted
 		pvb.Status.SnapshotID = result.Backup.SnapshotID
-		pvb.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
+		pvb.Status.CompletionTimestamp = &completionTime
 		if result.Backup.EmptySnapshot {
 			pvb.Status.Message = "volume was empty so no snapshot was taken"
 		}
@@ -533,7 +535,7 @@ func (r *PodVolumeBackupReconciler) OnDataPathCompleted(ctx context.Context, nam
 	}); err != nil {
 		log.WithError(err).Error("error updating PodVolumeBackup status")
 	} else {
-		latencyDuration := pvb.Status.CompletionTimestamp.Time.Sub(pvb.Status.StartTimestamp.Time)
+		latencyDuration := completionTime.Time.Sub(pvb.Status.StartTimestamp.Time)
 		latencySeconds := float64(latencyDuration / time.Second)
 		backupName := fmt.Sprintf("%s/%s", pvb.Namespace, pvb.OwnerReferences[0].Name)
 		generateOpName := fmt.Sprintf("%s-%s-%s-%s-backup", pvb.Name, pvb.Spec.BackupStorageLocation, pvb.Spec.Pod.Namespace, pvb.Spec.UploaderType)
@@ -867,7 +869,7 @@ var funcResumeCancellablePVB = (*PodVolumeBackupReconciler).resumeCancellableDat
 
 func (r *PodVolumeBackupReconciler) AttemptPVBResume(ctx context.Context, logger *logrus.Entry, ns string) error {
 	pvbs := &velerov1api.PodVolumeBackupList{}
-	if err := r.client.List(ctx, pvbs, &client.ListOptions{Namespace: ns, FieldSelector: fields.OneTermEqualSelector("spec.node", r.nodeName)}); err != nil {
+	if err := r.client.List(ctx, pvbs, &client.ListOptions{Namespace: ns}); err != nil {
 		r.logger.WithError(errors.WithStack(err)).Error("failed to list pvbs")
 		return errors.Wrapf(err, "error to list pvbs")
 	}

@@ -24,12 +24,9 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	corev1 "k8s.io/api/core/v1"
 	corev1api "k8s.io/api/core/v1"
-	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -59,7 +56,7 @@ import (
 )
 
 func NewPodVolumeRestoreReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, podResources corev1.ResourceRequirements,
+	nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, podResources corev1api.ResourceRequirements,
 	logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
 	return &PodVolumeRestoreReconciler{
 		client:           client,
@@ -84,7 +81,7 @@ type PodVolumeRestoreReconciler struct {
 	logger           logrus.FieldLogger
 	nodeName         string
 	clock            clocks.WithTickerAndDelayedExecution
-	podResources     corev1.ResourceRequirements
+	podResources     corev1api.ResourceRequirements
 	exposer          exposer.PodVolumeExposer
 	dataPathMgr      *datapath.Manager
 	preparingTimeout time.Duration
@@ -100,6 +97,7 @@ type PodVolumeRestoreReconciler struct {
 
 func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := c.logger.WithField("PodVolumeRestore", req.NamespacedName.String())
+	log.Info("Reconciling PVR by advanced controller")
 
 	pvr := &velerov1api.PodVolumeRestore{}
 	if err := c.client.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: req.Name}, pvr); err != nil {
@@ -109,10 +107,6 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 		log.WithError(err).Error("Unable to get the PodVolumeRestore")
 		return ctrl.Result{}, err
-	}
-
-	if pvr.Spec.UploaderType == uploader.ResticType {
-		return ctrl.Result{}, nil
 	}
 
 	log = log.WithField("pod", fmt.Sprintf("%s/%s", pvr.Spec.Pod.Namespace, pvr.Spec.Pod.Name))
@@ -280,8 +274,7 @@ func (c *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err != nil {
 			return c.errorOut(ctx, pvr, err, "exposed pvr is not ready", log)
 		} else if res == nil {
-			log.Debug("Get empty exposer")
-			return ctrl.Result{}, nil
+			return c.errorOut(ctx, pvr, errors.New("no expose result is available for the current node"), "exposed snapshot is not ready", log)
 		}
 
 		log.Info("Exposed pvr is ready and creating data path routine")
@@ -573,7 +566,7 @@ func (c *PodVolumeRestoreReconciler) closeDataPath(ctx context.Context, pvrName 
 func (c *PodVolumeRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		pvr := object.(*velerov1api.PodVolumeRestore)
-		if pvr.Spec.UploaderType == uploader.ResticType {
+		if isLegacyPVR(pvr) {
 			return false
 		}
 
@@ -598,17 +591,17 @@ func (c *PodVolumeRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	pred := kube.NewAllEventPredicate(func(obj client.Object) bool {
 		pvr := obj.(*velerov1.PodVolumeRestore)
-		return (pvr.Spec.UploaderType != uploader.ResticType)
+		return !isLegacyPVR(pvr)
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&velerov1api.PodVolumeRestore{}, builder.WithPredicates(kube.SpecChangePredicate{}, pred)).
+		For(&velerov1api.PodVolumeRestore{}, builder.WithPredicates(pred)).
 		WatchesRawSource(s).
 		Watches(&corev1api.Pod{}, handler.EnqueueRequestsFromMapFunc(c.findVolumeRestoresForPod)).
-		Watches(&v1.Pod{}, kube.EnqueueRequestsFromMapUpdateFunc(c.findPVRForPod),
+		Watches(&corev1api.Pod{}, kube.EnqueueRequestsFromMapUpdateFunc(c.findPVRForPod),
 			builder.WithPredicates(predicate.Funcs{
 				UpdateFunc: func(ue event.UpdateEvent) bool {
-					newObj := ue.ObjectNew.(*v1.Pod)
+					newObj := ue.ObjectNew.(*corev1api.Pod)
 
 					if _, ok := newObj.Labels[velerov1api.PVRLabel]; !ok {
 						return false
@@ -634,35 +627,36 @@ func (c *PodVolumeRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 }
 
 func (c *PodVolumeRestoreReconciler) findVolumeRestoresForPod(ctx context.Context, pod client.Object) []reconcile.Request {
-	return findVolumeRestoresForPodHelper(c.client, pod, c.logger)
-}
-
-func findVolumeRestoresForPodHelper(cli client.Client, pod client.Object, logger logrus.FieldLogger) []reconcile.Request {
 	list := &velerov1api.PodVolumeRestoreList{}
 	options := &client.ListOptions{
 		LabelSelector: labels.Set(map[string]string{
 			velerov1api.PodUIDLabel: string(pod.GetUID()),
 		}).AsSelector(),
 	}
-	if err := cli.List(context.TODO(), list, options); err != nil {
-		logger.WithField("pod", fmt.Sprintf("%s/%s", pod.GetNamespace(), pod.GetName())).WithError(err).
+	if err := c.client.List(context.TODO(), list, options); err != nil {
+		c.logger.WithField("pod", fmt.Sprintf("%s/%s", pod.GetNamespace(), pod.GetName())).WithError(err).
 			Error("unable to list PodVolumeRestores")
 		return []reconcile.Request{}
 	}
-	requests := make([]reconcile.Request, len(list.Items))
-	for i, item := range list.Items {
-		requests[i] = reconcile.Request{
+
+	requests := []reconcile.Request{}
+	for _, item := range list.Items {
+		if isLegacyPVR(&item) {
+			continue
+		}
+
+		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{
 				Namespace: item.GetNamespace(),
 				Name:      item.GetName(),
 			},
-		}
+		})
 	}
 	return requests
 }
 
 func (c *PodVolumeRestoreReconciler) findPVRForPod(ctx context.Context, podObj client.Object) []reconcile.Request {
-	pod := podObj.(*v1.Pod)
+	pod := podObj.(*corev1api.Pod)
 	pvr, err := findPVRByPod(c.client, *pod)
 
 	log := c.logger.WithField("pod", pod.Name)
@@ -681,7 +675,7 @@ func (c *PodVolumeRestoreReconciler) findPVRForPod(ctx context.Context, podObj c
 		return []reconcile.Request{}
 	}
 
-	if pod.Status.Phase == v1.PodRunning {
+	if pod.Status.Phase == corev1api.PodRunning {
 		log.Info("Preparing pvr")
 
 		if err = UpdatePVRWithRetry(context.Background(), c.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log,
@@ -881,8 +875,8 @@ func (c *PodVolumeRestoreReconciler) setupExposeParam(pvr *velerov1api.PodVolume
 	}, nil
 }
 
-func getPVROwnerObject(pvr *velerov1api.PodVolumeRestore) corev1.ObjectReference {
-	return corev1.ObjectReference{
+func getPVROwnerObject(pvr *velerov1api.PodVolumeRestore) corev1api.ObjectReference {
+	return corev1api.ObjectReference{
 		Kind:       pvr.Kind,
 		Namespace:  pvr.Namespace,
 		Name:       pvr.Name,
@@ -891,7 +885,7 @@ func getPVROwnerObject(pvr *velerov1api.PodVolumeRestore) corev1.ObjectReference
 	}
 }
 
-func findPVRByPod(client client.Client, pod corev1.Pod) (*velerov1api.PodVolumeRestore, error) {
+func findPVRByPod(client client.Client, pod corev1api.Pod) (*velerov1api.PodVolumeRestore, error) {
 	if label, exist := pod.Labels[velerov1api.PVRLabel]; exist {
 		pvr := &velerov1api.PodVolumeRestore{}
 		err := client.Get(context.Background(), types.NamespacedName{
@@ -940,13 +934,17 @@ var funcResumeCancellablePVR = (*PodVolumeRestoreReconciler).resumeCancellableDa
 
 func (c *PodVolumeRestoreReconciler) AttemptPVRResume(ctx context.Context, logger *logrus.Entry, ns string) error {
 	pvrs := &velerov1api.PodVolumeRestoreList{}
-	if err := c.client.List(ctx, pvrs, &client.ListOptions{Namespace: ns, FieldSelector: fields.OneTermEqualSelector("spec.node", c.nodeName)}); err != nil {
+	if err := c.client.List(ctx, pvrs, &client.ListOptions{Namespace: ns}); err != nil {
 		c.logger.WithError(errors.WithStack(err)).Error("failed to list pvrs")
 		return errors.Wrapf(err, "error to list pvrs")
 	}
 
 	for i := range pvrs.Items {
 		pvr := &pvrs.Items[i]
+		if isLegacyPVR(pvr) {
+			continue
+		}
+
 		if pvr.Status.Phase != velerov1api.PodVolumeRestorePhaseInProgress {
 			if pvr.Status.Node != c.nodeName {
 				logger.WithField("pvr", pvr.Name).WithField("current node", c.nodeName).Infof("pvr should be resumed by another node %s", pvr.Status.Node)

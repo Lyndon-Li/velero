@@ -100,12 +100,6 @@ func NewBackupCommand(f client.Factory) *cobra.Command {
 	return command
 }
 
-const (
-	// defaultCredentialsDirectory is the path on disk where credential
-	// files will be written to
-	defaultCredentialsDirectory = "/tmp/credentials"
-)
-
 type dataMoverBackup struct {
 	logger      logrus.FieldLogger
 	ctx         context.Context
@@ -277,7 +271,7 @@ func (s *dataMoverBackup) createDataPathService() (dataPathService, error) {
 	credentialFileStore, err := funcNewCredentialFileStore(
 		s.client,
 		s.namespace,
-		defaultCredentialsDirectory,
+		filesystem.DefaultCredentialsDirectory(false),
 		filesystem.NewFileSystem(),
 	)
 	if err != nil {

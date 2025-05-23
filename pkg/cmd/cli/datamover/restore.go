@@ -263,7 +263,7 @@ func (s *dataMoverRestore) createDataPathService() (dataPathService, error) {
 	credentialFileStore, err := funcNewCredentialFileStore(
 		s.client,
 		s.namespace,
-		defaultCredentialsDirectory,
+		filesystem.DefaultCredentialsDirectory(false),
 		filesystem.NewFileSystem(),
 	)
 	if err != nil {

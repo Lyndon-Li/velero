@@ -137,6 +137,11 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1.Object
 		return errors.Wrapf(err, "error to get pod volume path")
 	}
 
+	path.ByPath, err = ExtractPodVolumeHostPath(ctx, path.ByPath, e.kubeClient, ownerObject.Namespace, nodeOS)
+	if err != nil {
+		return errors.Wrapf(err, "error to extract pod volume path")
+	}
+
 	curLog.WithField("path", path).Infof("Host path is retrieved for pod %s, volume %s", param.ClientPodName, param.ClientPodVolume)
 
 	hostingPod, err := e.createHostingPod(ctx, ownerObject, param.Type, path.ByPath, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, pod.Spec.NodeName, param.Resources, nodeOS)
@@ -252,7 +257,7 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 	clientVolumeName := string(ownerObject.UID)
 	clientVolumePath := "/" + clientVolumeName
 
-	podInfo, err := getInheritedPodInfo(ctx, e.kubeClient, ownerObject.Namespace, kube.NodeOSLinux)
+	podInfo, err := getInheritedPodInfo(ctx, e.kubeClient, ownerObject.Namespace, nodeOS)
 	if err != nil {
 		return nil, errors.Wrap(err, "error to get inherited pod info from node-agent")
 	}
@@ -286,7 +291,7 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 	}
 
 	command := []string{
-		"/velero",
+		filesystem.GetRootDir((nodeOS == kube.NodeOSWindows && podInfo.privileged)) + "/velero",
 		"pod-volume",
 	}
 
@@ -300,6 +305,10 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 		label[podGroupLabel] = podGroupPodVolumeRestore
 	}
 
+	if nodeOS == kube.NodeOSWindows && podInfo.privileged {
+		args = append(args, "--windows-hpc")
+	}
+
 	args = append(args, podInfo.logFormatArgs...)
 	args = append(args, podInfo.logLevelArgs...)
 
@@ -307,11 +316,18 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 	nodeSelector := map[string]string{}
 	podOS := corev1.PodOS{}
 	toleration := []corev1.Toleration{}
+	hostNetwork := false
+	var containerSecurity *corev1.SecurityContext
 	if nodeOS == kube.NodeOSWindows {
 		userID := "ContainerAdministrator"
+		if podInfo.privileged {
+			userID = "NT AUTHORITY\\SYSTEM"
+		}
+
 		securityCtx = &corev1.PodSecurityContext{
 			WindowsOptions: &corev1.WindowsSecurityContextOptions{
 				RunAsUserName: &userID,
+				HostProcess:   &podInfo.privileged,
 			},
 		}
 
@@ -324,10 +340,16 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 			Effect:   "NoSchedule",
 			Value:    "windows",
 		})
+
+		hostNetwork = podInfo.privileged
 	} else {
 		userID := int64(0)
 		securityCtx = &corev1.PodSecurityContext{
 			RunAsUser: &userID,
+		}
+
+		containerSecurity = &corev1.SecurityContext{
+			Privileged: &podInfo.privileged,
 		}
 
 		nodeSelector[kube.NodeOSLabel] = kube.NodeOSLinux
@@ -364,6 +386,7 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 					Env:             podInfo.env,
 					EnvFrom:         podInfo.envFrom,
 					Resources:       resources,
+					SecurityContext: containerSecurity,
 				},
 			},
 			ServiceAccountName:            podInfo.serviceAccount,
@@ -373,6 +396,7 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 			RestartPolicy:                 corev1.RestartPolicyNever,
 			SecurityContext:               securityCtx,
 			Tolerations:                   toleration,
+			HostNetwork:                   hostNetwork,
 		},
 	}
 

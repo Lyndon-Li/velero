@@ -44,10 +44,6 @@ const (
 	defaultMaxConcurrentK8SConnections = 30
 	defaultDisableInformerCache        = false
 
-	// defaultCredentialsDirectory is the path on disk where credential
-	// files will be written to
-	defaultCredentialsDirectory = "/tmp/credentials"
-
 	DefaultKeepLatestMaintenanceJobs = 3
 	DefaultMaintenanceJobCPURequest  = "0"
 	DefaultMaintenanceJobCPULimit    = "0"
@@ -176,7 +172,6 @@ type Config struct {
 	DefaultSnapshotMoveData        bool
 	DisableInformerCache           bool
 	ScheduleSkipImmediately        bool
-	CredentialsDirectory           string
 	BackupRepoConfig               string
 	RepoMaintenanceJobConfig       string
 	PodResources                   kube.PodResources
@@ -211,7 +206,6 @@ func GetDefaultConfig() *Config {
 		DefaultSnapshotMoveData:        false,
 		DisableInformerCache:           defaultDisableInformerCache,
 		ScheduleSkipImmediately:        false,
-		CredentialsDirectory:           defaultCredentialsDirectory,
 		PodResources: kube.PodResources{
 			CPURequest:    DefaultMaintenanceJobCPULimit,
 			CPULimit:      DefaultMaintenanceJobCPURequest,
