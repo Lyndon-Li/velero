@@ -342,11 +342,6 @@ func (b *backupper) BackupPodVolumes(backup *velerov1api.Backup, pod *corev1api.
 			continue
 		}
 
-		if isEmptyDirVolume(&volume) {
-			log.Infof("Skip empty dir volume %s in pod %s/%s", volumeName, pod.Namespace, pod.Name)
-			continue
-		}
-
 		// check if volume is a block volume
 		if attachedPodDevices.Has(volumeName) {
 			msg := fmt.Sprintf("volume %s declared in pod %s/%s is a block volume. Block volumes are not supported for fs backup, skipping",
@@ -487,10 +482,6 @@ func isHostPathVolume(volume *corev1api.Volume, pvc *corev1api.PersistentVolumeC
 	}
 
 	return pv.Spec.HostPath != nil, nil
-}
-
-func isEmptyDirVolume(volume *corev1api.Volume) bool {
-	return (volume.EmptyDir != nil)
 }
 
 func newPodVolumeBackup(backup *velerov1api.Backup, pod *corev1api.Pod, volume corev1api.Volume, repoIdentifier, uploaderType string, pvc *corev1api.PersistentVolumeClaim) *velerov1api.PodVolumeBackup {
