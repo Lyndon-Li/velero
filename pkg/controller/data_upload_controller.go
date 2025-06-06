@@ -65,21 +65,22 @@ const (
 
 // DataUploadReconciler reconciles a DataUpload object
 type DataUploadReconciler struct {
-	client              client.Client
-	kubeClient          kubernetes.Interface
-	csiSnapshotClient   snapshotter.SnapshotV1Interface
-	mgr                 manager.Manager
-	Clock               clocks.WithTickerAndDelayedExecution
-	nodeName            string
-	logger              logrus.FieldLogger
-	snapshotExposerList map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer
-	dataPathMgr         *datapath.Manager
-	loadAffinity        *kube.LoadAffinity
-	backupPVCConfig     map[string]nodeagent.BackupPVC
-	podResources        corev1api.ResourceRequirements
-	preparingTimeout    time.Duration
-	metrics             *metrics.ServerMetrics
-	cancelledDataUpload map[string]time.Time
+	client                    client.Client
+	kubeClient                kubernetes.Interface
+	csiSnapshotClient         snapshotter.SnapshotV1Interface
+	mgr                       manager.Manager
+	Clock                     clocks.WithTickerAndDelayedExecution
+	nodeName                  string
+	logger                    logrus.FieldLogger
+	snapshotExposerList       map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer
+	dataPathMgr               *datapath.Manager
+	loadAffinity              *kube.LoadAffinity
+	dataPathConcurrencyConfig nodeagent.LoadConcurrency
+	backupPVCConfig           map[string]nodeagent.BackupPVC
+	podResources              corev1api.ResourceRequirements
+	preparingTimeout          time.Duration
+	metrics                   *metrics.ServerMetrics
+	cancelledDataUpload       map[string]time.Time
 }
 
 func NewDataUploadReconciler(
@@ -89,6 +90,7 @@ func NewDataUploadReconciler(
 	csiSnapshotClient snapshotter.SnapshotV1Interface,
 	dataPathMgr *datapath.Manager,
 	loadAffinity *kube.LoadAffinity,
+	concurrency nodeagent.LoadConcurrency,
 	backupPVCConfig map[string]nodeagent.BackupPVC,
 	podResources corev1api.ResourceRequirements,
 	clock clocks.WithTickerAndDelayedExecution,
@@ -112,13 +114,14 @@ func NewDataUploadReconciler(
 				log,
 			),
 		},
-		dataPathMgr:         dataPathMgr,
-		loadAffinity:        loadAffinity,
-		backupPVCConfig:     backupPVCConfig,
-		podResources:        podResources,
-		preparingTimeout:    preparingTimeout,
-		metrics:             metrics,
-		cancelledDataUpload: make(map[string]time.Time),
+		dataPathMgr:               dataPathMgr,
+		loadAffinity:              loadAffinity,
+		dataPathConcurrencyConfig: concurrency,
+		backupPVCConfig:           backupPVCConfig,
+		podResources:              podResources,
+		preparingTimeout:          preparingTimeout,
+		metrics:                   metrics,
+		cancelledDataUpload:       make(map[string]time.Time),
 	}
 }
 
@@ -269,6 +272,16 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// but the pod maybe is not in the same node of the current controller, so we need to return it here.
 		// And then only the controller who is in the same node could do the rest work.
 		if err := ep.Expose(ctx, getOwnerObject(du), exposeParam); err != nil {
+			if err == exposer.ErrDataPathNoQuota {
+				log.Info("Data path has no quota, will retry it")
+
+				if err := r.returnDataUpload(ctx, du); err != nil {
+					return r.errorOut(ctx, du, err, "error returning back dataupload", log)
+				}
+
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+
 			return r.errorOut(ctx, du, err, "error exposing snapshot", log)
 		}
 
@@ -799,6 +812,19 @@ func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov
 	return false, nil
 }
 
+func (r *DataUploadReconciler) returnDataUpload(ctx context.Context, du *velerov2alpha1api.DataUpload) error {
+	r.logger.Infof("Returning data upload back %s", du.Name)
+
+	return UpdateDataUploadWithRetry(ctx, r.client, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, r.logger.WithField("dataupload", du.Name),
+		func(dataUpload *velerov2alpha1api.DataUpload) bool {
+			dataUpload.Status.Phase = ""
+			dataUpload.Status.AcceptedByNode = ""
+			dataUpload.Status.AcceptedTimestamp = nil
+
+			return true
+		})
+}
+
 func (r *DataUploadReconciler) onPrepareTimeout(ctx context.Context, du *velerov2alpha1api.DataUpload) {
 	log := r.logger.WithField("Dataupload", du.Name)
 
@@ -931,6 +957,7 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 			BackupPVCConfig:       r.backupPVCConfig,
 			Resources:             r.podResources,
 			NodeOS:                nodeOS,
+			Concurrency:           r.dataPathConcurrencyConfig,
 		}, nil
 	}
 

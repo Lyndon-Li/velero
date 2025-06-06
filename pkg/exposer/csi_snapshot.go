@@ -79,6 +79,9 @@ type CSISnapshotExposeParam struct {
 
 	// NodeOS specifies the OS of node that the source volume is attaching
 	NodeOS string
+
+	// Concurrency specifies the concurrency configs of data path for each node
+	Concurrency nodeagent.LoadConcurrency
 }
 
 // CSISnapshotExposeWaitParam define the input param for WaitExposed of CSI snapshots
@@ -87,6 +90,10 @@ type CSISnapshotExposeWaitParam struct {
 	NodeClient client.Client
 	NodeName   string
 }
+
+var (
+	ErrDataPathNoQuota = errors.New("no quota from data path")
+)
 
 // NewCSISnapshotExposer create a new instance of CSI snapshot exposer
 func NewCSISnapshotExposer(kubeClient kubernetes.Interface, csiSnapshotClient snapshotter.SnapshotV1Interface, log logrus.FieldLogger) SnapshotExposer {
@@ -111,6 +118,10 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1api.O
 	})
 
 	curLog.Info("Exposing CSI snapshot")
+
+	if IsDataPathConstrained(ctx, e.kubeClient, ownerObject.Namespace, csiExposeParam.Concurrency, csiExposeParam.Affinity, "", curLog) {
+		return ErrDataPathNoQuota
+	}
 
 	volumeSnapshot, err := csi.WaitVolumeSnapshotReady(ctx, e.csiSnapshotClient, csiExposeParam.SnapshotName, csiExposeParam.SourceNamespace, csiExposeParam.ExposeTimeout, curLog)
 	if err != nil {
@@ -566,6 +577,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 	if label == nil {
 		label = make(map[string]string)
 	}
+	label[exposePodLabel] = "true"
 	label[podGroupLabel] = podGroupSnapshot
 
 	volumeMode := corev1api.PersistentVolumeFilesystem

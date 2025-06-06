@@ -63,6 +63,12 @@ type GenericRestoreExposeParam struct {
 
 	// RestorePVCConfig is the config for restorePVC (intermediate PVC) of generic restore
 	RestorePVCConfig nodeagent.RestorePVC
+
+	// Affinity specifies the node affinity of the restore pod
+	Affinity *kube.LoadAffinity
+
+	// Concurrency specifies the concurrency configs of data path for each node
+	Concurrency nodeagent.LoadConcurrency
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
@@ -120,6 +126,10 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 
 	if kube.IsPVCBound(targetPVC) {
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", param.TargetNamespace, param.TargetPVCName)
+	}
+
+	if IsDataPathConstrained(ctx, e.kubeClient, ownerObject.Namespace, param.Concurrency, param.Affinity, selectedNode, curLog) {
+		return ErrDataPathNoQuota
 	}
 
 	restorePod, err := e.createRestorePod(ctx, ownerObject, targetPVC, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, selectedNode, param.Resources, param.NodeOS)
@@ -406,6 +416,7 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	if label == nil {
 		label = make(map[string]string)
 	}
+	label[exposePodLabel] = "true"
 	label[podGroupLabel] = podGroupGenericRestore
 
 	volumeMode := corev1api.PersistentVolumeFilesystem

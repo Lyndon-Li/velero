@@ -26,6 +26,7 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 )
@@ -272,4 +273,22 @@ func DiagnosePod(pod *corev1api.Pod) string {
 	}
 
 	return diag
+}
+
+func CountPodsInNodes(ctx context.Context, podGetter corev1client.CoreV1Interface, namespace string, selector string, nodes []string) (int, error) {
+	pods, err := podGetter.Pods(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return 0, errors.Wrap(err, "error listing exposer pods")
+	}
+
+	nodeSet := sets.New(nodes...)
+
+	count := 0
+	for _, pod := range pods.Items {
+		if nodeSet.Has(pod.Spec.NodeName) {
+			count++
+		}
+	}
+
+	return count, nil
 }

@@ -56,38 +56,42 @@ import (
 
 // DataDownloadReconciler reconciles a DataDownload object
 type DataDownloadReconciler struct {
-	client                client.Client
-	kubeClient            kubernetes.Interface
-	mgr                   manager.Manager
-	logger                logrus.FieldLogger
-	Clock                 clock.WithTickerAndDelayedExecution
-	restoreExposer        exposer.GenericRestoreExposer
-	nodeName              string
-	dataPathMgr           *datapath.Manager
-	restorePVCConfig      nodeagent.RestorePVC
-	podResources          corev1api.ResourceRequirements
-	preparingTimeout      time.Duration
-	metrics               *metrics.ServerMetrics
-	cancelledDataDownload map[string]time.Time
+	client                    client.Client
+	kubeClient                kubernetes.Interface
+	mgr                       manager.Manager
+	logger                    logrus.FieldLogger
+	Clock                     clock.WithTickerAndDelayedExecution
+	restoreExposer            exposer.GenericRestoreExposer
+	nodeName                  string
+	dataPathMgr               *datapath.Manager
+	loadAffinity              *kube.LoadAffinity
+	dataPathConcurrencyConfig nodeagent.LoadConcurrency
+	restorePVCConfig          nodeagent.RestorePVC
+	podResources              corev1api.ResourceRequirements
+	preparingTimeout          time.Duration
+	metrics                   *metrics.ServerMetrics
+	cancelledDataDownload     map[string]time.Time
 }
 
 func NewDataDownloadReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	restorePVCConfig nodeagent.RestorePVC, podResources corev1api.ResourceRequirements, nodeName string, preparingTimeout time.Duration,
+	loadAffinity *kube.LoadAffinity, concurrency nodeagent.LoadConcurrency, restorePVCConfig nodeagent.RestorePVC, podResources corev1api.ResourceRequirements, nodeName string, preparingTimeout time.Duration,
 	logger logrus.FieldLogger, metrics *metrics.ServerMetrics) *DataDownloadReconciler {
 	return &DataDownloadReconciler{
-		client:                client,
-		kubeClient:            kubeClient,
-		mgr:                   mgr,
-		logger:                logger.WithField("controller", "DataDownload"),
-		Clock:                 &clock.RealClock{},
-		nodeName:              nodeName,
-		restoreExposer:        exposer.NewGenericRestoreExposer(kubeClient, logger),
-		restorePVCConfig:      restorePVCConfig,
-		dataPathMgr:           dataPathMgr,
-		podResources:          podResources,
-		preparingTimeout:      preparingTimeout,
-		metrics:               metrics,
-		cancelledDataDownload: make(map[string]time.Time),
+		client:                    client,
+		kubeClient:                kubeClient,
+		mgr:                       mgr,
+		logger:                    logger.WithField("controller", "DataDownload"),
+		Clock:                     &clock.RealClock{},
+		nodeName:                  nodeName,
+		restoreExposer:            exposer.NewGenericRestoreExposer(kubeClient, logger),
+		restorePVCConfig:          restorePVCConfig,
+		dataPathMgr:               dataPathMgr,
+		loadAffinity:              loadAffinity,
+		dataPathConcurrencyConfig: concurrency,
+		podResources:              podResources,
+		preparingTimeout:          preparingTimeout,
+		metrics:                   metrics,
+		cancelledDataDownload:     make(map[string]time.Time),
 	}
 }
 
@@ -243,6 +247,16 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// And then only the controller who is in the same node could do the rest work.
 		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), exposeParam)
 		if err != nil {
+			if err == exposer.ErrDataPathNoQuota {
+				log.Info("Data path has no quota, will retry it")
+
+				if err := r.returnDataDownload(ctx, dd); err != nil {
+					return r.errorOut(ctx, dd, err, "error returning back datadownload", log)
+				}
+
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+
 			return r.errorOut(ctx, dd, err, "error to expose snapshot", log)
 		}
 		log.Info("Restore is exposed")
@@ -730,6 +744,19 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 	return false, nil
 }
 
+func (r *DataDownloadReconciler) returnDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload) error {
+	r.logger.Infof("Returning data download back %s", dd.Name)
+
+	return UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, r.logger.WithField("datadownload", dd.Name),
+		func(dataDownload *velerov2alpha1api.DataDownload) bool {
+			dataDownload.Status.Phase = ""
+			dataDownload.Status.AcceptedByNode = ""
+			dataDownload.Status.AcceptedTimestamp = nil
+
+			return true
+		})
+}
+
 func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *velerov2alpha1api.DataDownload) {
 	log := r.logger.WithField("DataDownload", dd.Name)
 
@@ -838,6 +865,8 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 		ExposeTimeout:         r.preparingTimeout,
 		NodeOS:                nodeOS,
 		RestorePVCConfig:      r.restorePVCConfig,
+		Concurrency:           r.dataPathConcurrencyConfig,
+		Affinity:              r.loadAffinity,
 	}, nil
 }
 

@@ -345,6 +345,7 @@ func (s *nodeAgentServer) run() {
 		s.csiSnapshotClient.SnapshotV1(),
 		s.dataPathMgr,
 		loadAffinity,
+		s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum),
 		backupPVCConfig,
 		podResources,
 		clock.RealClock{},
@@ -363,7 +364,7 @@ func (s *nodeAgentServer) run() {
 		s.logger.Infof("Using customized restorePVC config %v", restorePVCConfig)
 	}
 
-	dataDownloadReconciler := controller.NewDataDownloadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, restorePVCConfig, podResources, s.nodeName, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
+	dataDownloadReconciler := controller.NewDataDownloadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, loadAffinity, s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum), restorePVCConfig, podResources, s.nodeName, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
 	if err = dataDownloadReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the data download controller")
 	}
@@ -556,6 +557,19 @@ func (s *nodeAgentServer) getDataPathConfigs() {
 	}
 
 	s.dataPathConfigs = configs
+}
+
+func (s *nodeAgentServer) getDataPathConcurrencyConfig(defaultNum int) nodeagent.LoadConcurrency {
+	config := nodeagent.LoadConcurrency{}
+	if s.dataPathConfigs != nil && s.dataPathConfigs.LoadConcurrency != nil {
+		config = *s.dataPathConfigs.LoadConcurrency
+	}
+
+	if config.GlobalConfig < defaultNum {
+		config.GlobalConfig = defaultNum
+	}
+
+	return config
 }
 
 func (s *nodeAgentServer) getDataPathConcurrentNum(defaultNum int) int {
