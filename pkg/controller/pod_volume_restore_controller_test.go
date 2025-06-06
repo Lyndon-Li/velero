@@ -195,11 +195,11 @@ func TestShouldProcess(t *testing.T) {
 
 			c := &PodVolumeRestoreReconciler{
 				logger: logrus.New(),
-				Client: cli,
+				client: cli,
 				clock:  &clocks.RealClock{},
 			}
 
-			shouldProcess, _, _ := c.shouldProcess(ctx, c.logger, ts.obj)
+			shouldProcess, _, _ := shouldProcess(ctx, c.client, c.logger, ts.obj)
 			require.Equal(t, ts.shouldProcessed, shouldProcess)
 		})
 	}
@@ -478,7 +478,7 @@ func TestGetInitContainerIndex(t *testing.T) {
 	}
 }
 
-func TestFindVolumeRestoresForPod(t *testing.T) {
+func TestFindPVRForTargetPod(t *testing.T) {
 	pod := &corev1api.Pod{}
 	pod.UID = "uid"
 
@@ -488,14 +488,14 @@ func TestFindVolumeRestoresForPod(t *testing.T) {
 
 	// no matching PVR
 	reconciler := &PodVolumeRestoreReconciler{
-		Client: clientBuilder.Build(),
+		client: clientBuilder.Build(),
 		logger: logrus.New(),
 	}
-	requests := reconciler.findVolumeRestoresForPod(context.Background(), pod)
+	requests := reconciler.findPVRForTargetPod(context.Background(), pod)
 	assert.Empty(t, requests)
 
 	// contain one matching PVR
-	reconciler.Client = clientBuilder.WithLists(&velerov1api.PodVolumeRestoreList{
+	reconciler.client = clientBuilder.WithLists(&velerov1api.PodVolumeRestoreList{
 		Items: []velerov1api.PodVolumeRestore{
 			{
 				ObjectMeta: metav1.ObjectMeta{
@@ -515,6 +515,6 @@ func TestFindVolumeRestoresForPod(t *testing.T) {
 			},
 		},
 	}).Build()
-	requests = reconciler.findVolumeRestoresForPod(context.Background(), pod)
+	requests = reconciler.findPVRForTargetPod(context.Background(), pod)
 	assert.Len(t, requests, 1)
 }
