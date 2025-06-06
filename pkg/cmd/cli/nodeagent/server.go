@@ -39,6 +39,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -58,6 +59,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/controller"
 	"github.com/vmware-tanzu/velero/pkg/datapath"
+	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	"github.com/vmware-tanzu/velero/pkg/repository"
@@ -148,6 +150,7 @@ type nodeAgentServer struct {
 	csiSnapshotClient *snapshotv1client.Clientset
 	dataPathMgr       *datapath.Manager
 	dataPathConfigs   *nodeagent.Configs
+	clientConfig      *rest.Config
 }
 
 func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, config nodeAgentServerConfig) (*nodeAgentServer, error) {
@@ -241,6 +244,7 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 		namespace:      factory.Namespace(),
 		nodeName:       nodeName,
 		metricsAddress: config.metricsAddress,
+		clientConfig:   clientConfig,
 	}
 
 	// the cache isn't initialized yet when "validatePodVolumesHostPath" is called, the client returned by the manager cannot
@@ -366,6 +370,10 @@ func (s *nodeAgentServer) run() {
 	dataDownloadReconciler := controller.NewDataDownloadReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, restorePVCConfig, podResources, s.nodeName, s.config.dataMoverPrepareTimeout, s.logger, s.metrics)
 	if err = dataDownloadReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the data download controller")
+	}
+
+	if err = exposer.StartVgdpWatcher(s.ctx, s.clientConfig, s.namespace, loadAffinity, s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum)); err != nil {
+		s.logger.WithError(err).Fatal("Unable to start VGDP watcher")
 	}
 
 	go func() {
@@ -556,6 +564,19 @@ func (s *nodeAgentServer) getDataPathConfigs() {
 	}
 
 	s.dataPathConfigs = configs
+}
+
+func (s *nodeAgentServer) getDataPathConcurrencyConfig(defaultNum int) nodeagent.LoadConcurrency {
+	config := nodeagent.LoadConcurrency{}
+	if s.dataPathConfigs != nil && s.dataPathConfigs.LoadConcurrency != nil {
+		config = *s.dataPathConfigs.LoadConcurrency
+	}
+
+	if config.GlobalConfig < defaultNum {
+		config.GlobalConfig = defaultNum
+	}
+
+	return config
 }
 
 func (s *nodeAgentServer) getDataPathConcurrentNum(defaultNum int) int {

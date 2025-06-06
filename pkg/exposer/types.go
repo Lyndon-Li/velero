@@ -24,6 +24,7 @@ const (
 	AccessModeFileSystem   = "by-file-system"
 	AccessModeBlock        = "by-block-device"
 	podGroupLabel          = "velero.io/exposer-pod-group"
+	exposerPodLabel        = "velero.io/exposer-pod"
 	podGroupSnapshot       = "snapshot-exposer"
 	podGroupGenericRestore = "generic-restore-exposer"
 )

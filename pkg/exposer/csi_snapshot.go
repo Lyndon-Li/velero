@@ -112,6 +112,10 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1api.O
 
 	curLog.Info("Exposing CSI snapshot")
 
+	if dataPathWatcher.IsDataPathConstrained(ctx, "", csiExposeParam.NodeOS, curLog) {
+		return ErrDataPathNoQuota
+	}
+
 	volumeSnapshot, err := csi.WaitVolumeSnapshotReady(ctx, e.csiSnapshotClient, csiExposeParam.SnapshotName, csiExposeParam.SourceNamespace, csiExposeParam.ExposeTimeout, curLog)
 	if err != nil {
 		return errors.Wrapf(err, "error wait volume snapshot ready")
@@ -566,6 +570,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 	if label == nil {
 		label = make(map[string]string)
 	}
+	label[exposerPodLabel] = "true"
 	label[podGroupLabel] = podGroupSnapshot
 
 	volumeMode := corev1api.PersistentVolumeFilesystem
