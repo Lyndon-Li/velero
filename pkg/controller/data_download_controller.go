@@ -243,6 +243,16 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		// And then only the controller who is in the same node could do the rest work.
 		err = r.restoreExposer.Expose(ctx, getDataDownloadOwnerObject(dd), exposeParam)
 		if err != nil {
+			if err == exposer.ErrDataPathNoQuota {
+				log.Info("Data path has no quota, will retry it")
+
+				if err := r.returnDataDownload(ctx, dd); err != nil {
+					return r.errorOut(ctx, dd, err, "error returning back datadownload", log)
+				}
+
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+
 			return r.errorOut(ctx, dd, err, "error to expose snapshot", log)
 		}
 		log.Info("Restore is exposed")
@@ -728,6 +738,19 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 
 	r.logger.WithField("DataDownload", dd.Name).Info("This datadownload has been accepted by others")
 	return false, nil
+}
+
+func (r *DataDownloadReconciler) returnDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload) error {
+	r.logger.Infof("Returning data download back %s", dd.Name)
+
+	return UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, r.logger.WithField("datadownload", dd.Name),
+		func(dataDownload *velerov2alpha1api.DataDownload) bool {
+			dataDownload.Status.Phase = ""
+			dataDownload.Status.AcceptedByNode = ""
+			dataDownload.Status.AcceptedTimestamp = nil
+
+			return true
+		})
 }
 
 func (r *DataDownloadReconciler) onPrepareTimeout(ctx context.Context, dd *velerov2alpha1api.DataDownload) {

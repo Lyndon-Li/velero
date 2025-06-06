@@ -169,6 +169,9 @@ func TestDataDownloadReconcile(t *testing.T) {
 
 	node := builder.ForNode("fake-node").Labels(map[string]string{kube.NodeOSLabel: kube.NodeOSLinux}).Result()
 
+	genExposeErr := errors.New("Error to expose restore exposer")
+	var noExposeErr error
+
 	tests := []struct {
 		name                     string
 		dd                       *velerov2alpha1api.DataDownload
@@ -179,7 +182,7 @@ func TestDataDownloadReconcile(t *testing.T) {
 		needCreateFSBR           bool
 		needDelete               bool
 		sportTime                *metav1.Time
-		isExposeErr              bool
+		exposeErr                *error
 		isGetExposeErr           bool
 		isGetExposeNil           bool
 		isPeekExposeErr          bool
@@ -323,15 +326,26 @@ func TestDataDownloadReconcile(t *testing.T) {
 			name:        "dd expose failed",
 			dd:          dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Result(),
 			targetPVC:   builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
-			isExposeErr: true,
+			exposeErr:   &genExposeErr,
 			expected:    dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Phase(velerov2alpha1api.DataDownloadPhaseFailed).Message("error to expose snapshot").Result(),
 			expectedErr: "Error to expose restore exposer",
 		},
 		{
-			name:      "dd succeeds for accepted",
-			dd:        dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Result(),
-			targetPVC: builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
-			expected:  dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Result(),
+			name:           "data path constraints",
+			dd:             dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Result(),
+			targetPVC:      builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
+			exposeErr:      &exposer.ErrDataPathNoQuota,
+			notMockCleanUp: true,
+			expected:       dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Result(),
+			expectedResult: &ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5},
+		},
+		{
+			name:           "dd succeeds for accepted",
+			dd:             dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Result(),
+			targetPVC:      builder.ForPersistentVolumeClaim("test-ns", "test-pvc").Result(),
+			exposeErr:      &noExposeErr,
+			notMockCleanUp: true,
+			expected:       dataDownloadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Phase(velerov2alpha1api.DataDownloadPhaseAccepted).Result(),
 		},
 		{
 			name:     "prepare timeout on accepted",
@@ -515,14 +529,14 @@ func TestDataDownloadReconcile(t *testing.T) {
 				return asyncBR
 			}
 
-			if test.isExposeErr || test.isGetExposeErr || test.isGetExposeNil || test.isPeekExposeErr || test.isNilExposer || test.notNilExpose {
+			if test.exposeErr != nil || test.isGetExposeErr || test.isGetExposeNil || test.isPeekExposeErr || test.isNilExposer || test.notNilExpose {
 				if test.isNilExposer {
 					r.restoreExposer = nil
 				} else {
 					r.restoreExposer = func() exposer.GenericRestoreExposer {
 						ep := exposermockes.NewGenericRestoreExposer(t)
-						if test.isExposeErr {
-							ep.On("Expose", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("Error to expose restore exposer"))
+						if test.exposeErr != nil {
+							ep.On("Expose", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(*test.exposeErr)
 						} else if test.notNilExpose {
 							hostingPod := builder.ForPod("test-ns", "test-name").Volumes(&corev1api.Volume{Name: "test-pvc"}).Result()
 							hostingPod.ObjectMeta.SetUID("test-uid")

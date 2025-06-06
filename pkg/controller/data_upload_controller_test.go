@@ -492,6 +492,14 @@ func TestReconcile(t *testing.T) {
 			expectedErr: "fake-expose-error",
 		},
 		{
+			name:           "data path constraints",
+			du:             dataUploadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).SnapshotType(fakeSnapshotType).Result(),
+			pvc:            builder.ForPersistentVolumeClaim("fake-ns", "test-pvc").Result(),
+			exposeErr:      exposer.ErrDataPathNoQuota,
+			expected:       dataUploadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).Result(),
+			expectedResult: &ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5},
+		},
+		{
 			name:     "du succeeds for accepted",
 			du:       dataUploadBuilder().Finalizers([]string{DataUploadDownloadFinalizer}).SnapshotType(fakeSnapshotType).Result(),
 			pvc:      builder.ForPersistentVolumeClaim("fake-ns", "test-pvc").Result(),

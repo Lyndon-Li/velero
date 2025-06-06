@@ -122,6 +122,10 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", param.TargetNamespace, param.TargetPVCName)
 	}
 
+	if dataPathWatcher.IsDataPathConstrained(ctx, selectedNode, "", curLog) {
+		return ErrDataPathNoQuota
+	}
+
 	restorePod, err := e.createRestorePod(ctx, ownerObject, targetPVC, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, selectedNode, param.Resources, param.NodeOS)
 	if err != nil {
 		return errors.Wrapf(err, "error to create restore pod")
@@ -406,6 +410,7 @@ func (e *genericRestoreExposer) createRestorePod(ctx context.Context, ownerObjec
 	if label == nil {
 		label = make(map[string]string)
 	}
+	label[exposerPodLabel] = "true"
 	label[podGroupLabel] = podGroupGenericRestore
 
 	volumeMode := corev1api.PersistentVolumeFilesystem
