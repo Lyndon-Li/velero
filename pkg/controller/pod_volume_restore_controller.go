@@ -226,6 +226,16 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 		exposeParam := r.setupExposeParam(pvr)
 		if err := r.exposer.Expose(ctx, getPVROwnerObject(pvr), exposeParam); err != nil {
+			if err == exposer.ErrDataPathNoQuota {
+				log.Info("Data path has no quota, will retry it")
+
+				if err := r.returnPodVolumeRestore(ctx, pvr); err != nil {
+					return r.errorOut(ctx, pvr, err, "error returning back PVR", log)
+				}
+
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+
 			return r.errorOut(ctx, pvr, err, "error to expose PVR", log)
 		}
 
@@ -375,6 +385,18 @@ func (r *PodVolumeRestoreReconciler) acceptPodVolumeRestore(ctx context.Context,
 
 		return true
 	})
+}
+
+func (r *PodVolumeRestoreReconciler) returnPodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore) error {
+	r.logger.Infof("Returning PVR back %s", pvr.Name)
+
+	return UpdatePVRWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, r.logger.WithField("PVR", pvr.Name),
+		func(pvr *velerov1api.PodVolumeRestore) bool {
+			pvr.Status.Phase = ""
+			pvr.Status.AcceptedTimestamp = nil
+
+			return true
+		})
 }
 
 func (r *PodVolumeRestoreReconciler) tryCancelPodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore, message string) bool {

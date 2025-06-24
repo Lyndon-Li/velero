@@ -222,6 +222,16 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 
 		exposeParam := r.setupExposeParam(pvb)
 		if err := r.exposer.Expose(ctx, getPVBOwnerObject(pvb), exposeParam); err != nil {
+			if err == exposer.ErrDataPathNoQuota {
+				log.Info("Data path has no quota, will retry it")
+
+				if err := r.returnPodVolumeBackup(ctx, pvb); err != nil {
+					return r.errorOut(ctx, pvb, err, "error returning back PVB", log)
+				}
+
+				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+			}
+
 			return r.errorOut(ctx, pvb, err, "error to expose PVB", log)
 		}
 
@@ -372,6 +382,18 @@ func (r *PodVolumeBackupReconciler) acceptPodVolumeBackup(ctx context.Context, p
 
 		return true
 	})
+}
+
+func (r *PodVolumeBackupReconciler) returnPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup) error {
+	r.logger.Infof("Returning PVB back %s", pvb.Name)
+
+	return UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, r.logger.WithField("PVB", pvb.Name),
+		func(pvb *velerov1api.PodVolumeBackup) bool {
+			pvb.Status.Phase = ""
+			pvb.Status.AcceptedTimestamp = nil
+
+			return true
+		})
 }
 
 func (r *PodVolumeBackupReconciler) tryCancelPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup, message string) bool {

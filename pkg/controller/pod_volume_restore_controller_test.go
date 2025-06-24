@@ -53,7 +53,6 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/test"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
-	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
@@ -645,6 +644,9 @@ func TestPodVolumeRestoreReconcile(t *testing.T) {
 
 	node := builder.ForNode("fake-node").Labels(map[string]string{kube.NodeOSLabel: kube.NodeOSLinux}).Result()
 
+	genExposeErr := errors.New("Error to expose restore exposer")
+	var noExposeErr error
+
 	tests := []struct {
 		name                     string
 		pvr                      *velerov1api.PodVolumeRestore
@@ -655,7 +657,7 @@ func TestPodVolumeRestoreReconcile(t *testing.T) {
 		needCreateFSBR           bool
 		needDelete               bool
 		sportTime                *metav1.Time
-		mockExposeErr            *bool
+		exposeErr                *error
 		isGetExposeErr           bool
 		isGetExposeNil           bool
 		isPeekExposeErr          bool
@@ -780,17 +782,26 @@ func TestPodVolumeRestoreReconcile(t *testing.T) {
 			expected:           builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).Finalizers([]string{PodVolumeFinalizer}).Cancel(true).Phase(velerov1api.PodVolumeRestorePhaseCanceled).Result(),
 		},
 		{
-			name:          "pvr expose failed",
-			pvr:           builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).PodNamespace("test-ns").PodName("test-pod").Finalizers([]string{PodVolumeFinalizer}).Result(),
-			targetPod:     builder.ForPod("test-ns", "test-pod").InitContainers(&corev1api.Container{Name: restorehelper.WaitInitContainer}).InitContainerState(corev1api.ContainerState{Running: &corev1api.ContainerStateRunning{}}).Result(),
-			mockExposeErr: boolptr.True(),
-			expected:      builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).Finalizers([]string{PodVolumeFinalizer}).Phase(velerov1api.PodVolumeRestorePhaseFailed).Message("error to expose PVR").Result(),
-			expectedErr:   "Error to expose restore exposer",
+			name:        "pvr expose failed",
+			pvr:         builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).PodNamespace("test-ns").PodName("test-pod").Finalizers([]string{PodVolumeFinalizer}).Result(),
+			targetPod:   builder.ForPod("test-ns", "test-pod").InitContainers(&corev1api.Container{Name: restorehelper.WaitInitContainer}).InitContainerState(corev1api.ContainerState{Running: &corev1api.ContainerStateRunning{}}).Result(),
+			exposeErr:   &genExposeErr,
+			expected:    builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).Finalizers([]string{PodVolumeFinalizer}).Phase(velerov1api.PodVolumeRestorePhaseFailed).Message("error to expose PVR").Result(),
+			expectedErr: "Error to expose restore exposer",
+		},
+		{
+			name:           "data path constraints",
+			pvr:            builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).PodNamespace("test-ns").PodName("test-pod").Finalizers([]string{PodVolumeFinalizer}).Result(),
+			exposeErr:      &exposer.ErrDataPathNoQuota,
+			notMockCleanUp: true,
+			targetPod:      builder.ForPod("test-ns", "test-pod").InitContainers(&corev1api.Container{Name: restorehelper.WaitInitContainer}).InitContainerState(corev1api.ContainerState{Running: &corev1api.ContainerStateRunning{}}).Result(),
+			expected:       builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).Finalizers([]string{PodVolumeFinalizer}).Result(),
+			expectedResult: &ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5},
 		},
 		{
 			name:           "pvr succeeds for accepted",
 			pvr:            builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).PodNamespace("test-ns").PodName("test-pod").Finalizers([]string{PodVolumeFinalizer}).Result(),
-			mockExposeErr:  boolptr.False(),
+			exposeErr:      &noExposeErr,
 			notMockCleanUp: true,
 			targetPod:      builder.ForPod("test-ns", "test-pod").InitContainers(&corev1api.Container{Name: restorehelper.WaitInitContainer}).InitContainerState(corev1api.ContainerState{Running: &corev1api.ContainerStateRunning{}}).Result(),
 			expected:       builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, pvrName).Finalizers([]string{PodVolumeFinalizer}).Phase(velerov1api.PodVolumeRestorePhaseAccepted).Result(),
@@ -971,18 +982,14 @@ func TestPodVolumeRestoreReconcile(t *testing.T) {
 				return asyncBR
 			}
 
-			if test.mockExposeErr != nil || test.isGetExposeErr || test.isGetExposeNil || test.isPeekExposeErr || test.isNilExposer || test.notNilExpose {
+			if test.exposeErr != nil || test.isGetExposeErr || test.isGetExposeNil || test.isPeekExposeErr || test.isNilExposer || test.notNilExpose {
 				if test.isNilExposer {
 					r.exposer = nil
 				} else {
 					r.exposer = func() exposer.PodVolumeExposer {
 						ep := exposermockes.NewPodVolumeExposer(t)
-						if test.mockExposeErr != nil {
-							if boolptr.IsSetToTrue(test.mockExposeErr) {
-								ep.On("Expose", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("Error to expose restore exposer"))
-							} else {
-								ep.On("Expose", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil)
-							}
+						if test.exposeErr != nil {
+							ep.On("Expose", mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(*test.exposeErr)
 						} else if test.notNilExpose {
 							hostingPod := builder.ForPod("test-ns", "test-name").Volumes(&corev1api.Volume{Name: "test-pvc"}).Result()
 							hostingPod.ObjectMeta.SetUID("test-uid")

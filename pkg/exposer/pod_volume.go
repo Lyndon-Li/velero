@@ -128,6 +128,10 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1api.Obj
 		return errors.Errorf("client pod %s doesn't have a node name", pod.Name)
 	}
 
+	if dataPathWatcher.IsDataPathConstrained(ctx, pod.Spec.NodeName, "", curLog) {
+		return ErrDataPathNoQuota
+	}
+
 	nodeOS, err := kube.GetNodeOS(ctx, pod.Spec.NodeName, e.kubeClient.CoreV1())
 	if err != nil {
 		return errors.Wrapf(err, "error getting OS for node %s", pod.Spec.NodeName)
@@ -293,6 +297,11 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 		},
 	}}
 	volumes = append(volumes, podInfo.volumes...)
+
+	if label == nil {
+		label = make(map[string]string)
+	}
+	label[exposerPodLabel] = "true"
 
 	args := []string{
 		fmt.Sprintf("--volume-path=%s", clientVolumePath),

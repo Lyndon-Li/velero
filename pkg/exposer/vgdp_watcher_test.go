@@ -363,12 +363,13 @@ func TestCountQuotaInNodes(t *testing.T) {
 	}
 }
 
-func TestCountPodsInNodes(t *testing.T) {
+func TestCountExistingPods(t *testing.T) {
 	tests := []struct {
-		name      string
-		pods      []corev1api.Pod
-		nodes     []corev1api.Node
-		expectNum int
+		name                string
+		pods                []corev1api.Pod
+		nodes               []corev1api.Node
+		expectScheduled     int
+		expectedUnscheduled int
 	}{
 		{
 			name: "test",
@@ -377,6 +378,8 @@ func TestCountPodsInNodes(t *testing.T) {
 				*builder.ForPod("test2", "test").NodeName("node1").Result(),
 				*builder.ForPod("test3", "test").NodeName("node2").Result(),
 				*builder.ForPod("test4", "test").NodeName("node3").Result(),
+				*builder.ForPod("test5", "test").Result(),
+				*builder.ForPod("test6", "test").Result(),
 			},
 			nodes: []corev1api.Node{
 				*builder.ForNode("node1").Result(),
@@ -384,13 +387,15 @@ func TestCountPodsInNodes(t *testing.T) {
 				*builder.ForNode("node3").Result(),
 				*builder.ForNode("node4").Result(),
 			},
-			expectNum: 4,
+			expectScheduled:     4,
+			expectedUnscheduled: 2,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			num := countPodsInNodes(test.pods, test.nodes)
-			assert.Equal(t, test.expectNum, num)
+			scheduled, unScheduled := countExistingPods(test.pods, test.nodes)
+			assert.Equal(t, test.expectScheduled, scheduled)
+			assert.Equal(t, test.expectedUnscheduled, unScheduled)
 		})
 	}
 }

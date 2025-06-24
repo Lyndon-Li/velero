@@ -334,6 +334,14 @@ func TestPVBReconcile(t *testing.T) {
 			expectedErr:     "fake-expose-error",
 		},
 		{
+			name:            "data path constraints",
+			pvb:             pvbBuilder().Finalizers([]string{PodVolumeFinalizer}).Node("test-node").Result(),
+			needMockExposer: true,
+			exposeErr:       exposer.ErrDataPathNoQuota,
+			expected:        pvbBuilder().Finalizers([]string{PodVolumeFinalizer}).Result(),
+			expectedResult:  &ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5},
+		},
+		{
 			name:            "pvb succeeds for accepted",
 			pvb:             pvbBuilder().Finalizers([]string{PodVolumeFinalizer}).Node("test-node").Result(),
 			needMockExposer: true,
