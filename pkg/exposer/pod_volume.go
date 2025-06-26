@@ -128,7 +128,20 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1api.Obj
 		return errors.Errorf("client pod %s doesn't have a node name", pod.Name)
 	}
 
-	if dataPathWatcher.IsDataPathConstrained(ctx, pod.Spec.NodeName, "", curLog) {
+	if held, err := dataPathWatcher.AccquirehLock(ctx, ownerObject.Name); err != nil {
+		curLog.WithField("err", err).Warnf("Failed to hold data path watcher lock for %s", ownerObject.Name)
+		return ErrDataPathNoQuota
+	} else if !held {
+		return ErrDataPathNoQuota
+	}
+
+	defer func() {
+		if err := dataPathWatcher.ReleaseLock(ctx, ownerObject.Name); err != nil {
+			curLog.Warnf("Failed to release data path watcher lock for %s", ownerObject.Name)
+		}
+	}()
+
+	if dataPathWatcher.IsDataPathConstrained(ctx, pod.Spec.NodeName, "", nil, curLog) {
 		return ErrDataPathNoQuota
 	}
 

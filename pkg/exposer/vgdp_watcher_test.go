@@ -3,30 +3,34 @@ package exposer
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/hashicorp/golang-lru/v2/expirable"
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/vmware-tanzu/velero/pkg/builder"
-	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	testutil "github.com/vmware-tanzu/velero/pkg/test"
-	"github.com/vmware-tanzu/velero/pkg/util/kube"
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/vmware-tanzu/velero/pkg/builder"
+	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	testutil "github.com/vmware-tanzu/velero/pkg/test"
+	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
 func TestIsDataPathConstrained(t *testing.T) {
 	tests := []struct {
-		name              string
-		selectedNode      string
-		selectedOS        string
-		clientErr         bool
-		kubeClientObj     []client.Object
-		countExistingFunc func([]corev1api.Pod, []corev1api.Node) int
-		expected          bool
-		expectedLog       string
+		name          string
+		selectedNode  string
+		selectedOS    string
+		affinity      *kube.LoadAffinity
+		clientErr     bool
+		kubeClientObj []client.Object
+		expected      bool
+		expectedLog   string
 	}{
 		{
 			name:         "with selected node but get fail",
@@ -86,7 +90,7 @@ func TestIsDataPathConstrained(t *testing.T) {
 			expected:   true,
 		},
 		{
-			name: "without selected node, partially match 1",
+			name: "with selected os, partially match 1",
 			kubeClientObj: []client.Object{
 				builder.ForNode("node1").Labels(map[string]string{kube.NodeOSLabel: "linux"}).Result(),
 				builder.ForNode("node2").Labels(map[string]string{kube.NodeOSLabel: "linux"}).Result(),
@@ -98,7 +102,7 @@ func TestIsDataPathConstrained(t *testing.T) {
 			expected:   true,
 		},
 		{
-			name: "without selected node, partially match 2",
+			name: "with selected os, partially match 2",
 			kubeClientObj: []client.Object{
 				builder.ForNode("node1").Labels(map[string]string{kube.NodeOSLabel: "linux"}).Result(),
 				builder.ForNode("node2").Labels(map[string]string{kube.NodeOSLabel: "linux"}).Result(),
@@ -108,6 +112,60 @@ func TestIsDataPathConstrained(t *testing.T) {
 				builder.ForPod("test3", "test").NodeName("node2").Result(),
 			},
 			selectedNode: "windows",
+		},
+		{
+			name: "with affinity, partially match 1",
+			kubeClientObj: []client.Object{
+				builder.ForNode("node1").Labels(map[string]string{kube.NodeOSLabel: "linux", "host-usage": "dm"}).Result(),
+				builder.ForNode("node2").Labels(map[string]string{kube.NodeOSLabel: "linux", "host-usage": "dm"}).Result(),
+				builder.ForNode("node3").Labels(map[string]string{kube.NodeOSLabel: "windows"}).Result(),
+				builder.ForPod("test1", "test").NodeName("node1").Result(),
+				builder.ForPod("test2", "test").NodeName("node2").Result(),
+			},
+			affinity: &kube.LoadAffinity{
+				NodeSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"host-usage": "dm",
+					},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "with affinity, partially match 2",
+			kubeClientObj: []client.Object{
+				builder.ForNode("node1").Labels(map[string]string{kube.NodeOSLabel: "linux", "host-usage": "dm"}).Result(),
+				builder.ForNode("node2").Labels(map[string]string{kube.NodeOSLabel: "linux", "host-usage": "dm"}).Result(),
+				builder.ForNode("node3").Labels(map[string]string{kube.NodeOSLabel: "windows", "host-usage": "dm"}).Result(),
+				builder.ForPod("test1", "test").NodeName("node1").Result(),
+				builder.ForPod("test2", "test").NodeName("node2").Result(),
+			},
+			affinity: &kube.LoadAffinity{
+				NodeSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"host-usage": "dm",
+					},
+				},
+			},
+		},
+		{
+			name: "with affinity and selected os",
+			kubeClientObj: []client.Object{
+				builder.ForNode("node1").Labels(map[string]string{kube.NodeOSLabel: "linux", "host-usage": "dm"}).Result(),
+				builder.ForNode("node2").Labels(map[string]string{kube.NodeOSLabel: "linux", "host-usage": "dm"}).Result(),
+				builder.ForNode("node3").Labels(map[string]string{kube.NodeOSLabel: "windows", "host-usage": "dm"}).Result(),
+				builder.ForPod("test1", "test").NodeName("node1").Result(),
+				builder.ForPod("test2", "test").NodeName("node2").Result(),
+			},
+			affinity: &kube.LoadAffinity{
+				NodeSelector: metav1.LabelSelector{
+					MatchLabels: map[string]string{
+						"host-usage": "dm",
+					},
+				},
+			},
+			selectedOS: "linux",
+			expected:   true,
 		},
 	}
 	for _, test := range tests {
@@ -133,11 +191,108 @@ func TestIsDataPathConstrained(t *testing.T) {
 			buffer := ""
 			log := testutil.NewSingleLogger(&buffer)
 
-			result := dataPathWatcher.IsDataPathConstrained(context.TODO(), test.selectedNode, test.selectedOS, log)
+			result := dataPathWatcher.isDataPathConstrained(context.TODO(), test.selectedNode, test.selectedOS, test.affinity, log)
 			assert.Equal(t, test.expected, result)
 
 			if test.expectedLog != "" {
 				assert.Contains(t, buffer, test.expectedLog)
+			}
+		})
+	}
+}
+
+func TestIsDataPathConstrained2(t *testing.T) {
+	var changeID int64 = 11
+	tests := []struct {
+		name          string
+		selectedNode  string
+		selectedOS    string
+		affinity      *kube.LoadAffinity
+		initialized   bool
+		constrained   bool
+		existing      *cacheElem
+		expected      bool
+		expectedCache *cacheElem
+	}{
+		{
+			name: "not initialized",
+		},
+		{
+			name:         "no affinity, not constrained",
+			initialized:  true,
+			selectedNode: "node1",
+			selectedOS:   "linux",
+		},
+		{
+			name:         "no affinity",
+			initialized:  true,
+			selectedNode: "node1",
+			selectedOS:   "linux",
+			constrained:  true,
+			expectedCache: &cacheElem{
+				selectedNode: "node1",
+				selectedOS:   "linux",
+				changeID:     changeID,
+			},
+			expected: true,
+		},
+		{
+			name:         "with affinity",
+			initialized:  true,
+			selectedNode: "node1",
+			selectedOS:   "linux",
+			affinity:     &kube.LoadAffinity{},
+			constrained:  true,
+			expectedCache: &cacheElem{
+				selectedNode: "node1",
+				selectedOS:   "linux",
+				affinity:     "{\"nodeSelector\":{}}",
+				changeID:     changeID,
+			},
+			expected: true,
+		},
+		{
+			name:         "cached",
+			selectedNode: "node1",
+			selectedOS:   "linux",
+			affinity:     &kube.LoadAffinity{},
+			initialized:  true,
+			existing: &cacheElem{
+				selectedNode: "node1",
+				selectedOS:   "linux",
+				affinity:     "{\"nodeSelector\":{}}",
+				changeID:     changeID,
+			},
+			expectedCache: &cacheElem{
+				selectedNode: "node1",
+				selectedOS:   "linux",
+				affinity:     "{\"nodeSelector\":{}}",
+				changeID:     changeID,
+			},
+			expected: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			dataPathWatcher = vgdpWatcher{
+				intialized: test.initialized,
+				changeID:   changeID,
+				lru:        expirable.NewLRU[cacheElem, bool](1024, nil, time.Minute*5),
+			}
+
+			if test.existing != nil {
+				dataPathWatcher.lru.Add(*test.existing, true)
+			}
+
+			funcIsDataPathConstrained = func(*vgdpWatcher, context.Context, string, string, *kube.LoadAffinity, logrus.FieldLogger) bool {
+				return test.constrained
+			}
+
+			result := dataPathWatcher.IsDataPathConstrained(context.TODO(), test.selectedNode, test.selectedOS, test.affinity, testutil.NewLogger())
+			assert.Equal(t, test.expected, result)
+
+			if test.expectedCache != nil {
+				assert.True(t, dataPathWatcher.lru.Contains(*test.expectedCache))
 			}
 		})
 	}
@@ -393,7 +548,7 @@ func TestCountExistingPods(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			scheduled, unScheduled := countExistingPods(test.pods, test.nodes)
+			scheduled, unScheduled := countExistingPods(test.pods, test.nodes, testutil.NewLogger())
 			assert.Equal(t, test.expectScheduled, scheduled)
 			assert.Equal(t, test.expectedUnscheduled, unScheduled)
 		})

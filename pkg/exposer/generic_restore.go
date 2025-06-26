@@ -122,7 +122,20 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", param.TargetNamespace, param.TargetPVCName)
 	}
 
-	if dataPathWatcher.IsDataPathConstrained(ctx, selectedNode, "", curLog) {
+	if held, err := dataPathWatcher.AccquirehLock(ctx, ownerObject.Name); err != nil {
+		curLog.WithField("err", err).Warnf("Failed to hold data path watcher lock for %s", ownerObject.Name)
+		return ErrDataPathNoQuota
+	} else if !held {
+		return ErrDataPathNoQuota
+	}
+
+	defer func() {
+		if err := dataPathWatcher.ReleaseLock(ctx, ownerObject.Name); err != nil {
+			curLog.Warnf("Failed to release data path watcher lock for %s", ownerObject.Name)
+		}
+	}()
+
+	if dataPathWatcher.IsDataPathConstrained(ctx, selectedNode, "", nil, curLog) {
 		return ErrDataPathNoQuota
 	}
 

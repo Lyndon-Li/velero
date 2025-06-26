@@ -26,6 +26,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-hclog v0.14.1
 	github.com/hashicorp/go-plugin v1.6.0
+	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/joho/godotenv v1.3.0
 	github.com/kopia/kopia v0.16.0
 	github.com/kubernetes-csi/external-snapshotter/client/v7 v7.0.0
@@ -56,6 +57,7 @@ require (
 	k8s.io/apimachinery v0.31.3
 	k8s.io/cli-runtime v0.31.3
 	k8s.io/client-go v0.31.3
+	k8s.io/component-helpers v0.31.3
 	k8s.io/klog/v2 v2.130.1
 	k8s.io/kube-aggregator v0.31.3
 	k8s.io/metrics v0.31.3
