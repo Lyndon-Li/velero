@@ -260,6 +260,25 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 
+		return ctrl.Result{}, nil
+	} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
+		if du.Status.Node != r.nodeName {
+			return ctrl.Result{}, nil
+		}
+
+		if err := UpdateDataUploadWithRetry(ctx, r.client, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, log, func(du *velerov2alpha1api.DataUpload) bool {
+			if isDataUploadInFinalState(du) {
+				log.Warnf("dataupload %s is terminated, abort setting it to canceling", du.Name)
+				return false
+			}
+
+			du.Status.Phase = velerov2alpha1api.DataUploadPhasePreparing
+			return true
+		}); err != nil {
+			log.WithError(err).Error("error updating data upload into preparing status")
+			return ctrl.Result{}, err
+		}
+
 		exposeParam, err := r.setupExposeParam(du)
 		if err != nil {
 			return r.errorOut(ctx, du, err, "failed to set exposer parameters", log)
@@ -272,10 +291,6 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if err == exposer.ErrDataPathNoQuota {
 				log.Info("Data path has no quota, will retry it")
 
-				if err := r.returnDataUpload(ctx, du); err != nil {
-					return r.errorOut(ctx, du, err, "error returning back dataupload", log)
-				}
-
 				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
 			}
 
@@ -285,12 +300,12 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.Info("Snapshot is exposed")
 
 		return ctrl.Result{}, nil
-	} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
+	} else if du.Status.Phase == velerov2alpha1api.DataUploadPhasePreparing {
 		if peekErr := ep.PeekExposed(ctx, getOwnerObject(du)); peekErr != nil {
 			r.tryCancelDataUpload(ctx, du, fmt.Sprintf("found a du %s/%s with expose error: %s. mark it as cancel", du.Namespace, du.Name, peekErr))
 			log.Errorf("Cancel du %s/%s because of expose error %s", du.Namespace, du.Name, peekErr)
-		} else if du.Status.AcceptedTimestamp != nil {
-			if time.Since(du.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
+		} else if du.Status.PrepareTimestamp != nil {
+			if time.Since(du.Status.PrepareTimestamp.Time) >= r.preparingTimeout {
 				r.onPrepareTimeout(ctx, du)
 			}
 		}

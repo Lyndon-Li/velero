@@ -88,6 +88,7 @@ type DataUploadPhase string
 const (
 	DataUploadPhaseNew        DataUploadPhase = "New"
 	DataUploadPhaseAccepted   DataUploadPhase = "Accepted"
+	DataUploadPhasePreparing  DataUploadPhase = "Preparing"
 	DataUploadPhasePrepared   DataUploadPhase = "Prepared"
 	DataUploadPhaseInProgress DataUploadPhase = "InProgress"
 	DataUploadPhaseCanceling  DataUploadPhase = "Canceling"
@@ -163,11 +164,17 @@ type DataUploadStatus struct {
 	// +optional
 	AcceptedByNode string `json:"acceptedByNode,omitempty"`
 
-	// AcceptedTimestamp records the time the DataUpload is to be prepared.
+	// AcceptedTimestamp records the time the DataUpload is accepted.
 	// The server's time is used for AcceptedTimestamp
 	// +optional
 	// +nullable
 	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
+
+	// PrepareTimestamp records the time the DataUpload is to be prepared.
+	// The server's time is used for PrepareTimestamp
+	// +optional
+	// +nullable
+	PrepareTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,

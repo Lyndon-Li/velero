@@ -149,8 +149,8 @@ spec:
                 type: string
               acceptedTimestamp:
                 description: |-
-                  AcceptedTimestamp records the time the DataUpload is to be prepared.
-                  The server's time is used for AcceptedTimestamp
+                  PrepareTimestamp records the time the DataUpload is to be prepared.
+                  The server's time is used for PrepareTimestamp
                 format: date-time
                 nullable: true
                 type: string
