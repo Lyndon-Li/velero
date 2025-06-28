@@ -194,7 +194,7 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	if pvr.Status.Phase == "" || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseNew {
+	if pvr.Status.Phase == "" || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseNew || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted {
 		if pvr.Spec.Cancel {
 			log.Infof("PVR %s is canceled in Phase %s", pvr.GetName(), pvr.Status.Phase)
 			_ = r.tryCancelPodVolumeRestore(ctx, pvr, "")
@@ -210,11 +210,11 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			return ctrl.Result{}, nil
 		}
 
-		log.Info("Accepting PVR")
-
 		if err := r.acceptPodVolumeRestore(ctx, pvr); err != nil {
 			return ctrl.Result{}, errors.Wrapf(err, "error accepting PVR %s", pvr.Name)
 		}
+
+		log.Info("PVR is accepted")
 
 		initContainerIndex := getInitContainerIndex(pod)
 		if initContainerIndex > 0 {
@@ -222,32 +222,85 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 					  if they interfere with volumes being restored: %s index %d`, restorehelper.WaitInitContainer, restorehelper.WaitInitContainer, initContainerIndex)
 		}
 
-		log.Info("Exposing PVR")
-
 		exposeParam := r.setupExposeParam(pvr)
-		if err := r.exposer.Expose(ctx, getPVROwnerObject(pvr), exposeParam); err != nil {
-			if err == exposer.ErrDataPathNoQuota {
-				log.Info("Data path has no quota, will retry it")
 
-				if err := r.returnPodVolumeRestore(ctx, pvr); err != nil {
-					return r.errorOut(ctx, pvr, err, "error returning back PVR", log)
+		selected, err := r.exposer.PreExposeCheck(ctx, getPVROwnerObject(pvr), exposeParam)
+		if err != nil {
+			return r.errorOut(ctx, pvr, err, "failed to do pre expose check", log)
+		}
+
+		lock, err := exposer.AccquireExposeCheckLock(ctx, r.client, pvr.Namespace, pvr.Name, time.Second)
+		if err != nil {
+			return ctrl.Result{}, errors.Wrap(err, "error accquiring expose check lock")
+		}
+
+		defer func() {
+			if lock != nil {
+				if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
+					log.WithError(err).Warnf("Failed to release expose check lock")
 				}
+			}
+		}()
 
-				return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		if lock == nil {
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		}
+
+		constrained, digest := exposer.IsDataPathConstrained(ctx, selected, exposeParam, r.logger)
+		if constrained {
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		} else if digest == "" {
+			log.Warnf("Load is not constrained but digest is empty")
+		}
+
+		terminated := false
+		if err := UpdatePVRWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, log, func(pvr *velerov1api.PodVolumeRestore) bool {
+			if isPVRInFinalState(pvr) {
+				log.Warnf("PVR %s is terminated, abort setting it to preparing", pvr.Name)
+				terminated = true
+				return false
 			}
 
+			pvr.Status.Phase = velerov1api.PodVolumeRestorePhasePreparing
+			pvr.Status.PrepareTimestamp = &metav1.Time{Time: r.clock.Now()}
+
+			if pvr.Annotations == nil {
+				pvr.Annotations = make(map[string]string)
+			}
+			pvr.Annotations[exposer.DataPathLoadDigestAnno] = digest
+
+			return true
+		}); err != nil {
+			log.WithError(err).Error("error updating PVR into preparing status")
+			return ctrl.Result{}, err
+		}
+
+		if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
+			log.WithError(err).Warnf("Failed to release expose check lock")
+		}
+
+		lock = nil
+
+		if terminated {
+			log.Warnf("PVR %s is terminated during transition to preparing", pvr.Name)
+			return ctrl.Result{}, nil
+		}
+
+		log.Info("Exposing PVR")
+
+		if err := r.exposer.Expose(ctx, getPVROwnerObject(pvr), exposeParam); err != nil {
 			return r.errorOut(ctx, pvr, err, "error to expose PVR", log)
 		}
 
 		log.Info("PVR is exposed")
 
 		return ctrl.Result{}, nil
-	} else if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted {
+	} else if pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePreparing {
 		if peekErr := r.exposer.PeekExposed(ctx, getPVROwnerObject(pvr)); peekErr != nil {
 			log.Errorf("Cancel PVR %s/%s because of expose error %s", pvr.Namespace, pvr.Name, peekErr)
 			_ = r.tryCancelPodVolumeRestore(ctx, pvr, fmt.Sprintf("found a PVR %s/%s with expose error: %s. mark it as cancel", pvr.Namespace, pvr.Name, peekErr))
-		} else if pvr.Status.AcceptedTimestamp != nil {
-			if time.Since(pvr.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
+		} else if pvr.Status.PrepareTimestamp != nil {
+			if time.Since(pvr.Status.PrepareTimestamp.Time) >= r.preparingTimeout {
 				r.onPrepareTimeout(ctx, pvr)
 			}
 		}
@@ -385,18 +438,6 @@ func (r *PodVolumeRestoreReconciler) acceptPodVolumeRestore(ctx context.Context,
 
 		return true
 	})
-}
-
-func (r *PodVolumeRestoreReconciler) returnPodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore) error {
-	r.logger.Infof("Returning PVR back %s", pvr.Name)
-
-	return UpdatePVRWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvr.Namespace, Name: pvr.Name}, r.logger.WithField("PVR", pvr.Name),
-		func(pvr *velerov1api.PodVolumeRestore) bool {
-			pvr.Status.Phase = ""
-			pvr.Status.AcceptedTimestamp = nil
-
-			return true
-		})
 }
 
 func (r *PodVolumeRestoreReconciler) tryCancelPodVolumeRestore(ctx context.Context, pvr *velerov1api.PodVolumeRestore, message string) bool {
@@ -571,7 +612,7 @@ func (r *PodVolumeRestoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return false
 		}
 
-		if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted {
+		if pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePreparing {
 			return true
 		}
 
@@ -672,7 +713,7 @@ func (r *PodVolumeRestoreReconciler) findPVRForRestorePod(ctx context.Context, p
 		"PVR": pvr.Name,
 	})
 
-	if pvr.Status.Phase != velerov1api.PodVolumeRestorePhaseAccepted {
+	if pvr.Status.Phase != velerov1api.PodVolumeRestorePhasePreparing {
 		return []reconcile.Request{}
 	}
 

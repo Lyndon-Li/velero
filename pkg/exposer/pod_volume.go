@@ -71,7 +71,7 @@ type PodVolumeExposeParam struct {
 
 // PodVolumeExposer is the interfaces for a pod volume exposer
 type PodVolumeExposer interface {
-	// PreExposeCheck does necessary checks before expose and returns the candidate nodes to run the data path if any
+	// PreExposeCheck does necessary checks before expose and returns the candidate nodes if any
 	PreExposeCheck(context.Context, corev1api.ObjectReference, PodVolumeExposeParam) (string, error)
 
 	// Expose starts the process to a pod volume expose, the expose process may take long time
@@ -142,23 +142,6 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1api.Obj
 
 	if pod.Spec.NodeName == "" {
 		return errors.Errorf("client pod %s doesn't have a node name", pod.Name)
-	}
-
-	if held, err := dataPathWatcher.AccquirehLock(ctx, ownerObject.Name); err != nil {
-		curLog.WithField("err", err).Warnf("Failed to hold data path watcher lock for %s", ownerObject.Name)
-		return ErrDataPathNoQuota
-	} else if !held {
-		return ErrDataPathNoQuota
-	}
-
-	defer func() {
-		if err := dataPathWatcher.ReleaseLock(ctx, ownerObject.Name); err != nil {
-			curLog.Warnf("Failed to release data path watcher lock for %s", ownerObject.Name)
-		}
-	}()
-
-	if dataPathWatcher.IsDataPathConstrained(ctx, pod.Spec.NodeName, "", nil, curLog) {
-		return ErrDataPathNoQuota
 	}
 
 	nodeOS, err := kube.GetNodeOS(ctx, pod.Spec.NodeName, e.kubeClient.CoreV1())

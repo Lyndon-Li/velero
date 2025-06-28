@@ -3,11 +3,9 @@ package exposer
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"math"
-	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,7 +15,6 @@ import (
 	corev1api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
-	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 
@@ -41,21 +38,35 @@ import (
 )
 
 type cacheElem struct {
-	changeID     int64
-	selectedNode string
-	selectedOS   string
-	affinity     string
+	nodeSelections
+	changeID int64
+}
+
+type nodeSelections struct {
+	SelectedNode string `json:"selectedNode"`
+	SelectedOS   string `json:"selecetdOS"`
+	Affinity     string `json:"affinity"`
+}
+
+type selectionInfo struct {
+	nodeSelections
+	rawAffinity *kube.LoadAffinity
+}
+
+type quotaCacheElem struct {
+	digest   string
+	changeID int64
 }
 
 type vgdpWatcher struct {
-	namespace        string
-	concurrency      nodeagent.LoadConcurrency
-	holdingLock      *coordinationv1.Lease
-	changeID         int64
-	lru              *expirable.LRU[cacheElem, bool]
-	intialized       bool
 	client           ctlclient.Client
 	mgr              manager.Manager
+	concurrency      nodeagent.LoadConcurrency
+	intialized       bool
+	changeID         int64
+	nodeChangeID     int64
+	resultCache      *expirable.LRU[cacheElem, bool]
+	quotaCache       *expirable.LRU[quotaCacheElem, int]
 	dataPathLoad     map[string]string
 	dataPathLoadLock *sync.Mutex
 }
@@ -63,25 +74,23 @@ type vgdpWatcher struct {
 var (
 	dataPathWatcher    vgdpWatcher
 	ErrDataPathNoQuota = errors.New("no quota from data path")
-	ErrLockNotHold     = errors.New("Lease lock is held by others")
-	leaseLockName      = "vgdp-lease-lock"
+	leaseLockName      = "vgdp-load-sync-lock"
 	leaseLockTimeout   = int32(10)
 )
 
-func StartVgdpWatcher(ctx context.Context, mgr manager.Manager, namespace string, concurrency nodeagent.LoadConcurrency, log logrus.FieldLogger) error {
-	dataPathWatcher.namespace = namespace
+func StartVgdpWatcher(ctx context.Context, mgr manager.Manager, namespace string, concurrency nodeagent.LoadConcurrency) error {
 	dataPathWatcher.concurrency = concurrency
 	dataPathWatcher.mgr = mgr
 	dataPathWatcher.client = mgr.GetClient()
-	dataPathWatcher.lru = expirable.NewLRU[cacheElem, bool](1024, nil, time.Minute*5)
+	dataPathWatcher.resultCache = expirable.NewLRU[cacheElem, bool](1024, nil, time.Minute*5)
+	dataPathWatcher.quotaCache = expirable.NewLRU[quotaCacheElem, int](1024, nil, time.Hour)
 	dataPathWatcher.dataPathLoad = make(map[string]string)
 	dataPathWatcher.dataPathLoadLock = &sync.Mutex{}
 
-	return dataPathWatcher.initCacheClient(ctx, mgr, namespace, log)
-
+	return dataPathWatcher.initCacheClient(ctx, mgr, namespace)
 }
 
-func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, namespace string, log logrus.FieldLogger) error {
+func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, namespace string) error {
 	nodeInformer, err := mgr.GetCache().GetInformer(ctx, &corev1api.Node{})
 	if err != nil {
 		return errors.Wrap(err, "error getting node informer")
@@ -91,9 +100,11 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj any) {
 				atomic.AddInt64(&dataPathWatcher.changeID, 1)
+				atomic.AddInt64(&dataPathWatcher.nodeChangeID, 1)
 			},
 			DeleteFunc: func(obj any) {
 				atomic.AddInt64(&dataPathWatcher.changeID, 1)
+				atomic.AddInt64(&dataPathWatcher.nodeChangeID, 1)
 			},
 		},
 	); err != nil {
@@ -121,10 +132,13 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 						w.dataPathLoad[newDu.Name] = newDu.Annotations[DataPathLoadDigestAnno]
 					}
 					w.dataPathLoadLock.Unlock()
+
 					return
 				}
 
-				if newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseCompleted || newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseCanceled || newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseFailed {
+				if newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseCompleted ||
+					newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseCanceled ||
+					newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseFailed {
 					w.dataPathLoadLock.Lock()
 					delete(w.dataPathLoad, newDu.Name)
 					w.dataPathLoadLock.Unlock()
@@ -159,6 +173,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 						w.dataPathLoad[newDd.Name] = newDd.Annotations[DataPathLoadDigestAnno]
 					}
 					w.dataPathLoadLock.Unlock()
+
 					return
 				}
 
@@ -168,6 +183,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					w.dataPathLoadLock.Lock()
 					delete(w.dataPathLoad, newDd.Name)
 					w.dataPathLoadLock.Unlock()
+
 					atomic.AddInt64(&dataPathWatcher.changeID, 1)
 					return
 				}
@@ -198,6 +214,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 						w.dataPathLoad[newPvb.Name] = newPvb.Annotations[DataPathLoadDigestAnno]
 					}
 					w.dataPathLoadLock.Unlock()
+
 					return
 				}
 
@@ -207,6 +224,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					w.dataPathLoadLock.Lock()
 					delete(w.dataPathLoad, newPvb.Name)
 					w.dataPathLoadLock.Unlock()
+
 					atomic.AddInt64(&dataPathWatcher.changeID, 1)
 					return
 				}
@@ -237,6 +255,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 						w.dataPathLoad[newPvr.Name] = newPvr.Annotations[DataPathLoadDigestAnno]
 					}
 					w.dataPathLoadLock.Unlock()
+
 					return
 				}
 
@@ -246,6 +265,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					w.dataPathLoadLock.Lock()
 					delete(w.dataPathLoad, newPvr.Name)
 					w.dataPathLoadLock.Unlock()
+
 					atomic.AddInt64(&dataPathWatcher.changeID, 1)
 					return
 				}
@@ -331,37 +351,118 @@ func ReleaseExposeCheckLock(ctx context.Context, client ctlclient.Client, lock a
 
 var funcIsDataPathConstrained = (*vgdpWatcher).isDataPathConstrained
 
-func (w *vgdpWatcher) IsDataPathConstrained(ctx context.Context, selectedNode string, selectedOS string, affinity *kube.LoadAffinity, log logrus.FieldLogger) (bool, string) {
-	if !w.intialized {
+func IsDataPathConstrained(ctx context.Context, selectedNode string, exposeParam any, log logrus.FieldLogger) (bool, string) {
+	if !dataPathWatcher.intialized {
 		return false, ""
+	}
+
+	si, err := getSelectionInfo(selectedNode, exposeParam)
+	if err != nil {
+		log.WithError(err).Warn("Failed to get selection info")
+		return false, ""
+	}
+
+	resultCache := cacheElem{
+		nodeSelections: si.nodeSelections,
+		changeID:       atomic.LoadInt64(&dataPathWatcher.changeID),
+	}
+
+	if dataPathWatcher.resultCache.Contains(resultCache) {
+		return true, ""
+	}
+
+	constrained, digest := funcIsDataPathConstrained(&dataPathWatcher, ctx, si, log)
+
+	if constrained {
+		dataPathWatcher.resultCache.Add(resultCache, true)
+	}
+
+	return constrained, digest
+}
+
+func getSelectionInfo(selectedNode string, exposeParam any) (*selectionInfo, error) {
+	si := &selectionInfo{}
+	if selectedNode != "" {
+		si.SelectedNode = selectedNode
+
+		return si, nil
+	}
+
+	nodeOS := ""
+	var affinity *kube.LoadAffinity
+	switch exposeParam := exposeParam.(type) {
+	case *CSISnapshotExposeParam:
+		affinity = exposeParam.Affinity
+		nodeOS = exposeParam.NodeOS
+	case *GenericRestoreExposeParam:
+		affinity = exposeParam.Affinity
+		nodeOS = exposeParam.NodeOS
+	case *PodVolumeExposeParam:
+		// PodVolume always goe with selectedNode
+	default:
+		return nil, errors.Errorf("type %T is not supported", exposeParam)
 	}
 
 	affinityStr := ""
 	if affinity != nil {
 		s, err := json.Marshal(affinity)
 		if err != nil {
-			log.WithError(err).Warnf("Failed to marshal affinity %v", affinity)
-			return false, ""
+			return nil, errors.Wrapf(err, "error marshaling affinity %v", affinity)
 		}
 
 		affinityStr = string(s)
 	}
 
-	lruCache := cacheElem{
-		selectedNode: selectedNode,
-		selectedOS:   selectedOS,
-		affinity:     affinityStr,
-		changeID:     atomic.LoadInt64(&w.changeID),
+	si.SelectedOS = nodeOS
+	si.Affinity = affinityStr
+	si.rawAffinity = affinity
+
+	return si, nil
+}
+
+func (w *vgdpWatcher) isDataPathConstrained(ctx context.Context, si *selectionInfo, log logrus.FieldLogger) (bool, string) {
+	marshaled, err := json.Marshal(si.nodeSelections)
+	if err != nil {
+		log.WithError(err).Warn("Failed to marshal node selections")
+		return false, ""
 	}
 
-	if w.lru.Contains(lruCache) {
-		return true, ""
+	hash := sha256.Sum256(marshaled)
+	digest := hex.EncodeToString(hash[:])
+
+	quotaCache := quotaCacheElem{
+		digest:   digest,
+		changeID: atomic.LoadInt64(&w.nodeChangeID),
 	}
 
-	constrained, digest := funcIsDataPathConstrained(w, ctx, selectedNode, selectedOS, affinity, log)
+	quota := 0
+	if q, found := w.quotaCache.Get(quotaCache); found {
+		quota = q
+		log.Infof("Got quota %d for %v", quota, si.nodeSelections)
+	} else {
+		nodes, err := w.getCandidiateNodes(ctx, si.SelectedNode, si.SelectedOS, si.rawAffinity)
+		if err != nil {
+			log.WithError(err).Warn("Failed to get candidate nodes")
+			return false, ""
+		}
+
+		quota = countQuotaInNodes(nodes, w.concurrency)
+
+		w.quotaCache.Add(quotaCache, quota)
+
+		log.Infof("Calculate quota %d for %v", quota, si.nodeSelections)
+	}
+
+	w.dataPathLoadLock.Lock()
+	existing := countExisting(w.dataPathLoad, digest)
+	w.dataPathLoadLock.Unlock()
+
+	constrained := quota <= existing
+
+	log.Infof("Quota is %v, exsiting is %v, constrained %v", quota, existing, constrained)
 
 	if constrained {
-		w.lru.Add(lruCache, true)
+		digest = ""
 	}
 
 	return constrained, digest
@@ -413,71 +514,6 @@ func (w *vgdpWatcher) getCandidiateNodes(ctx context.Context, selectedNode strin
 	return ndList.Items, nil
 }
 
-func (w *vgdpWatcher) isDataPathConstrained(ctx context.Context, selectedNode string, selectedOS string, affinity *kube.LoadAffinity, log logrus.FieldLogger) (bool, string) {
-	allNodes, err := w.getAllNodesSorted(ctx)
-	if err != nil {
-		log.WithError(err).Warn("Failed to get all nodes")
-		return false, ""
-	}
-
-	nodes, err := w.getCandidiateNodes(ctx, selectedNode, selectedOS, affinity)
-	if err != nil {
-		log.WithError(err).Warn("Failed to get candidate nodes")
-		return false, ""
-	}
-
-	candidates := sets.NewString()
-	for _, n := range nodes {
-		candidates.Insert(n.Name)
-	}
-
-	hash := sha256.New()
-	radix := ""
-	for _, n := range allNodes {
-		hash.Write([]byte(n))
-
-		if candidates.Has(n) {
-			radix += "1"
-		} else {
-			radix += "0"
-		}
-	}
-
-	nodeHash := hash.Sum(nil)
-
-	w.dataPathLoadLock.Lock()
-	existing := countExisting(w.dataPathLoad, radix, string(nodeHash), log)
-	w.dataPathLoadLock.Unlock()
-
-	quota := countQuotaInNodes(nodes, w.concurrency)
-	constrained := quota <= existing
-
-	log.Infof("Quota is %v, exsiting is %v, constrained %v", quota, existing, constrained)
-
-	digest := ""
-	if constrained {
-		digest = fmt.Sprintf("%s:%s", nodeHash, radix)
-	}
-
-	return constrained, digest
-}
-
-func (w *vgdpWatcher) getAllNodesSorted(ctx context.Context) ([]string, error) {
-	ndList := &corev1api.NodeList{}
-	if err := w.client.List(ctx, ndList, &ctlclient.ListOptions{}); err != nil {
-		return nil, errors.Wrap(err, "error listing all nodes")
-	}
-
-	allNodes := []string{}
-	for _, n := range ndList.Items {
-		allNodes = append(allNodes, n.Name)
-	}
-
-	sort.Strings(allNodes)
-
-	return allNodes, nil
-}
-
 func countQuotaInNodes(nodes []corev1api.Node, concurrency nodeagent.LoadConcurrency) int {
 	if concurrency.PerNodeConfig == nil {
 		return concurrency.GlobalConfig * len(nodes)
@@ -514,27 +550,11 @@ func countQuotaInNodes(nodes []corev1api.Node, concurrency nodeagent.LoadConcurr
 	return quota
 }
 
-func countExisting(load map[string]string, radix string, nodeHash string, log logrus.FieldLogger) int {
+func countExisting(load map[string]string, digest string) int {
 	existing := 0
-
-	for n, digest := range load {
-		parts := strings.Split(digest, ":")
-		if len(parts) != 2 {
-			log.Warnf("Data path load record %s for %s is invalid, skip", digest, n, nodeHash)
-			continue
-		}
-
-		if parts[0] != nodeHash {
-			log.Warnf("Data path load record %s for %s doesn't contain node hash %s, skip", digest, n, nodeHash)
-			continue
-		}
-
-		length := int(math.Min(float64(len(parts[1])), float64(len(radix))))
-		for i := 0; i < length; i++ {
-			if parts[1][i] == radix[i] && parts[1][i] == '1' {
-				existing++
-				break
-			}
+	for _, d := range load {
+		if d == digest {
+			existing++
 		}
 	}
 

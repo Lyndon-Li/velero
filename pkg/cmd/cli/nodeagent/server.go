@@ -66,6 +66,8 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 
 	cacheutil "k8s.io/client-go/tools/cache"
+
+	coordinationv1 "k8s.io/api/coordination/v1"
 )
 
 var (
@@ -170,6 +172,11 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 		return nil, err
 	}
 	if err := storagev1api.AddToScheme(scheme); err != nil {
+		cancelFunc()
+		return nil, err
+	}
+
+	if err := coordinationv1.AddToScheme(scheme); err != nil {
 		cancelFunc()
 		return nil, err
 	}
@@ -349,7 +356,7 @@ func (s *nodeAgentServer) run() {
 		s.logger.WithError(err).Fatal("Unable to create the data download controller")
 	}
 
-	if err := exposer.StartVgdpWatcher(s.ctx, s.clientConfig, s.namespace, s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum), s.logger); err != nil {
+	if err := exposer.StartVgdpWatcher(s.ctx, s.mgr, s.namespace, s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum)); err != nil {
 		s.logger.WithError(err).Fatal("Unable to start VGDP watcher")
 	}
 
