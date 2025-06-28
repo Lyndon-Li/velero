@@ -73,12 +73,13 @@ type TargetVolumeSpec struct {
 }
 
 // DataDownloadPhase represents the lifecycle phase of a DataDownload.
-// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type DataDownloadPhase string
 
 const (
 	DataDownloadPhaseNew        DataDownloadPhase = "New"
 	DataDownloadPhaseAccepted   DataDownloadPhase = "Accepted"
+	DataDownloadPhasePreparing  DataDownloadPhase = "Preparing"
 	DataDownloadPhasePrepared   DataDownloadPhase = "Prepared"
 	DataDownloadPhaseInProgress DataDownloadPhase = "InProgress"
 	DataDownloadPhaseCanceling  DataDownloadPhase = "Canceling"
@@ -129,6 +130,12 @@ type DataDownloadStatus struct {
 	// +optional
 	// +nullable
 	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
+
+	// PrepareTimestamp records the time the DataDownload is to be prepared.
+	// The server's time is used for PrepareTimestamp
+	// +optional
+	// +nullable
+	PrepareTimestamp *metav1.Time `json:"prepareTimestamp,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runtime-controller client, the genclient and k8s:deepcopy markers will no longer be needed and should be removed.

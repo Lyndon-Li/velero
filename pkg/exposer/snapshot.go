@@ -25,6 +25,9 @@ import (
 
 // SnapshotExposer is the interfaces for a snapshot exposer
 type SnapshotExposer interface {
+	// PreExposeCheck does necessary checks before expose and returns the candidate nodes to run the data path if any
+	PreExposeCheck(context.Context, corev1api.ObjectReference, any) (bool, string, error)
+
 	// Expose starts the process to expose a snapshot, the expose process may take long time
 	Expose(context.Context, corev1api.ObjectReference, any) error
 	// GetExposed polls the status of the expose.

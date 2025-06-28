@@ -67,6 +67,9 @@ type GenericRestoreExposeParam struct {
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
 type GenericRestoreExposer interface {
+	// PreExposeCheck does necessary checks before expose and returns the candidate nodes to run the data path if any
+	PreExposeCheck(context.Context, corev1api.ObjectReference, GenericRestoreExposeParam) (string, error)
+
 	// Expose starts the process to a restore expose, the expose process may take long time
 	Expose(context.Context, corev1api.ObjectReference, GenericRestoreExposeParam) error
 
@@ -102,6 +105,15 @@ func NewGenericRestoreExposer(kubeClient kubernetes.Interface, log logrus.FieldL
 type genericRestoreExposer struct {
 	kubeClient kubernetes.Interface
 	log        logrus.FieldLogger
+}
+
+func (e *genericRestoreExposer) PreExposeCheck(ctx context.Context, ownerObject corev1api.ObjectReference, param GenericRestoreExposeParam) (string, error) {
+	selectedNode, _, err := kube.WaitPVCConsumed(ctx, e.kubeClient.CoreV1(), param.TargetPVCName, param.TargetNamespace, e.kubeClient.StorageV1(), param.ExposeTimeout, param.RestorePVCConfig.IgnoreDelayBinding)
+	if err != nil {
+		return "", errors.Wrapf(err, "error to wait target PVC consumed, %s/%s", param.TargetNamespace, param.TargetPVCName)
+	}
+
+	return selectedNode, nil
 }
 
 func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1api.ObjectReference, param GenericRestoreExposeParam) error {

@@ -27,6 +27,7 @@ const (
 	exposerPodLabel        = "velero.io/exposer-pod"
 	podGroupSnapshot       = "snapshot-exposer"
 	podGroupGenericRestore = "generic-restore-exposer"
+	DataPathLoadDigestAnno = "velero.io/data-path-load-digest"
 )
 
 // ExposeResult defines the result of expose.

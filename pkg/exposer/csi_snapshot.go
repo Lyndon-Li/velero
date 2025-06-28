@@ -103,6 +103,10 @@ type csiSnapshotExposer struct {
 	log               logrus.FieldLogger
 }
 
+func (e *csiSnapshotExposer) PreExposeCheck(ctx context.Context, ownerObject corev1api.ObjectReference, param any) (string, error) {
+	return "", nil
+}
+
 func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1api.ObjectReference, param any) error {
 	csiExposeParam := param.(*CSISnapshotExposeParam)
 

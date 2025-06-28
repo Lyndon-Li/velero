@@ -82,7 +82,7 @@ type CSISnapshotSpec struct {
 }
 
 // DataUploadPhase represents the lifecycle phase of a DataUpload.
-// +kubebuilder:validation:Enum=New;Accepted;Prepared;InProgress;Canceling;Canceled;Completed;Failed
+// +kubebuilder:validation:Enum=New;Accepted;Preparing;Prepared;InProgress;Canceling;Canceled;Completed;Failed
 type DataUploadPhase string
 
 const (
@@ -174,7 +174,7 @@ type DataUploadStatus struct {
 	// The server's time is used for PrepareTimestamp
 	// +optional
 	// +nullable
-	PrepareTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
+	PrepareTimestamp *metav1.Time `json:"prepareTimestamp,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,

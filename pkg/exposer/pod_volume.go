@@ -71,6 +71,9 @@ type PodVolumeExposeParam struct {
 
 // PodVolumeExposer is the interfaces for a pod volume exposer
 type PodVolumeExposer interface {
+	// PreExposeCheck does necessary checks before expose and returns the candidate nodes to run the data path if any
+	PreExposeCheck(context.Context, corev1api.ObjectReference, PodVolumeExposeParam) (string, error)
+
 	// Expose starts the process to a pod volume expose, the expose process may take long time
 	Expose(context.Context, corev1api.ObjectReference, PodVolumeExposeParam) error
 
@@ -105,6 +108,19 @@ type podVolumeExposer struct {
 	kubeClient kubernetes.Interface
 	fs         filesystem.Interface
 	log        logrus.FieldLogger
+}
+
+func (e *podVolumeExposer) PreExposeCheck(ctx context.Context, ownerObject corev1api.ObjectReference, param PodVolumeExposeParam) (string, error) {
+	pod, err := e.kubeClient.CoreV1().Pods(param.ClientNamespace).Get(ctx, param.ClientPodName, metav1.GetOptions{})
+	if err != nil {
+		return "", errors.Wrapf(err, "error getting client pod %s", param.ClientPodName)
+	}
+
+	if pod.Spec.NodeName == "" {
+		return "", errors.Errorf("client pod %s doesn't have a node name", pod.Name)
+	}
+
+	return pod.Spec.NodeName, nil
 }
 
 var getPodVolumeHostPath = GetPodVolumeHostPath
