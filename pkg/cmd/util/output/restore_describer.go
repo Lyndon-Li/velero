@@ -366,6 +366,7 @@ func describePodVolumeRestores(d *Describer, restores []velerov1api.PodVolumeRes
 		string(velerov1api.PodVolumeRestorePhaseFailed),
 		"In Progress",
 		string(velerov1api.PodVolumeRestorePhasePrepared),
+		string(velerov1api.PodVolumeRestorePhasePreparing),
 		string(velerov1api.PodVolumeRestorePhaseAccepted),
 		string(velerov1api.PodVolumeRestorePhaseNew),
 	} {
@@ -449,6 +450,7 @@ func groupRestoresByPhase(restores []velerov1api.PodVolumeRestore) map[string][]
 		velerov1api.PodVolumeRestorePhaseFailed:     string(velerov1api.PodVolumeRestorePhaseFailed),
 		velerov1api.PodVolumeRestorePhaseInProgress: "In Progress",
 		velerov1api.PodVolumeRestorePhasePrepared:   string(velerov1api.PodVolumeRestorePhasePrepared),
+		velerov1api.PodVolumeRestorePhasePreparing:  string(velerov1api.PodVolumeRestorePhasePreparing),
 		velerov1api.PodVolumeRestorePhaseAccepted:   string(velerov1api.PodVolumeRestorePhaseAccepted),
 		velerov1api.PodVolumeRestorePhaseNew:        string(velerov1api.PodVolumeRestorePhaseNew),
 		"":                                          string(velerov1api.PodVolumeRestorePhaseNew),

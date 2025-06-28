@@ -240,7 +240,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.errorOut(ctx, du, errors.Errorf("%s type of snapshot exposer is not exist", du.Spec.SnapshotType), "not exist type of exposer", log)
 	}
 
-	if shouldAcceptDataUpload(du) {
+	if isUnacceptDataUpload(du) {
 		log.Info("Data upload starting")
 
 		accepted, err := r.acceptDataUpload(ctx, du)
@@ -265,10 +265,23 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return r.errorOut(ctx, du, err, "failed to set exposer parameters", log)
 		}
 
-		lock, err := exposer.AccquireExposeCheckLock(ctx, r.client, du.Namespace, du.Name, time.Second*5)
+		selected, err := ep.PreExposeCheck(ctx, getOwnerObject(du), exposeParam)
+		if err != nil {
+			return r.errorOut(ctx, du, err, "failed to do pre expose check", log)
+		}
+
+		lock, err := exposer.AccquireExposeCheckLock(ctx, r.client, du.Namespace, du.Name, time.Second)
 		if err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "error accquiring expose check lock")
 		}
+
+		defer func() {
+			if lock != nil {
+				if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
+					log.WithError(err).Warnf("Failed to release expose check lock")
+				}
+			}
+		}()
 
 		if lock == nil {
 			if err := r.returnDataUpload(ctx, du); err != nil {
@@ -278,50 +291,48 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
 		}
 
-		constrained, loadDigest, err := ep.PreExposeCheck(ctx, getOwnerObject(du), exposeParam)
-		if err != nil {
-			return r.errorOut(ctx, du, err, "failed to do pre expose check", log)
-		}
-
+		constrained, digest := exposer.IsDataPathConstrained(ctx, selected, exposeParam, r.logger)
 		if constrained {
-			if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-				log.WithError(err).Warnf("Failed to release expose check lock")
-			}
-
 			if err := r.returnDataUpload(ctx, du); err != nil {
 				return r.errorOut(ctx, du, err, "error returning back dataupload", log)
 			}
 
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		} else if loadDigest == "" {
+		} else if digest == "" {
 			log.Warnf("Load is not constrained but digest is empty")
 		}
 
+		terminated := false
 		if err := UpdateDataUploadWithRetry(ctx, r.client, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, log, func(du *velerov2alpha1api.DataUpload) bool {
 			if isDataUploadInFinalState(du) {
-				log.Warnf("dataupload %s is terminated, abort setting it to canceling", du.Name)
+				log.Warnf("dataupload %s is terminated, abort setting it to preparing", du.Name)
+				terminated = true
 				return false
 			}
 
 			du.Status.Phase = velerov2alpha1api.DataUploadPhasePreparing
+			du.Status.PrepareTimestamp = &metav1.Time{Time: r.Clock.Now()}
+
 			if du.Annotations == nil {
 				du.Annotations = make(map[string]string)
 			}
-			du.Annotations[exposer.DataPathLoadDigestAnno] = loadDigest
+			du.Annotations[exposer.DataPathLoadDigestAnno] = digest
 
 			return true
 		}); err != nil {
 			log.WithError(err).Error("error updating data upload into preparing status")
-
-			if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-				log.WithError(err).Warnf("Failed to release expose check lock")
-			}
-
 			return ctrl.Result{}, err
 		}
 
 		if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
 			log.WithError(err).Warnf("Failed to release expose check lock")
+		}
+
+		lock = nil
+
+		if terminated {
+			log.Warnf("dataupload %s is terminated during transition to preparing", du.Name)
+			return ctrl.Result{}, nil
 		}
 
 		// Expose() will trigger to create one pod whose volume is restored by a given volume snapshot,
@@ -664,7 +675,7 @@ func (r *DataUploadReconciler) OnDataUploadProgress(ctx context.Context, namespa
 func (r *DataUploadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		du := object.(*velerov2alpha1api.DataUpload)
-		if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
+		if du.Status.Phase == velerov2alpha1api.DataUploadPhasePreparing {
 			return true
 		}
 
@@ -731,7 +742,7 @@ func (r *DataUploadReconciler) findDataUploadForPod(ctx context.Context, podObj 
 		"Datadupload": du.Name,
 	})
 
-	if du.Status.Phase != velerov2alpha1api.DataUploadPhaseAccepted {
+	if du.Status.Phase != velerov2alpha1api.DataUploadPhasePreparing {
 		return []reconcile.Request{}
 	}
 
@@ -829,7 +840,7 @@ func (r *DataUploadReconciler) updateStatusToFailed(ctx context.Context, du *vel
 	return err
 }
 
-func shouldAcceptDataUpload(du *velerov2alpha1api.DataUpload) bool {
+func isUnacceptDataUpload(du *velerov2alpha1api.DataUpload) bool {
 	if du.Status.Phase == "" || du.Status.Phase == velerov2alpha1api.DataUploadPhaseNew {
 		return true
 	}

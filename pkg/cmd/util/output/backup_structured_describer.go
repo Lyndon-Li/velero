@@ -503,6 +503,7 @@ func describePodVolumeBackupsInSF(backups []velerov1api.PodVolumeBackup, details
 		"In Progress",
 		string(velerov1api.PodVolumeBackupPhaseCanceling),
 		string(velerov1api.PodVolumeBackupPhasePrepared),
+		string(velerov1api.PodVolumeBackupPhasePreparing),
 		string(velerov1api.PodVolumeBackupPhaseAccepted),
 		string(velerov1api.PodVolumeBackupPhaseNew),
 	} {

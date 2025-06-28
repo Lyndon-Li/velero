@@ -349,7 +349,7 @@ func (s *nodeAgentServer) run() {
 		s.logger.WithError(err).Fatal("Unable to create the data download controller")
 	}
 
-	if err := exposer.StartVgdpWatcher(s.ctx, s.clientConfig, s.namespace, s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum), s.logger); err != nil {
+	if err := exposer.StartVgdpWatcher(s.ctx, s.mgr, s.namespace, s.getDataPathConcurrencyConfig(defaultDataPathConcurrentNum)); err != nil {
 		s.logger.WithError(err).Fatal("Unable to start VGDP watcher")
 	}
 

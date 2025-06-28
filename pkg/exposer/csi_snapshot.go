@@ -123,23 +123,6 @@ func (e *csiSnapshotExposer) Expose(ctx context.Context, ownerObject corev1api.O
 
 	curLog.Info("Volumesnapshot is ready")
 
-	if held, err := dataPathWatcher.AccquirehLock(ctx, ownerObject.Name); err != nil {
-		curLog.WithField("err", err).Warnf("Failed to hold data path watcher lock for %s", ownerObject.Name)
-		return ErrDataPathNoQuota
-	} else if !held {
-		return ErrDataPathNoQuota
-	}
-
-	defer func() {
-		if err := dataPathWatcher.ReleaseLock(ctx, ownerObject.Name); err != nil {
-			curLog.Warnf("Failed to release data path watcher lock for %s", ownerObject.Name)
-		}
-	}()
-
-	if dataPathWatcher.IsDataPathConstrained(ctx, "", csiExposeParam.NodeOS, csiExposeParam.Affinity, curLog) {
-		return ErrDataPathNoQuota
-	}
-
 	vsc, err := csi.GetVolumeSnapshotContentForVolumeSnapshot(volumeSnapshot, e.csiSnapshotClient)
 	if err != nil {
 		return errors.Wrap(err, "error to get volume snapshot content")

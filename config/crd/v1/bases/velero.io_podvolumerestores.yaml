@@ -195,12 +195,20 @@ spec:
                 enum:
                 - New
                 - Accepted
+                - Preparing
                 - Prepared
                 - InProgress
                 - Canceling
                 - Canceled
                 - Completed
                 - Failed
+                type: string
+              prepareTimestamp:
+                description: |-
+                  PrepareTimestamp records the time the pod volume restore is to be prepared.
+                  The server's time is used for PrepareTimestamp
+                format: date-time
+                nullable: true
                 type: string
               progress:
                 description: |-

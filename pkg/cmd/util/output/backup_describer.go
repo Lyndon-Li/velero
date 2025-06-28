@@ -790,6 +790,7 @@ func describePodVolumeBackups(d *Describer, details bool, podVolumeBackups []vel
 		"In Progress",
 		string(velerov1api.PodVolumeBackupPhaseCanceling),
 		string(velerov1api.PodVolumeBackupPhasePrepared),
+		string(velerov1api.PodVolumeBackupPhasePreparing),
 		string(velerov1api.PodVolumeBackupPhaseAccepted),
 		string(velerov1api.PodVolumeBackupPhaseNew),
 	} {
@@ -830,6 +831,7 @@ func groupByPhase(backups []velerov1api.PodVolumeBackup) map[string][]velerov1ap
 		velerov1api.PodVolumeBackupPhaseInProgress: "In Progress",
 		velerov1api.PodVolumeBackupPhaseCanceling:  string(velerov1api.PodVolumeBackupPhaseCanceling),
 		velerov1api.PodVolumeBackupPhasePrepared:   string(velerov1api.PodVolumeBackupPhasePrepared),
+		velerov1api.PodVolumeBackupPhasePreparing:  string(velerov1api.PodVolumeBackupPhasePreparing),
 		velerov1api.PodVolumeBackupPhaseAccepted:   string(velerov1api.PodVolumeBackupPhaseAccepted),
 		velerov1api.PodVolumeBackupPhaseNew:        string(velerov1api.PodVolumeBackupPhaseNew),
 		"":                                         string(velerov1api.PodVolumeBackupPhaseNew),

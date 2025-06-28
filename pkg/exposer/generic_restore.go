@@ -63,11 +63,14 @@ type GenericRestoreExposeParam struct {
 
 	// RestorePVCConfig is the config for restorePVC (intermediate PVC) of generic restore
 	RestorePVCConfig nodeagent.RestorePVC
+
+	// Affinity specifies the node affinity of the restore pod
+	Affinity *kube.LoadAffinity
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
 type GenericRestoreExposer interface {
-	// PreExposeCheck does necessary checks before expose and returns the candidate nodes to run the data path if any
+	// PreExposeCheck does necessary checks before expose and returns the selected node if any
 	PreExposeCheck(context.Context, corev1api.ObjectReference, GenericRestoreExposeParam) (string, error)
 
 	// Expose starts the process to a restore expose, the expose process may take long time
@@ -132,23 +135,6 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 
 	if kube.IsPVCBound(targetPVC) {
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", param.TargetNamespace, param.TargetPVCName)
-	}
-
-	if held, err := dataPathWatcher.AccquirehLock(ctx, ownerObject.Name); err != nil {
-		curLog.WithField("err", err).Warnf("Failed to hold data path watcher lock for %s", ownerObject.Name)
-		return ErrDataPathNoQuota
-	} else if !held {
-		return ErrDataPathNoQuota
-	}
-
-	defer func() {
-		if err := dataPathWatcher.ReleaseLock(ctx, ownerObject.Name); err != nil {
-			curLog.Warnf("Failed to release data path watcher lock for %s", ownerObject.Name)
-		}
-	}()
-
-	if dataPathWatcher.IsDataPathConstrained(ctx, selectedNode, "", nil, curLog) {
-		return ErrDataPathNoQuota
 	}
 
 	restorePod, err := e.createRestorePod(ctx, ownerObject, targetPVC, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, selectedNode, param.Resources, param.NodeOS)
