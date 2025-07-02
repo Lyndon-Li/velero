@@ -207,15 +207,35 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		}
 	}
 
-	if isUnacceptDataDownload(dd) {
+	if dd.Status.Phase == "" || dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseNew {
 		log.Info("Data download starting")
 
-		if _, err := r.getTargetPVC(ctx, dd); err != nil {
-			log.WithField("error", err).Debugf("Cannot find target PVC for DataDownload yet. Retry later.")
+		target, err := r.getTargetPVC(ctx, dd)
+		if err != nil {
+			log.WithField("error", err).Debug("Cannot find target PVC for DataDownload yet. Retry later.")
 			return ctrl.Result{Requeue: true}, nil
 		}
 
-		accepted, err := r.acceptDataDownload(ctx, dd)
+		consumed, selected, err := kube.GetPVCConsuming(ctx, r.kubeClient.StorageV1(), target, r.restorePVCConfig.IgnoreDelayBinding)
+		if err != nil {
+			return ctrl.Result{}, errors.Wrapf(err, "error getting consuming status for target PVC %s/%s data download %s", target.Namespace, target.Name, dd.Name)
+		}
+
+		if !consumed {
+			log.WithField("error", err).Debug("Target PVC for DataDownload is not consumed yet. Retry later.")
+			return ctrl.Result{Requeue: true}, nil
+		}
+
+		constrained, digest := exposer.IsDataPathConstrained(ctx, selected, "", nil, r.logger)
+		if constrained {
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		}
+
+		if digest == "" {
+			log.Warnf("Load is not constrained but digest is empty")
+		}
+
+		accepted, err := r.acceptDataDownload(ctx, dd, digest)
 		if err != nil {
 			return ctrl.Result{}, errors.Wrapf(err, "error accepting the data download %s", dd.Name)
 		}
@@ -238,76 +258,6 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return r.errorOut(ctx, dd, err, "failed to set exposer parameters", log)
 		}
 
-		selected, err := r.restoreExposer.PreExposeCheck(ctx, getDataDownloadOwnerObject(dd), exposeParam)
-		if err != nil {
-			return r.errorOut(ctx, dd, err, "failed to do pre expose check", log)
-		}
-
-		lock, err := exposer.AccquireExposeCheckLock(ctx, r.client, dd.Namespace, dd.Name, time.Second)
-		if err != nil {
-			return ctrl.Result{}, errors.Wrap(err, "error accquiring expose check lock")
-		}
-
-		defer func() {
-			if lock != nil {
-				if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-					log.WithError(err).Warnf("Failed to release expose check lock")
-				}
-			}
-		}()
-
-		if lock == nil {
-			if err := r.returnDataDownload(ctx, dd); err != nil {
-				return r.errorOut(ctx, dd, err, "error returning back dataupdownload", log)
-			}
-
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		}
-
-		constrained, digest := exposer.IsDataPathConstrained(ctx, selected, exposeParam, r.logger)
-		if constrained {
-			if err := r.returnDataDownload(ctx, dd); err != nil {
-				return r.errorOut(ctx, dd, err, "error returning back datadownload", log)
-			}
-
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		} else if digest == "" {
-			log.Warnf("Load is not constrained but digest is empty")
-		}
-
-		terminated := false
-		if err := UpdateDataDownloadWithRetry(ctx, r.client, types.NamespacedName{Namespace: dd.Namespace, Name: dd.Name}, log, func(dd *velerov2alpha1api.DataDownload) bool {
-			if isDataDownloadInFinalState(dd) {
-				log.Warnf("datadownload %s is terminated, abort setting it to preparing", dd.Name)
-				terminated = true
-				return false
-			}
-
-			dd.Status.Phase = velerov2alpha1api.DataDownloadPhasePreparing
-			dd.Status.PrepareTimestamp = &metav1.Time{Time: r.Clock.Now()}
-
-			if dd.Annotations == nil {
-				dd.Annotations = make(map[string]string)
-			}
-			dd.Annotations[exposer.DataPathLoadDigestAnno] = digest
-
-			return true
-		}); err != nil {
-			log.WithError(err).Error("error updating data download into preparing status")
-			return ctrl.Result{}, err
-		}
-
-		if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-			log.WithError(err).Warnf("Failed to release expose check lock")
-		}
-
-		lock = nil
-
-		if terminated {
-			log.Warnf("datadownload %s is terminated during transition to preparing", dd.Name)
-			return ctrl.Result{}, nil
-		}
-
 		// Expose() will trigger to create one pod whose volume is restored by a given volume snapshot,
 		// but the pod maybe is not in the same node of the current controller, so we need to return it here.
 		// And then only the controller who is in the same node could do the rest work.
@@ -318,7 +268,7 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		log.Info("Restore is exposed")
 
 		return ctrl.Result{}, nil
-	} else if dd.Status.Phase == velerov2alpha1api.DataDownloadPhasePreparing {
+	} else if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseAccepted {
 		if peekErr := r.restoreExposer.PeekExposed(ctx, getDataDownloadOwnerObject(dd)); peekErr != nil {
 			r.tryCancelDataDownload(ctx, dd, fmt.Sprintf("found a datadownload %s/%s with expose error: %s. mark it as cancel", dd.Namespace, dd.Name, peekErr))
 			log.Errorf("Cancel dd %s/%s because of expose error %s", dd.Namespace, dd.Name, peekErr)
@@ -621,7 +571,7 @@ func (r *DataDownloadReconciler) OnDataDownloadProgress(ctx context.Context, nam
 func (r *DataDownloadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		dd := object.(*velerov2alpha1api.DataDownload)
-		if dd.Status.Phase == velerov2alpha1api.DataDownloadPhasePreparing {
+		if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseAccepted {
 			return true
 		}
 
@@ -686,7 +636,7 @@ func (r *DataDownloadReconciler) findSnapshotRestoreForPod(ctx context.Context, 
 		"Dataddownload": dd.Name,
 	})
 
-	if dd.Status.Phase != velerov2alpha1api.DataDownloadPhasePreparing {
+	if dd.Status.Phase != velerov2alpha1api.DataDownloadPhaseAccepted {
 		return []reconcile.Request{}
 	}
 
@@ -770,27 +720,7 @@ func (r *DataDownloadReconciler) updateStatusToFailed(ctx context.Context, dd *v
 	return err
 }
 
-func isUnacceptDataDownload(dd *velerov2alpha1api.DataDownload) bool {
-	if dd.Status.Phase == "" || dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseNew {
-		return true
-	}
-
-	if dd.Status.Phase != velerov2alpha1api.DataDownloadPhaseAccepted {
-		return false
-	}
-
-	if dd.Status.AcceptedByNode == "" || dd.Status.AcceptedTimestamp == nil {
-		return true
-	}
-
-	if time.Since(dd.Status.AcceptedTimestamp.Time) >= time.Second*30 {
-		return true
-	}
-
-	return false
-}
-
-func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload) (bool, error) {
+func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *velerov2alpha1api.DataDownload, digest string) (bool, error) {
 	r.logger.Infof("Accepting data download %s", dd.Name)
 
 	// For all data download controller in each node-agent will try to update download CR, and only one controller will success,
@@ -802,6 +732,11 @@ func (r *DataDownloadReconciler) acceptDataDownload(ctx context.Context, dd *vel
 		datadownload.Status.Phase = velerov2alpha1api.DataDownloadPhaseAccepted
 		datadownload.Status.AcceptedByNode = r.nodeName
 		datadownload.Status.AcceptedTimestamp = &metav1.Time{Time: r.Clock.Now()}
+
+		if dd.Annotations == nil {
+			dd.Annotations = make(map[string]string)
+		}
+		dd.Annotations[exposer.DataPathLoadDigestAnno] = digest
 	}
 
 	succeeded, err := funcExclusiveUpdateDataDownload(ctx, r.client, updated, updateFunc)

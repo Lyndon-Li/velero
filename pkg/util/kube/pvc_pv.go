@@ -347,6 +347,32 @@ func WaitPVCConsumed(ctx context.Context, pvcGetter corev1client.CoreV1Interface
 	return selectedNode, updated, err
 }
 
+func GetPVCConsuming(ctx context.Context, storageClient storagev1.StorageV1Interface, pvc *corev1api.PersistentVolumeClaim, ignoreConsume bool) (bool, string, error) {
+	if ignoreConsume {
+		return true, "", nil
+	}
+
+	if pvc.Spec.StorageClassName == nil {
+		return true, "", nil
+	}
+
+	storageClass, err := storageClient.StorageClasses().Get(ctx, *pvc.Spec.StorageClassName, metav1.GetOptions{})
+	if err != nil {
+		return false, "", errors.Wrapf(err, "error to get storage class %s", *pvc.Spec.StorageClassName)
+	}
+
+	if storageClass.VolumeBindingMode != nil && *storageClass.VolumeBindingMode == storagev1api.VolumeBindingWaitForFirstConsumer {
+		selectedNode := pvc.Annotations[KubeAnnSelectedNode]
+		if selectedNode == "" {
+			return false, "", errors.Errorf("wait for first consumer pvc %s/%s is not consumed", pvc.Namespace, pvc.Name)
+		}
+
+		return true, selectedNode, nil
+	}
+
+	return true, "", nil
+}
+
 // WaitPVBound wait for binding of a PV specified by name and returns the bound PV object
 func WaitPVBound(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, pvcName string, pvcNamespace string, timeout time.Duration) (*corev1api.PersistentVolume, error) {
 	var updated *corev1api.PersistentVolume

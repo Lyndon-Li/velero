@@ -240,10 +240,19 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.errorOut(ctx, du, errors.Errorf("%s type of snapshot exposer is not exist", du.Spec.SnapshotType), "not exist type of exposer", log)
 	}
 
-	if isUnacceptDataUpload(du) {
+	if du.Status.Phase == "" || du.Status.Phase == velerov2alpha1api.DataUploadPhaseNew {
 		log.Info("Data upload starting")
 
-		accepted, err := r.acceptDataUpload(ctx, du)
+		constrained, digest := exposer.IsDataPathConstrained(ctx, "", r.getDataUploadNodeOS(du), r.loadAffinity, r.logger)
+		if constrained {
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		}
+
+		if digest == "" {
+			log.Warnf("Load is not constrained but digest is empty")
+		}
+
+		accepted, err := r.acceptDataUpload(ctx, du, digest)
 		if err != nil {
 			return ctrl.Result{}, errors.Wrapf(err, "error accepting the data upload %s", du.Name)
 		}
@@ -265,76 +274,6 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return r.errorOut(ctx, du, err, "failed to set exposer parameters", log)
 		}
 
-		selected, err := ep.PreExposeCheck(ctx, getOwnerObject(du), exposeParam)
-		if err != nil {
-			return r.errorOut(ctx, du, err, "failed to do pre expose check", log)
-		}
-
-		lock, err := exposer.AccquireExposeCheckLock(ctx, r.client, du.Namespace, du.Name, time.Second)
-		if err != nil {
-			return ctrl.Result{}, errors.Wrap(err, "error accquiring expose check lock")
-		}
-
-		defer func() {
-			if lock != nil {
-				if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-					log.WithError(err).Warnf("Failed to release expose check lock")
-				}
-			}
-		}()
-
-		if lock == nil {
-			if err := r.returnDataUpload(ctx, du); err != nil {
-				return r.errorOut(ctx, du, err, "error returning back dataupload", log)
-			}
-
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		}
-
-		constrained, digest := exposer.IsDataPathConstrained(ctx, selected, exposeParam, r.logger)
-		if constrained {
-			if err := r.returnDataUpload(ctx, du); err != nil {
-				return r.errorOut(ctx, du, err, "error returning back dataupload", log)
-			}
-
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		} else if digest == "" {
-			log.Warnf("Load is not constrained but digest is empty")
-		}
-
-		terminated := false
-		if err := UpdateDataUploadWithRetry(ctx, r.client, types.NamespacedName{Namespace: du.Namespace, Name: du.Name}, log, func(du *velerov2alpha1api.DataUpload) bool {
-			if isDataUploadInFinalState(du) {
-				log.Warnf("dataupload %s is terminated, abort setting it to preparing", du.Name)
-				terminated = true
-				return false
-			}
-
-			du.Status.Phase = velerov2alpha1api.DataUploadPhasePreparing
-			du.Status.PrepareTimestamp = &metav1.Time{Time: r.Clock.Now()}
-
-			if du.Annotations == nil {
-				du.Annotations = make(map[string]string)
-			}
-			du.Annotations[exposer.DataPathLoadDigestAnno] = digest
-
-			return true
-		}); err != nil {
-			log.WithError(err).Error("error updating data upload into preparing status")
-			return ctrl.Result{}, err
-		}
-
-		if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-			log.WithError(err).Warnf("Failed to release expose check lock")
-		}
-
-		lock = nil
-
-		if terminated {
-			log.Warnf("dataupload %s is terminated during transition to preparing", du.Name)
-			return ctrl.Result{}, nil
-		}
-
 		// Expose() will trigger to create one pod whose volume is restored by a given volume snapshot,
 		// but the pod maybe is not in the same node of the current controller, so we need to return it here.
 		// And then only the controller who is in the same node could do the rest work.
@@ -345,7 +284,7 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		log.Info("Snapshot is exposed")
 
 		return ctrl.Result{}, nil
-	} else if du.Status.Phase == velerov2alpha1api.DataUploadPhasePreparing {
+	} else if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
 		if peekErr := ep.PeekExposed(ctx, getOwnerObject(du)); peekErr != nil {
 			r.tryCancelDataUpload(ctx, du, fmt.Sprintf("found a du %s/%s with expose error: %s. mark it as cancel", du.Namespace, du.Name, peekErr))
 			log.Errorf("Cancel du %s/%s because of expose error %s", du.Namespace, du.Name, peekErr)
@@ -675,7 +614,7 @@ func (r *DataUploadReconciler) OnDataUploadProgress(ctx context.Context, namespa
 func (r *DataUploadReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		du := object.(*velerov2alpha1api.DataUpload)
-		if du.Status.Phase == velerov2alpha1api.DataUploadPhasePreparing {
+		if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
 			return true
 		}
 
@@ -742,7 +681,7 @@ func (r *DataUploadReconciler) findDataUploadForPod(ctx context.Context, podObj 
 		"Datadupload": du.Name,
 	})
 
-	if du.Status.Phase != velerov2alpha1api.DataUploadPhasePreparing {
+	if du.Status.Phase != velerov2alpha1api.DataUploadPhaseAccepted {
 		return []reconcile.Request{}
 	}
 
@@ -840,27 +779,7 @@ func (r *DataUploadReconciler) updateStatusToFailed(ctx context.Context, du *vel
 	return err
 }
 
-func isUnacceptDataUpload(du *velerov2alpha1api.DataUpload) bool {
-	if du.Status.Phase == "" || du.Status.Phase == velerov2alpha1api.DataUploadPhaseNew {
-		return true
-	}
-
-	if du.Status.Phase != velerov2alpha1api.DataUploadPhaseAccepted {
-		return false
-	}
-
-	if du.Status.AcceptedByNode == "" || du.Status.AcceptedTimestamp == nil {
-		return true
-	}
-
-	if time.Since(du.Status.AcceptedTimestamp.Time) >= time.Second*30 {
-		return true
-	}
-
-	return false
-}
-
-func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov2alpha1api.DataUpload) (bool, error) {
+func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov2alpha1api.DataUpload, digest string) (bool, error) {
 	r.logger.Infof("Accepting data upload %s", du.Name)
 
 	// For all data upload controller in each node-agent will try to update dataupload CR, and only one controller will success,
@@ -871,6 +790,11 @@ func (r *DataUploadReconciler) acceptDataUpload(ctx context.Context, du *velerov
 		dataUpload.Status.Phase = velerov2alpha1api.DataUploadPhaseAccepted
 		dataUpload.Status.AcceptedByNode = r.nodeName
 		dataUpload.Status.AcceptedTimestamp = &metav1.Time{Time: r.Clock.Now()}
+
+		if du.Annotations == nil {
+			du.Annotations = make(map[string]string)
+		}
+		du.Annotations[exposer.DataPathLoadDigestAnno] = digest
 	}
 
 	succeeded, err := funcExclusiveUpdateDataUpload(ctx, r.client, updated, updateFunc)
@@ -970,6 +894,21 @@ func (r *DataUploadReconciler) closeDataPath(ctx context.Context, duName string)
 	}
 
 	r.dataPathMgr.RemoveAsyncBR(duName)
+}
+
+func (r *DataUploadReconciler) getDataUploadNodeOS(du *velerov2alpha1api.DataUpload) string {
+	pvc := &corev1api.PersistentVolumeClaim{}
+	err := r.client.Get(context.Background(), types.NamespacedName{
+		Namespace: du.Spec.SourceNamespace,
+		Name:      du.Spec.SourcePVC,
+	}, pvc)
+
+	if err != nil {
+		r.logger.Warnf("Failed to get source PVC %s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC)
+		return ""
+	}
+
+	return kube.GetPVCAttachingNodeOS(pvc, r.kubeClient.CoreV1(), r.kubeClient.StorageV1(), r.logger)
 }
 
 func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload) (any, error) {

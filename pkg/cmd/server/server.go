@@ -1007,7 +1007,6 @@ func markDataUploadsCancel(ctx context.Context, client ctrlclient.Client, backup
 	for i := range dataUploads.Items {
 		du := dataUploads.Items[i]
 		if du.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted ||
-			du.Status.Phase == velerov2alpha1api.DataUploadPhasePreparing ||
 			du.Status.Phase == velerov2alpha1api.DataUploadPhasePrepared ||
 			du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress ||
 			du.Status.Phase == velerov2alpha1api.DataUploadPhaseNew ||
@@ -1049,7 +1048,6 @@ func markDataDownloadsCancel(ctx context.Context, client ctrlclient.Client, rest
 	for i := range dataDownloads.Items {
 		dd := dataDownloads.Items[i]
 		if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseAccepted ||
-			dd.Status.Phase == velerov2alpha1api.DataDownloadPhasePreparing ||
 			dd.Status.Phase == velerov2alpha1api.DataDownloadPhasePrepared ||
 			dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseInProgress ||
 			dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseNew ||
@@ -1091,7 +1089,6 @@ func markPodVolumeBackupsCancel(ctx context.Context, client ctrlclient.Client, b
 	for i := range pvbs.Items {
 		pvb := pvbs.Items[i]
 		if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted ||
-			pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePreparing ||
 			pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePrepared ||
 			pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress ||
 			pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseNew ||
@@ -1138,7 +1135,6 @@ func markPodVolumeRestoresCancel(ctx context.Context, client ctrlclient.Client, 
 		}
 
 		if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted ||
-			pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePreparing ||
 			pvr.Status.Phase == velerov1api.PodVolumeRestorePhasePrepared ||
 			pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseInProgress ||
 			pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseNew ||

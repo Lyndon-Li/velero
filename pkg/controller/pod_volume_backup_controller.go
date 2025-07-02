@@ -199,7 +199,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		}
 	}
 
-	if pvb.Status.Phase == "" || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseNew || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted {
+	if pvb.Status.Phase == "" || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseNew {
 		if pvb.Spec.Cancel {
 			log.Infof("PVB %s is canceled in Phase %s", pvb.GetName(), pvb.Status.Phase)
 			r.tryCancelPodVolumeBackup(ctx, pvb, "")
@@ -212,75 +212,22 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, nil
 		}
 
-		if err := r.acceptPodVolumeBackup(ctx, pvb); err != nil {
+		constrained, digest := exposer.IsDataPathConstrained(ctx, pvb.Spec.Node, "", nil, r.logger)
+		if constrained {
+			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
+		}
+
+		if digest == "" {
+			log.Warnf("Load is not constrained but digest is empty")
+		}
+
+		if err := r.acceptPodVolumeBackup(ctx, pvb, digest); err != nil {
 			return ctrl.Result{}, errors.Wrapf(err, "error accepting PVB %s", pvb.Name)
 		}
 
 		log.Info("PVB is accepted")
 
 		exposeParam := r.setupExposeParam(pvb)
-
-		selected, err := r.exposer.PreExposeCheck(ctx, getPVBOwnerObject(pvb), exposeParam)
-		if err != nil {
-			return r.errorOut(ctx, pvb, err, "failed to do pre expose check", log)
-		}
-
-		lock, err := exposer.AccquireExposeCheckLock(ctx, r.client, pvb.Namespace, pvb.Name, time.Second)
-		if err != nil {
-			return ctrl.Result{}, errors.Wrap(err, "error accquiring expose check lock")
-		}
-
-		defer func() {
-			if lock != nil {
-				if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-					log.WithError(err).Warnf("Failed to release expose check lock")
-				}
-			}
-		}()
-
-		if lock == nil {
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		}
-
-		constrained, digest := exposer.IsDataPathConstrained(ctx, selected, exposeParam, r.logger)
-		if constrained {
-			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
-		} else if digest == "" {
-			log.Warnf("Load is not constrained but digest is empty")
-		}
-
-		terminated := false
-		if err := UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, log, func(pvb *velerov1api.PodVolumeBackup) bool {
-			if isPVBInFinalState(pvb) {
-				log.Warnf("PVB %s is terminated, abort setting it to preparing", pvb.Name)
-				terminated = true
-				return false
-			}
-
-			pvb.Status.Phase = velerov1api.PodVolumeBackupPhasePreparing
-			pvb.Status.PrepareTimestamp = &metav1.Time{Time: r.clock.Now()}
-
-			if pvb.Annotations == nil {
-				pvb.Annotations = make(map[string]string)
-			}
-			pvb.Annotations[exposer.DataPathLoadDigestAnno] = digest
-
-			return true
-		}); err != nil {
-			log.WithError(err).Error("error updating PVB into preparing status")
-			return ctrl.Result{}, err
-		}
-
-		if err := exposer.ReleaseExposeCheckLock(ctx, r.client, lock); err != nil {
-			log.WithError(err).Warnf("Failed to release expose check lock")
-		}
-
-		lock = nil
-
-		if terminated {
-			log.Warnf("PVB %s is terminated during transition to preparing", pvb.Name)
-			return ctrl.Result{}, nil
-		}
 
 		log.Info("Exposing PVB")
 
@@ -291,7 +238,7 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Info("PVB is exposed")
 
 		return ctrl.Result{}, nil
-	} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePreparing {
+	} else if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted {
 		if peekErr := r.exposer.PeekExposed(ctx, getPVBOwnerObject(pvb)); peekErr != nil {
 			log.Errorf("Cancel PVB %s/%s because of expose error %s", pvb.Namespace, pvb.Name, peekErr)
 			r.tryCancelPodVolumeBackup(ctx, pvb, fmt.Sprintf("found a PVB %s/%s with expose error: %s. mark it as cancel", pvb.Namespace, pvb.Name, peekErr))
@@ -428,10 +375,15 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	return ctrl.Result{}, nil
 }
 
-func (r *PodVolumeBackupReconciler) acceptPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup) error {
+func (r *PodVolumeBackupReconciler) acceptPodVolumeBackup(ctx context.Context, pvb *velerov1api.PodVolumeBackup, digest string) error {
 	return UpdatePVBWithRetry(ctx, r.client, types.NamespacedName{Namespace: pvb.Namespace, Name: pvb.Name}, r.logger, func(pvb *velerov1api.PodVolumeBackup) bool {
 		pvb.Status.AcceptedTimestamp = &metav1.Time{Time: r.clock.Now()}
 		pvb.Status.Phase = velerov1api.PodVolumeBackupPhaseAccepted
+
+		if pvb.Annotations == nil {
+			pvb.Annotations = make(map[string]string)
+		}
+		pvb.Annotations[exposer.DataPathLoadDigestAnno] = digest
 
 		return true
 	})
@@ -651,7 +603,7 @@ func (r *PodVolumeBackupReconciler) OnDataPathProgress(ctx context.Context, name
 func (r *PodVolumeBackupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		pvb := object.(*velerov1api.PodVolumeBackup)
-		if pvb.Status.Phase == velerov1api.PodVolumeBackupPhasePreparing {
+		if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted {
 			return true
 		}
 
@@ -717,7 +669,7 @@ func (r *PodVolumeBackupReconciler) findPVBForPod(ctx context.Context, podObj cl
 		"PVB": pvb.Name,
 	})
 
-	if pvb.Status.Phase != velerov1api.PodVolumeBackupPhasePreparing {
+	if pvb.Status.Phase != velerov1api.PodVolumeBackupPhaseAccepted {
 		return []reconcile.Request{}
 	}
 

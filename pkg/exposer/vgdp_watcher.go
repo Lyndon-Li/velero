@@ -126,7 +126,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					return
 				}
 
-				if newDu.Status.Phase == velerov2alpha1api.DataUploadPhasePreparing {
+				if newDu.Status.Phase == velerov2alpha1api.DataUploadPhaseAccepted {
 					w.dataPathLoadLock.Lock()
 					if newDu.Annotations != nil {
 						w.dataPathLoad[newDu.Name] = newDu.Annotations[DataPathLoadDigestAnno]
@@ -167,7 +167,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					return
 				}
 
-				if newDd.Status.Phase == velerov2alpha1api.DataDownloadPhasePreparing {
+				if newDd.Status.Phase == velerov2alpha1api.DataDownloadPhaseAccepted {
 					w.dataPathLoadLock.Lock()
 					if newDd.Annotations != nil {
 						w.dataPathLoad[newDd.Name] = newDd.Annotations[DataPathLoadDigestAnno]
@@ -208,7 +208,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					return
 				}
 
-				if newPvb.Status.Phase == velerov1api.PodVolumeBackupPhasePreparing {
+				if newPvb.Status.Phase == velerov1api.PodVolumeBackupPhaseAccepted {
 					w.dataPathLoadLock.Lock()
 					if newPvb.Annotations != nil {
 						w.dataPathLoad[newPvb.Name] = newPvb.Annotations[DataPathLoadDigestAnno]
@@ -249,7 +249,7 @@ func (w *vgdpWatcher) initCacheClient(ctx context.Context, mgr manager.Manager, 
 					return
 				}
 
-				if newPvr.Status.Phase == velerov1api.PodVolumeRestorePhasePreparing {
+				if newPvr.Status.Phase == velerov1api.PodVolumeRestorePhaseAccepted {
 					w.dataPathLoadLock.Lock()
 					if newPvr.Annotations != nil {
 						w.dataPathLoad[newPvr.Name] = newPvr.Annotations[DataPathLoadDigestAnno]
@@ -351,12 +351,12 @@ func ReleaseExposeCheckLock(ctx context.Context, client ctlclient.Client, lock a
 
 var funcIsDataPathConstrained = (*vgdpWatcher).isDataPathConstrained
 
-func IsDataPathConstrained(ctx context.Context, selectedNode string, exposeParam any, log logrus.FieldLogger) (bool, string) {
+func IsDataPathConstrained(ctx context.Context, selectedNode string, nodeOS string, affinity *kube.LoadAffinity, log logrus.FieldLogger) (bool, string) {
 	if !dataPathWatcher.intialized {
 		return false, ""
 	}
 
-	si, err := getSelectionInfo(selectedNode, exposeParam)
+	si, err := getSelectionInfo(selectedNode, nodeOS, affinity)
 	if err != nil {
 		log.WithError(err).Warn("Failed to get selection info")
 		return false, ""
@@ -380,27 +380,12 @@ func IsDataPathConstrained(ctx context.Context, selectedNode string, exposeParam
 	return constrained, digest
 }
 
-func getSelectionInfo(selectedNode string, exposeParam any) (*selectionInfo, error) {
+func getSelectionInfo(selectedNode string, nodeOS string, affinity *kube.LoadAffinity) (*selectionInfo, error) {
 	si := &selectionInfo{}
 	if selectedNode != "" {
 		si.SelectedNode = selectedNode
 
 		return si, nil
-	}
-
-	nodeOS := ""
-	var affinity *kube.LoadAffinity
-	switch exposeParam := exposeParam.(type) {
-	case *CSISnapshotExposeParam:
-		affinity = exposeParam.Affinity
-		nodeOS = exposeParam.NodeOS
-	case *GenericRestoreExposeParam:
-		affinity = exposeParam.Affinity
-		nodeOS = exposeParam.NodeOS
-	case *PodVolumeExposeParam:
-		// PodVolume always goe with selectedNode
-	default:
-		return nil, errors.Errorf("type %T is not supported", exposeParam)
 	}
 
 	affinityStr := ""
