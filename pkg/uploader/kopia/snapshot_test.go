@@ -34,6 +34,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	repomocks "github.com/vmware-tanzu/velero/pkg/repository/mocks"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
@@ -49,7 +50,7 @@ type snapshotMockes struct {
 
 type mockArgs struct {
 	methodName string
-	returns    []interface{}
+	returns    []any
 }
 
 func injectSnapshotFuncs() *snapshotMockes {
@@ -60,6 +61,7 @@ func injectSnapshotFuncs() *snapshotMockes {
 		repoWriterMock: &repomocks.RepositoryWriter{},
 	}
 
+	applyRetentionPolicyFunc = s.policyMock.ApplyRetentionPolicy
 	setPolicyFunc = s.policyMock.SetPolicy
 	treeForSourceFunc = s.policyMock.TreeForSource
 	loadSnapshotFunc = s.snapshotMock.LoadSnapshot
@@ -78,7 +80,6 @@ func MockFuncs(s *snapshotMockes, args []mockArgs) {
 }
 
 func TestSnapshotSource(t *testing.T) {
-
 	ctx := context.TODO()
 	sourceInfo := snapshot.SourceInfo{
 		UserName: "testUserName",
@@ -86,7 +87,7 @@ func TestSnapshotSource(t *testing.T) {
 		Path:     "/var",
 	}
 	rootDir, err := getLocalFSEntry(sourceInfo.Path)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	log := logrus.New()
 	manifest := &snapshot.Manifest{
 		ID:        "test",
@@ -94,85 +95,102 @@ func TestSnapshotSource(t *testing.T) {
 	}
 
 	testCases := []struct {
-		name     string
-		args     []mockArgs
-		notError bool
+		name        string
+		args        []mockArgs
+		uploaderCfg map[string]string
+		notError    bool
 	}{
 		{
 			name: "regular test",
 			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, nil}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{nil}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, nil}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{nil}},
 			},
 			notError: true,
 		},
 		{
-			name: "failed to load snapshot",
+			name: "failed to load snapshot, should fallback to full backup and not error",
 			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, errors.New("failed to load snapshot")}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, nil}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{nil}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, errors.New("failed to load snapshot")}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, nil}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{nil}},
 			},
-			notError: false,
+			notError: true,
 		},
 		{
 			name: "failed to save snapshot",
 			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, errors.New("failed to save snapshot")}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{nil}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, errors.New("failed to save snapshot")}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{nil}},
 			},
 			notError: false,
 		},
 		{
 			name: "failed to set policy",
 			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, nil}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{errors.New("failed to set policy")}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{nil}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, nil}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{errors.New("failed to set policy")}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{nil}},
 			},
 			notError: false,
 		},
 		{
+			name: "set policy with parallel files upload",
+			args: []mockArgs{
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, nil}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{nil}},
+			},
+			uploaderCfg: map[string]string{
+				"ParallelFilesUpload": "10",
+			},
+			notError: true,
+		},
+		{
 			name: "failed to upload snapshot",
 			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, nil}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, errors.New("failed to upload snapshot")}},
-				{methodName: "Flush", returns: []interface{}{nil}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, nil}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, errors.New("failed to upload snapshot")}},
+				{methodName: "Flush", returns: []any{nil}},
 			},
 			notError: false,
 		},
 		{
 			name: "failed to flush repo",
 			args: []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, errors.New("failed to save snapshot")}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{errors.New("failed to flush repo")}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, errors.New("failed to save snapshot")}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{errors.New("failed to flush repo")}},
 			},
 			notError: false,
 		},
@@ -182,7 +200,7 @@ func TestSnapshotSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s := injectSnapshotFuncs()
 			MockFuncs(s, tc.args)
-			_, _, err = SnapshotSource(ctx, s.repoWriterMock, s.uploderMock, sourceInfo, rootDir, false, "/", nil, log, "TestSnapshotSource")
+			_, _, err = SnapshotSource(ctx, s.repoWriterMock, s.uploderMock, sourceInfo, rootDir, false, "/", nil, tc.uploaderCfg, log, "TestSnapshotSource")
 			if tc.notError {
 				assert.NoError(t, err)
 			} else {
@@ -210,8 +228,8 @@ func TestReportSnapshotStatus(t *testing.T) {
 		},
 		{
 			shouldError:    true,
-			expectedResult: "",
-			expectedSize:   0,
+			expectedResult: "sample-manifest-id",
+			expectedSize:   1024,
 			directorySummary: &fs.DirectorySummary{
 				FailedEntries: []*fs.EntryWithError{
 					{
@@ -543,9 +561,9 @@ func TestFindPreviousSnapshotManifest(t *testing.T) {
 
 			// Check if the returned error matches the expected error
 			if tc.expectedError != nil {
-				assert.Contains(t, err.Error(), tc.expectedError.Error())
+				require.ErrorContains(t, err, tc.expectedError.Error())
 			} else {
-				assert.Nil(t, err)
+				require.NoError(t, err)
 			}
 
 			// Check the number of returned snapshots
@@ -592,7 +610,7 @@ func TestBackup(t *testing.T) {
 			name:          "Unable to read directory",
 			sourcePath:    "/invalid/path",
 			tags:          nil,
-			expectedError: errors.New("Unable to read dir"),
+			expectedError: errors.New("no such file or directory"),
 		},
 		{
 			name:          "Source path is not a block device",
@@ -610,13 +628,13 @@ func TestBackup(t *testing.T) {
 			}
 			s := injectSnapshotFuncs()
 			args := []mockArgs{
-				{methodName: "LoadSnapshot", returns: []interface{}{manifest, nil}},
-				{methodName: "SaveSnapshot", returns: []interface{}{manifest.ID, nil}},
-				{methodName: "TreeForSource", returns: []interface{}{nil, nil}},
-				{methodName: "ApplyRetentionPolicy", returns: []interface{}{nil, nil}},
-				{methodName: "SetPolicy", returns: []interface{}{nil}},
-				{methodName: "Upload", returns: []interface{}{manifest, nil}},
-				{methodName: "Flush", returns: []interface{}{nil}},
+				{methodName: "LoadSnapshot", returns: []any{manifest, nil}},
+				{methodName: "SaveSnapshot", returns: []any{manifest.ID, nil}},
+				{methodName: "TreeForSource", returns: []any{nil, nil}},
+				{methodName: "ApplyRetentionPolicy", returns: []any{nil, nil}},
+				{methodName: "SetPolicy", returns: []any{nil}},
+				{methodName: "Upload", returns: []any{manifest, nil}},
+				{methodName: "Flush", returns: []any{nil}},
 			}
 			MockFuncs(s, args)
 			if tc.isSnapshotSourceError {
@@ -630,15 +648,15 @@ func TestBackup(t *testing.T) {
 			var snapshotInfo *uploader.SnapshotInfo
 			var err error
 			if tc.isEmptyUploader {
-				snapshotInfo, isSnapshotEmpty, err = Backup(context.Background(), nil, s.repoWriterMock, tc.sourcePath, "", tc.forceFull, tc.parentSnapshot, tc.volMode, tc.tags, &logrus.Logger{})
+				snapshotInfo, isSnapshotEmpty, err = Backup(context.Background(), nil, s.repoWriterMock, tc.sourcePath, "", tc.forceFull, tc.parentSnapshot, tc.volMode, map[string]string{}, tc.tags, &logrus.Logger{})
 			} else {
-				snapshotInfo, isSnapshotEmpty, err = Backup(context.Background(), s.uploderMock, s.repoWriterMock, tc.sourcePath, "", tc.forceFull, tc.parentSnapshot, tc.volMode, tc.tags, &logrus.Logger{})
+				snapshotInfo, isSnapshotEmpty, err = Backup(context.Background(), s.uploderMock, s.repoWriterMock, tc.sourcePath, "", tc.forceFull, tc.parentSnapshot, tc.volMode, map[string]string{}, tc.tags, &logrus.Logger{})
 			}
 			// Check if the returned error matches the expected error
 			if tc.expectedError != nil {
-				assert.Contains(t, err.Error(), tc.expectedError.Error())
+				require.ErrorContains(t, err, tc.expectedError.Error())
 			} else {
-				assert.Nil(t, err)
+				require.NoError(t, err)
 			}
 
 			assert.Equal(t, tc.expectedEmpty, isSnapshotEmpty)
@@ -771,13 +789,13 @@ func TestRestore(t *testing.T) {
 			repoWriterMock.On("OpenObject", mock.Anything, mock.Anything).Return(em, nil)
 
 			progress := new(Progress)
-			bytesRestored, fileCount, err := Restore(context.Background(), repoWriterMock, progress, tc.snapshotID, tc.dest, tc.volMode, logrus.New(), nil)
+			bytesRestored, fileCount, err := Restore(context.Background(), repoWriterMock, progress, tc.snapshotID, tc.dest, tc.volMode, map[string]string{}, logrus.New(), nil)
 
 			// Check if the returned error matches the expected error
 			if tc.expectedError != nil {
-				assert.Contains(t, err.Error(), tc.expectedError.Error())
+				require.ErrorContains(t, err, tc.expectedError.Error())
 			} else {
-				assert.Nil(t, err)
+				require.NoError(t, err)
 			}
 
 			// Check the number of bytes restored

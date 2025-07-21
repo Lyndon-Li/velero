@@ -19,7 +19,10 @@ package controller
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"time"
+
+	v2 "github.com/vmware-tanzu/velero/pkg/plugin/velero/backupitemaction/v2"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -29,8 +32,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/itemoperation"
 	"github.com/vmware-tanzu/velero/pkg/itemoperationmap"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
@@ -81,15 +86,19 @@ func NewBackupOperationsReconciler(
 }
 
 func (c *backupOperationsReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	s := kube.NewPeriodicalEnqueueSource(c.logger, mgr.GetClient(), &velerov1api.BackupList{}, c.frequency, kube.PeriodicalEnqueueSourceOption{})
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		backup := object.(*velerov1api.Backup)
 		return (backup.Status.Phase == velerov1api.BackupPhaseWaitingForPluginOperations ||
 			backup.Status.Phase == velerov1api.BackupPhaseWaitingForPluginOperationsPartiallyFailed)
 	})
+	s := kube.NewPeriodicalEnqueueSource(c.logger.WithField("controller", constant.ControllerBackupOperations), mgr.GetClient(), &velerov1api.BackupList{}, c.frequency, kube.PeriodicalEnqueueSourceOption{
+		Predicates: []predicate.Predicate{gp},
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.Backup{}, builder.WithPredicates(kube.FalsePredicate{})).
-		Watches(s, nil, builder.WithPredicates(gp)).
+		WatchesRawSource(s).
+		Named(constant.ControllerBackupOperations).
 		Complete(c)
 }
 
@@ -275,6 +284,8 @@ func (c *backupOperationsReconciler) updateBackupAndOperationsJSON(
 	return nil
 }
 
+// check progress of backupItemOperations
+// return: inProgressOperations, changes, completedCount, failedCount, errs
 func getBackupItemOperationProgress(
 	backup *velerov1api.Backup,
 	pluginManager clientmgmt.Manager,
@@ -291,7 +302,7 @@ func getBackupItemOperationProgress(
 			if err != nil {
 				operation.Status.Phase = itemoperation.OperationPhaseFailed
 				operation.Status.Error = err.Error()
-				errs = append(errs, err.Error())
+				errs = append(errs, wrapErrMsg(err.Error(), bia))
 				changes = true
 				failedCount++
 				continue
@@ -300,7 +311,7 @@ func getBackupItemOperationProgress(
 			if err != nil {
 				operation.Status.Phase = itemoperation.OperationPhaseFailed
 				operation.Status.Error = err.Error()
-				errs = append(errs, err.Error())
+				errs = append(errs, wrapErrMsg(err.Error(), bia))
 				changes = true
 				failedCount++
 				continue
@@ -338,7 +349,7 @@ func getBackupItemOperationProgress(
 				if operationProgress.Err != "" {
 					operation.Status.Phase = itemoperation.OperationPhaseFailed
 					operation.Status.Error = operationProgress.Err
-					errs = append(errs, operationProgress.Err)
+					errs = append(errs, wrapErrMsg(operationProgress.Err, bia))
 					changes = true
 					failedCount++
 					continue
@@ -353,7 +364,7 @@ func getBackupItemOperationProgress(
 				_ = bia.Cancel(operation.Spec.OperationID, backup)
 				operation.Status.Phase = itemoperation.OperationPhaseFailed
 				operation.Status.Error = "Asynchronous action timed out"
-				errs = append(errs, operation.Status.Error)
+				errs = append(errs, wrapErrMsg(operation.Status.Error, bia))
 				changes = true
 				failedCount++
 				continue
@@ -372,4 +383,16 @@ func getBackupItemOperationProgress(
 		}
 	}
 	return inProgressOperations, changes, completedCount, failedCount, errs
+}
+
+// wrap the error message to include the BIA name
+func wrapErrMsg(errMsg string, bia v2.BackupItemAction) string {
+	plugin := "unknown"
+	if bia != nil {
+		plugin = bia.Name()
+	}
+	if len(errMsg) > 0 {
+		errMsg += ", "
+	}
+	return fmt.Sprintf("%splugin: %s", errMsg, plugin)
 }

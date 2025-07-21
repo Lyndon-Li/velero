@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -30,6 +30,7 @@ import (
 	v1crds "github.com/vmware-tanzu/velero/config/crd/v1/crds"
 	v2alpha1crds "github.com/vmware-tanzu/velero/config/crd/v2alpha1/crds"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
 const (
@@ -39,15 +40,20 @@ const (
 )
 
 var (
-	DefaultVeleroPodCPURequest    = "500m"
-	DefaultVeleroPodMemRequest    = "128Mi"
-	DefaultVeleroPodCPULimit      = "1000m"
-	DefaultVeleroPodMemLimit      = "512Mi"
-	DefaultNodeAgentPodCPURequest = "500m"
-	DefaultNodeAgentPodMemRequest = "512Mi"
-	DefaultNodeAgentPodCPULimit   = "1000m"
-	DefaultNodeAgentPodMemLimit   = "1Gi"
-	DefaultVeleroNamespace        = "velero"
+	// default values for Velero server pod resource request/limit
+	DefaultVeleroPodCPURequest = "500m"
+	DefaultVeleroPodMemRequest = "128Mi"
+	DefaultVeleroPodCPULimit   = "1000m"
+	DefaultVeleroPodMemLimit   = "512Mi"
+
+	// default values for node-agent pod resource request/limit,
+	// "0" means no request/limit is set, so as to make the QoS as BestEffort
+	DefaultNodeAgentPodCPURequest = "0"
+	DefaultNodeAgentPodMemRequest = "0"
+	DefaultNodeAgentPodCPULimit   = "0"
+	DefaultNodeAgentPodMemLimit   = "0"
+
+	DefaultVeleroNamespace = "velero"
 )
 
 func Labels() map[string]string {
@@ -86,8 +92,8 @@ func podAnnotations(userAnnotations map[string]string) map[string]string {
 	return base
 }
 
-func containerPorts() []corev1.ContainerPort {
-	return []corev1.ContainerPort{
+func containerPorts() []corev1api.ContainerPort {
+	return []corev1api.ContainerPort{
 		{
 			Name:          "metrics",
 			ContainerPort: 8085,
@@ -103,14 +109,14 @@ func objectMeta(namespace, name string) metav1.ObjectMeta {
 	}
 }
 
-func ServiceAccount(namespace string, annotations map[string]string) *corev1.ServiceAccount {
+func ServiceAccount(namespace string, annotations map[string]string) *corev1api.ServiceAccount {
 	objMeta := objectMeta(namespace, defaultServiceAccountName)
 	objMeta.Annotations = annotations
-	return &corev1.ServiceAccount{
+	return &corev1api.ServiceAccount{
 		ObjectMeta: objMeta,
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ServiceAccount",
-			APIVersion: corev1.SchemeGroupVersion.String(),
+			APIVersion: corev1api.SchemeGroupVersion.String(),
 		},
 	}
 }
@@ -143,12 +149,12 @@ func ClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
 	return crb
 }
 
-func Namespace(namespace string) *corev1.Namespace {
-	ns := &corev1.Namespace{
+func Namespace(namespace string) *corev1api.Namespace {
+	ns := &corev1api.Namespace{
 		ObjectMeta: objectMeta("", namespace),
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Namespace",
-			APIVersion: corev1.SchemeGroupVersion.String(),
+			APIVersion: corev1api.SchemeGroupVersion.String(),
 		},
 	}
 
@@ -198,17 +204,17 @@ func VolumeSnapshotLocation(namespace, provider string, config map[string]string
 	}
 }
 
-func Secret(namespace string, data []byte) *corev1.Secret {
-	return &corev1.Secret{
+func Secret(namespace string, data []byte) *corev1api.Secret {
+	return &corev1api.Secret{
 		ObjectMeta: objectMeta(namespace, "cloud-credentials"),
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Secret",
-			APIVersion: corev1.SchemeGroupVersion.String(),
+			APIVersion: corev1api.SchemeGroupVersion.String(),
 		},
 		Data: map[string][]byte{
 			"cloud": data,
 		},
-		Type: corev1.SecretTypeOpaque,
+		Type: corev1api.SecretTypeOpaque,
 	}
 }
 
@@ -235,17 +241,19 @@ type VeleroOptions struct {
 	PodLabels                       map[string]string
 	ServiceAccountAnnotations       map[string]string
 	ServiceAccountName              string
-	VeleroPodResources              corev1.ResourceRequirements
-	NodeAgentPodResources           corev1.ResourceRequirements
+	VeleroPodResources              corev1api.ResourceRequirements
+	NodeAgentPodResources           corev1api.ResourceRequirements
 	SecretData                      []byte
 	RestoreOnly                     bool
 	UseNodeAgent                    bool
+	UseNodeAgentWindows             bool
 	PrivilegedNodeAgent             bool
 	UseVolumeSnapshots              bool
 	BSLConfig                       map[string]string
 	VSLConfig                       map[string]string
 	DefaultRepoMaintenanceFrequency time.Duration
 	GarbageCollectionFrequency      time.Duration
+	PodVolumeOperationTimeout       time.Duration
 	Plugins                         []string
 	NoDefaultBackupLocation         bool
 	CACertData                      []byte
@@ -254,6 +262,14 @@ type VeleroOptions struct {
 	UploaderType                    string
 	DefaultSnapshotMoveData         bool
 	DisableInformerCache            bool
+	ScheduleSkipImmediately         bool
+	PodResources                    kube.PodResources
+	KeepLatestMaintenanceJobs       int
+	BackupRepoConfigMap             string
+	RepoMaintenanceJobConfigMap     string
+	NodeAgentConfigMap              string
+	ItemBlockWorkerCount            int
+	NodeAgentDisableHostPath        bool
 }
 
 func AllCRDs() *unstructured.UnstructuredList {
@@ -335,7 +351,12 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		WithDefaultRepoMaintenanceFrequency(o.DefaultRepoMaintenanceFrequency),
 		WithServiceAccountName(serviceAccountName),
 		WithGarbageCollectionFrequency(o.GarbageCollectionFrequency),
+		WithPodVolumeOperationTimeout(o.PodVolumeOperationTimeout),
 		WithUploaderType(o.UploaderType),
+		WithScheduleSkipImmediately(o.ScheduleSkipImmediately),
+		WithPodResources(o.PodResources),
+		WithKeepLatestMaintenanceJobs(o.KeepLatestMaintenanceJobs),
+		WithItemBlockWorkerCount(o.ItemBlockWorkerCount),
 	}
 
 	if len(o.Features) > 0 {
@@ -343,7 +364,7 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 	}
 
 	if o.RestoreOnly {
-		deployOpts = append(deployOpts, WithRestoreOnly())
+		deployOpts = append(deployOpts, WithRestoreOnly(true))
 	}
 
 	if len(o.Plugins) > 0 {
@@ -351,15 +372,23 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 	}
 
 	if o.DefaultVolumesToFsBackup {
-		deployOpts = append(deployOpts, WithDefaultVolumesToFsBackup())
+		deployOpts = append(deployOpts, WithDefaultVolumesToFsBackup(true))
 	}
 
 	if o.DefaultSnapshotMoveData {
-		deployOpts = append(deployOpts, WithDefaultSnapshotMoveData())
+		deployOpts = append(deployOpts, WithDefaultSnapshotMoveData(true))
 	}
 
 	if o.DisableInformerCache {
-		deployOpts = append(deployOpts, WithDisableInformerCache())
+		deployOpts = append(deployOpts, WithDisableInformerCache(true))
+	}
+
+	if len(o.BackupRepoConfigMap) > 0 {
+		deployOpts = append(deployOpts, WithBackupRepoConfigMap(o.BackupRepoConfigMap))
+	}
+
+	if len(o.RepoMaintenanceJobConfigMap) > 0 {
+		deployOpts = append(deployOpts, WithRepoMaintenanceJobConfigMap(o.RepoMaintenanceJobConfigMap))
 	}
 
 	deploy := Deployment(o.Namespace, deployOpts...)
@@ -368,7 +397,7 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		fmt.Printf("error appending Deployment %s: %s\n", deploy.GetName(), err.Error())
 	}
 
-	if o.UseNodeAgent {
+	if o.UseNodeAgent || o.UseNodeAgentWindows {
 		dsOpts := []podTemplateOption{
 			WithAnnotations(o.PodAnnotations),
 			WithLabels(o.PodLabels),
@@ -376,16 +405,32 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 			WithResources(o.NodeAgentPodResources),
 			WithSecret(secretPresent),
 			WithServiceAccountName(serviceAccountName),
+			WithNodeAgentDisableHostPath(o.NodeAgentDisableHostPath),
 		}
 		if len(o.Features) > 0 {
 			dsOpts = append(dsOpts, WithFeatures(o.Features))
 		}
 		if o.PrivilegedNodeAgent {
-			dsOpts = append(dsOpts, WithPrivilegedNodeAgent())
+			dsOpts = append(dsOpts, WithPrivilegedNodeAgent(true))
 		}
-		ds := DaemonSet(o.Namespace, dsOpts...)
-		if err := appendUnstructured(resources, ds); err != nil {
-			fmt.Printf("error appending DaemonSet %s: %s\n", ds.GetName(), err.Error())
+		if len(o.NodeAgentConfigMap) > 0 {
+			dsOpts = append(dsOpts, WithNodeAgentConfigMap(o.NodeAgentConfigMap))
+		}
+
+		if o.UseNodeAgent {
+			ds := DaemonSet(o.Namespace, dsOpts...)
+			if err := appendUnstructured(resources, ds); err != nil {
+				fmt.Printf("error appending DaemonSet %s: %s\n", ds.GetName(), err.Error())
+			}
+		}
+
+		if o.UseNodeAgentWindows {
+			dsOpts = append(dsOpts, WithForWindows())
+
+			dsWin := DaemonSet(o.Namespace, dsOpts...)
+			if err := appendUnstructured(resources, dsWin); err != nil {
+				fmt.Printf("error appending DaemonSet %s: %s\n", dsWin.GetName(), err.Error())
+			}
 		}
 	}
 

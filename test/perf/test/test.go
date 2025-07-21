@@ -22,18 +22,16 @@ import (
 	"math/rand"
 	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
 	"github.com/pkg/errors"
-
-	"github.com/vmware-tanzu/velero/test/util/report"
-	"github.com/vmware-tanzu/velero/test/util/velero"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	. "github.com/vmware-tanzu/velero/test"
 	"github.com/vmware-tanzu/velero/test/perf/metrics"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
+	"github.com/vmware-tanzu/velero/test/util/report"
+	"github.com/vmware-tanzu/velero/test/util/velero"
 	. "github.com/vmware-tanzu/velero/test/util/velero"
 )
 
@@ -86,8 +84,8 @@ func TestFunc(test VeleroBackupRestoreTest) func() {
 		By(fmt.Sprintf("Run test %s ...... \n", test.GetTestCase().CaseBaseName))
 		BeforeEach(func() {
 			// Using the global velero config which covered the installation for most common cases
-			if VeleroCfg.InstallVelero {
-				Expect(PrepareVelero(context.Background(), test.GetTestCase().CaseBaseName)).To(Succeed())
+			if InstallVelero {
+				Expect(PrepareVelero(context.Background(), test.GetTestCase().CaseBaseName, VeleroCfg)).To(Succeed())
 			}
 		})
 		It(test.GetTestMsg().Text, func() {
@@ -97,14 +95,15 @@ func TestFunc(test VeleroBackupRestoreTest) func() {
 }
 
 func (t *TestCase) Init() error {
-	t.Ctx, t.CtxCancel = context.WithTimeout(context.Background(), 1*time.Hour)
+	t.Ctx, t.CtxCancel = context.WithTimeout(context.Background(), 6*time.Hour)
 	t.NSExcluded = &[]string{"kube-system", "velero", "default", "kube-public", "kube-node-lease"}
 	t.UUIDgen = t.GenerateUUID()
 	t.Client = *VeleroCfg.DefaultClient
 	t.timer = &metrics.TimeMetrics{
-		Name:     "Total time cost",
-		TimeInfo: map[string]time.Time{"Total time cost": time.Now()},
-		Metrics:  make(map[string]float64),
+		Name: "Total time cost",
+		TimeInfo: map[string]metrics.TimeSpan{"Total time cost": {
+			Start: time.Now(),
+		}},
 	}
 	return nil
 }
@@ -131,10 +130,12 @@ func (t *TestCase) Backup() error {
 }
 
 func (t *TestCase) Destroy() error {
-	By(fmt.Sprintf("Start to destroy namespace %s......", t.CaseBaseName), func() {
-		Expect(CleanupNamespacesFiterdByExcludes(t.GetTestCase().Ctx, t.Client, *t.NSExcluded)).To(Succeed(), "Could cleanup retrieve namespaces")
-		Expect(ClearClaimRefForFailedPVs(t.Ctx, t.Client)).To(Succeed(), "Failed to make PV status become to available")
-	})
+	if VeleroCfg.DeleteClusterResource {
+		By(fmt.Sprintf("Start to destroy namespace %s......", t.CaseBaseName), func() {
+			Expect(CleanupNamespacesFiterdByExcludes(t.GetTestCase().Ctx, t.Client, *t.NSExcluded)).To(Succeed(), "Could cleanup retrieve namespaces")
+			Expect(ClearClaimRefForFailedPVs(t.Ctx, t.Client)).To(Succeed(), "Failed to make PV status become to available")
+		})
+	}
 	return nil
 }
 
@@ -160,7 +161,7 @@ func (t *TestCase) Verify() error {
 }
 
 func (t *TestCase) Clean() error {
-	if !VeleroCfg.Debug {
+	if (!CurrentSpecReport().Failed() || !VeleroCfg.FailFast) || VeleroCfg.DeleteClusterResource {
 		By("Clean backups and restore after test", func() {
 			if len(t.BackupArgs) != 0 {
 				if err := VeleroBackupDelete(t.Ctx, VeleroCfg.VeleroCLI, VeleroCfg.VeleroNamespace, t.BackupName); err != nil {
@@ -269,8 +270,7 @@ func (t *TestCase) MonitorMetircs(ctx context.Context, collectors *metrics.Metri
 
 	timeMetrics := &metrics.TimeMetrics{
 		Name:     t.CaseBaseName,
-		TimeInfo: make(map[string]time.Time),
-		Metrics:  make(map[string]float64),
+		TimeInfo: make(map[string]metrics.TimeSpan),
 	}
 	collectors.RegisterOneTimeMetric(timeMetrics)
 

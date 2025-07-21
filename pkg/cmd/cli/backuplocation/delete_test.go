@@ -25,6 +25,7 @@ import (
 	flag "github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	factorymocks "github.com/vmware-tanzu/velero/pkg/client/mocks"
@@ -35,7 +36,6 @@ import (
 )
 
 func TestNewDeleteCommand(t *testing.T) {
-
 	// create a factory
 	f := &factorymocks.Factory{}
 	kbclient := velerotest.NewFakeControllerRuntimeClient(t)
@@ -53,15 +53,15 @@ func TestNewDeleteCommand(t *testing.T) {
 
 	args := []string{"bk-loc-1", "bk-loc-2"}
 	e := o.Complete(f, args)
-	assert.NoError(t, e)
+	require.NoError(t, e)
 	e = o.Validate(c, f, args)
-	assert.NoError(t, e)
+	require.NoError(t, e)
 	c.SetArgs([]string{"bk-1", "--confirm"})
 	e = c.Execute()
-	assert.NoError(t, e)
+	require.NoError(t, e)
 
 	e = Run(f, o)
-	assert.NoError(t, e)
+	require.NoError(t, e)
 	if os.Getenv(cmdtest.CaptureFlag) == "1" {
 		return
 	}
@@ -75,7 +75,6 @@ func TestNewDeleteCommand(t *testing.T) {
 		return
 	}
 	t.Fatalf("process ran with err %v, want backups by get()", err)
-
 }
 func TestDeleteFunctions(t *testing.T) {
 	//t.Run("create the other create command with fromSchedule option for Run() other branches", func(t *testing.T) {
@@ -89,13 +88,13 @@ func TestDeleteFunctions(t *testing.T) {
 	bkrepoList := velerov1api.BackupRepositoryList{}
 	t.Run("findAssociatedBackups", func(t *testing.T) {
 		bkList, e := findAssociatedBackups(kbclient, "bk-loc-1", "ns1")
-		assert.Equal(t, 0, len(bkList.Items))
+		assert.Empty(t, bkList.Items)
 		assert.NoError(t, e)
 	})
 
 	t.Run("findAssociatedBackupRepos", func(t *testing.T) {
 		bkrepoList, e := findAssociatedBackupRepos(kbclient, "bk-loc-1", "ns1")
-		assert.Equal(t, 0, len(bkrepoList.Items))
+		assert.Empty(t, bkrepoList.Items)
 		assert.NoError(t, e)
 	})
 
@@ -104,15 +103,15 @@ func TestDeleteFunctions(t *testing.T) {
 		bk.Name = "bk-name-last"
 		bkList.Items = append(bkList.Items, bk)
 		errList := deleteBackups(kbclient, bkList)
-		assert.Equal(t, 1, len(errList))
-		assert.Contains(t, errList[0].Error(), fmt.Sprintf("delete backup \"%s\" associated with deleted BSL: backups.velero.io \"%s\" not found", bk.Name, bk.Name))
+		assert.Len(t, errList, 1)
+		assert.ErrorContains(t, errList[0], fmt.Sprintf("delete backup \"%s\" associated with deleted BSL: backups.velero.io \"%s\" not found", bk.Name, bk.Name))
 	})
 	t.Run("deleteBackupRepos", func(t *testing.T) {
 		bkrepo := velerov1api.BackupRepository{}
 		bkrepo.Name = "bk-repo-name-last"
 		bkrepoList.Items = append(bkrepoList.Items, bkrepo)
 		errList := deleteBackupRepos(kbclient, bkrepoList)
-		assert.Equal(t, 1, len(errList))
-		assert.Contains(t, errList[0].Error(), fmt.Sprintf("delete backup repository \"%s\" associated with deleted BSL: backuprepositories.velero.io \"%s\" not found", bkrepo.Name, bkrepo.Name))
+		assert.Len(t, errList, 1)
+		assert.ErrorContains(t, errList[0], fmt.Sprintf("delete backup repository \"%s\" associated with deleted BSL: backuprepositories.velero.io \"%s\" not found", bkrepo.Name, bkrepo.Name))
 	})
 }

@@ -4,16 +4,13 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	v1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-
-	. "github.com/vmware-tanzu/velero/test"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 	. "github.com/vmware-tanzu/velero/test/util/velero"
@@ -37,8 +34,6 @@ func (n *NodePort) Init() error {
 	n.BackupName = "backup-" + n.CaseBaseName
 	n.RestoreName = "restore-" + n.CaseBaseName
 	n.serviceName = "nginx-service-" + n.CaseBaseName
-	n.VeleroCfg = VeleroCfg
-	n.Client = *n.VeleroCfg.ClientToInstallVelero
 	n.NamespacesTotal = 1
 	n.TestMsg = &TestMSG{
 		Desc:      "Nodeport preservation",
@@ -50,31 +45,30 @@ func (n *NodePort) Init() error {
 	n.NSIncluded = &[]string{}
 	for nsNum := 0; nsNum < n.NamespacesTotal; nsNum++ {
 		createNSName := fmt.Sprintf("%s-%00000d", n.CaseBaseName, nsNum)
-		n.namespaceToCollision = append(n.namespaceToCollision, createNSName+"tmp")
+		n.namespaceToCollision = append(n.namespaceToCollision, createNSName+"-tmp")
 		*n.NSIncluded = append(*n.NSIncluded, createNSName)
 	}
 
 	n.BackupArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", n.BackupName,
+		"create", "--namespace", n.VeleroCfg.VeleroNamespace, "backup", n.BackupName,
 		"--include-namespaces", strings.Join(*n.NSIncluded, ","), "--wait",
 	}
 	n.RestoreArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "restore",
+		"create", "--namespace", n.VeleroCfg.VeleroNamespace, "restore",
 		"--from-backup", n.BackupName,
 		"--wait",
 	}
 	return nil
 }
-func (n *NodePort) CreateResources() error {
-	n.Ctx, n.CtxCancel = context.WithTimeout(context.Background(), 60*time.Minute)
 
+func (n *NodePort) CreateResources() error {
 	for _, ns := range *n.NSIncluded {
 		By(fmt.Sprintf("Creating service %s in namespaces %s ......\n", n.serviceName, ns), func() {
 			Expect(CreateNamespace(n.Ctx, n.Client, ns)).To(Succeed(), fmt.Sprintf("Failed to create namespace %s", ns))
 			Expect(createServiceWithNodeport(n.Ctx, n.Client, ns, n.serviceName, n.labels, 0)).To(Succeed(), fmt.Sprintf("Failed to create service %s", n.serviceName))
 			service, err := GetService(n.Ctx, n.Client, ns, n.serviceName)
 			Expect(err).To(Succeed())
-			Expect(len(service.Spec.Ports)).To(Equal(1))
+			Expect(service.Spec.Ports).To(HaveLen(1))
 			n.nodePort = service.Spec.Ports[0].NodePort
 			_, err = GetAllService(n.Ctx)
 			Expect(err).To(Succeed(), "fail to get service")
@@ -139,7 +133,7 @@ func (n *NodePort) Restore() error {
 		By(fmt.Sprintf("Delete service %s by deleting namespace %s", n.serviceName, ns), func() {
 			service, err := GetService(n.Ctx, n.Client, ns, n.serviceName)
 			Expect(err).To(Succeed())
-			Expect(len(service.Spec.Ports)).To(Equal(1))
+			Expect(service.Spec.Ports).To(HaveLen(1))
 			fmt.Println(service.Spec.Ports)
 			Expect(DeleteNamespace(n.Ctx, n.Client, ns, true)).To(Succeed())
 		})
@@ -163,7 +157,7 @@ func (n *NodePort) Restore() error {
 		By(fmt.Sprintf("Verify service %s was restore successfully with the origin nodeport.", ns), func() {
 			service, err := GetService(n.Ctx, n.Client, ns, n.serviceName)
 			Expect(err).To(Succeed())
-			Expect(len(service.Spec.Ports)).To(Equal(1))
+			Expect(service.Spec.Ports).To(HaveLen(1))
 			Expect(service.Spec.Ports[0].NodePort).To(Equal(n.nodePort))
 		})
 	}
@@ -173,8 +167,8 @@ func (n *NodePort) Restore() error {
 
 func createServiceWithNodeport(ctx context.Context, client TestClient, namespace string,
 	service string, labels map[string]string, nodePort int32) error {
-	serviceSpec := &v1.ServiceSpec{
-		Ports: []v1.ServicePort{
+	serviceSpec := &corev1api.ServiceSpec{
+		Ports: []corev1api.ServicePort{
 			{
 				Port:       80,
 				TargetPort: intstr.IntOrString{IntVal: 80},
@@ -182,7 +176,7 @@ func createServiceWithNodeport(ctx context.Context, client TestClient, namespace
 			},
 		},
 		Selector: nil,
-		Type:     v1.ServiceTypeLoadBalancer,
+		Type:     corev1api.ServiceTypeLoadBalancer,
 	}
 	return CreateService(ctx, client, namespace, service, labels, serviceSpec)
 }

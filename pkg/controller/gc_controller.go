@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/pkg/errors"
@@ -33,8 +34,10 @@ import (
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	pkgbackup "github.com/vmware-tanzu/velero/pkg/backup"
 	veleroclient "github.com/vmware-tanzu/velero/pkg/client"
+	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+	veleroutil "github.com/vmware-tanzu/velero/pkg/util/velero"
 )
 
 const (
@@ -43,6 +46,7 @@ const (
 	gcFailureBSLNotFound     = "BSLNotFound"
 	gcFailureBSLCannotGet    = "BSLCannotGet"
 	gcFailureBSLReadOnly     = "BSLReadOnly"
+	gcFailureBSLUnavailable  = "BSLUnavailable"
 )
 
 // gcReconciler creates DeleteBackupRequests for expired backups.
@@ -75,7 +79,7 @@ func NewGCReconciler(
 // Other Events will be filtered to decrease the number of reconcile call. Especially UpdateEvent must be filtered since we removed
 // the backup status as the sub-resource of backup in v1.9, every change on it will be treated as UpdateEvent and trigger reconcile call.
 func (c *gcReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	s := kube.NewPeriodicalEnqueueSource(c.logger, mgr.GetClient(), &velerov1api.BackupList{}, c.frequency, kube.PeriodicalEnqueueSourceOption{})
+	s := kube.NewPeriodicalEnqueueSource(c.logger.WithField("controller", constant.ControllerGarbageCollection), mgr.GetClient(), &velerov1api.BackupList{}, c.frequency, kube.PeriodicalEnqueueSourceOption{})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.Backup{}, builder.WithPredicates(predicate.Funcs{
 			UpdateFunc: func(ue event.UpdateEvent) bool {
@@ -88,7 +92,8 @@ func (c *gcReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				return false
 			},
 		})).
-		Watches(s, nil).
+		WatchesRawSource(s).
+		Named(constant.ControllerGarbageCollection).
 		Complete(c)
 }
 
@@ -142,10 +147,16 @@ func (c *gcReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Re
 		} else {
 			backup.Labels[garbageCollectionFailure] = gcFailureBSLCannotGet
 		}
+
 		if err := c.Update(ctx, backup); err != nil {
 			log.WithError(err).Error("error updating backup labels")
 		}
 		return ctrl.Result{}, errors.Wrap(err, "error getting backup storage location")
+	}
+
+	if !veleroutil.BSLIsAvailable(*loc) {
+		log.Infof("BSL %s is unavailable, cannot gc backup", loc.Name)
+		return ctrl.Result{}, fmt.Errorf("bsl %s is unavailable, cannot gc backup", loc.Name)
 	}
 
 	if loc.Spec.AccessMode == velerov1api.BackupStorageLocationAccessModeReadOnly {

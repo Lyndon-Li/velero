@@ -1,34 +1,42 @@
 package uploader
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
 
 func TestValidateUploaderType(t *testing.T) {
 	tests := []struct {
 		name    string
 		input   string
-		wantErr bool
+		wantErr string
+		wantMsg string
 	}{
-		{
-			"'restic' is a valid type",
-			"restic",
-			false,
-		},
 		{
 			"'   kopia  ' is a valid type (space will be trimmed)",
 			"   kopia  ",
-			false,
+			"",
+			"",
 		},
 		{
 			"'anything_else' is invalid",
 			"anything_else",
-			true,
+			"invalid uploader type 'anything_else', valid type: 'kopia'",
+			"",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateUploaderType(tt.input); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateUploaderType(), input = '%s' error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			msg, err := ValidateUploaderType(tt.input)
+			if tt.wantErr != "" {
+				require.EqualError(t, err, tt.wantErr)
+			} else {
+				require.NoError(t, err)
 			}
+
+			assert.Equal(t, tt.wantMsg, msg)
 		})
 	}
 }

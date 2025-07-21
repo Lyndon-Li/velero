@@ -62,14 +62,14 @@ func (e *ExcludeResources) Init() error {
 		e.BackupName = "backup-" + e.CaseBaseName
 		e.RestoreName = "restore-" + UUIDgen.String()
 		e.BackupArgs = []string{
-			"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", e.BackupName,
+			"create", "--namespace", e.VeleroCfg.VeleroNamespace, "backup", e.BackupName,
 			"--include-namespaces", strings.Join(*e.NSIncluded, ","),
 			"--exclude-resources", "secrets",
 			"--default-volumes-to-fs-backup", "--wait",
 		}
 
 		e.RestoreArgs = []string{
-			"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", e.RestoreName,
+			"create", "--namespace", e.VeleroCfg.VeleroNamespace, "restore", e.RestoreName,
 			"--from-backup", e.BackupName, "--wait",
 		}
 	} else { // testing case restore with exclude-resources option
@@ -81,12 +81,12 @@ func (e *ExcludeResources) Init() error {
 			FailedMSG: "Failed to restore with resource exclude",
 		}
 		e.BackupArgs = []string{
-			"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", e.BackupName,
+			"create", "--namespace", e.VeleroCfg.VeleroNamespace, "backup", e.BackupName,
 			"--include-namespaces", strings.Join(*e.NSIncluded, ","),
 			"--default-volumes-to-fs-backup", "--wait",
 		}
 		e.RestoreArgs = []string{
-			"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", e.RestoreName,
+			"create", "--namespace", e.VeleroCfg.VeleroNamespace, "restore", e.RestoreName,
 			"--exclude-resources", "secrets",
 			"--from-backup", e.BackupName, "--wait",
 		}
@@ -111,7 +111,7 @@ func (e *ExcludeResources) Verify() error {
 			}
 			return errors.Wrap(err, fmt.Sprintf("failed to list secrets in namespace: %q", namespace))
 		} else if len(secretsList.Items) != 0 {
-			return errors.Errorf(fmt.Sprintf("Should no secrets found  %s in namespace: %q", secretsList.Items[0].Name, namespace))
+			return errors.Errorf("Should no secrets found  %s in namespace: %q", secretsList.Items[0].Name, namespace)
 		}
 
 		//Check configmap
@@ -119,7 +119,7 @@ func (e *ExcludeResources) Verify() error {
 		if err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to list configmap in namespace: %q", namespace))
 		} else if len(configmapList.Items) == 0 {
-			return errors.Errorf(fmt.Sprintf("Should have configmap found in namespace: %q", namespace))
+			return errors.Errorf("Should have configmap found in namespace: %q", namespace)
 		}
 	}
 	return nil

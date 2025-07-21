@@ -21,20 +21,22 @@ import (
 	"io"
 	"sort"
 
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/vmware-tanzu/velero/internal/resourcemodifiers"
+	"github.com/vmware-tanzu/velero/internal/volume"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/itemoperation"
-	"github.com/vmware-tanzu/velero/pkg/volume"
+	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
 const (
-	itemRestoreResultCreated = "created"
-	itemRestoreResultUpdated = "updated"
-	itemRestoreResultFailed  = "failed"
-	itemRestoreResultSkipped = "skipped"
+	ItemRestoreResultCreated = "created"
+	ItemRestoreResultUpdated = "updated"
+	ItemRestoreResultFailed  = "failed"
+	ItemRestoreResultSkipped = "skipped"
 )
 
 type itemKey struct {
@@ -51,15 +53,19 @@ func resourceKey(obj runtime.Object) string {
 type Request struct {
 	*velerov1api.Restore
 
-	Log                  logrus.FieldLogger
-	Backup               *velerov1api.Backup
-	PodVolumeBackups     []*velerov1api.PodVolumeBackup
-	VolumeSnapshots      []*volume.Snapshot
-	BackupReader         io.Reader
-	RestoredItems        map[itemKey]restoredItemStatus
-	itemOperationsList   *[]*itemoperation.RestoreOperation
-	ResourceModifiers    *resourcemodifiers.ResourceModifiers
-	DisableInformerCache bool
+	Log                           logrus.FieldLogger
+	Backup                        *velerov1api.Backup
+	PodVolumeBackups              []*velerov1api.PodVolumeBackup
+	VolumeSnapshots               []*volume.Snapshot
+	BackupReader                  io.Reader
+	RestoredItems                 map[itemKey]restoredItemStatus
+	itemOperationsList            *[]*itemoperation.RestoreOperation
+	ResourceModifiers             *resourcemodifiers.ResourceModifiers
+	DisableInformerCache          bool
+	CSIVolumeSnapshots            []*snapshotv1api.VolumeSnapshot
+	BackupVolumeInfoMap           map[string]volume.BackupVolumeInfo
+	RestoreVolumeInfoTracker      *volume.RestoreVolumeInfoTracker
+	ResourceDeletionStatusTracker kube.ResourceDeletionStatusTracker
 }
 
 type restoredItemStatus struct {

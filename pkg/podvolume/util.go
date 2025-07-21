@@ -17,29 +17,23 @@ limitations under the License.
 package podvolume
 
 import (
+	"fmt"
 	"strings"
 
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	"github.com/vmware-tanzu/velero/pkg/repository"
+	"github.com/vmware-tanzu/velero/pkg/podvolume/configs"
+	repotypes "github.com/vmware-tanzu/velero/pkg/repository/types"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 )
 
 const (
-	// PVCNameAnnotation is the key for the annotation added to
-	// pod volume backups when they're for a PVC.
-	PVCNameAnnotation = "velero.io/pvc-name"
-
 	// Deprecated.
 	//
 	// TODO(2.0): remove
 	podAnnotationPrefix = "snapshot.velero.io/"
-
-	// DefaultVolumesToFsBackup specifies whether pod volume backup should be used, by default, to
-	// take backup of all pod volumes.
-	DefaultVolumesToFsBackup = false
 )
 
 // volumeBackupInfo describes the backup info of a volume backed up by PodVolumeBackups
@@ -122,22 +116,46 @@ func getVolumeBackupInfoForPod(podVolumeBackups []*velerov1api.PodVolumeBackup, 
 }
 
 // GetSnapshotIdentifier returns the snapshots represented by SnapshotIdentifier for the given PVBs
-func GetSnapshotIdentifier(podVolumeBackups *velerov1api.PodVolumeBackupList) []repository.SnapshotIdentifier {
-	var res []repository.SnapshotIdentifier
+func GetSnapshotIdentifier(podVolumeBackups *velerov1api.PodVolumeBackupList) map[string][]repotypes.SnapshotIdentifier {
+	res := map[string][]repotypes.SnapshotIdentifier{}
 	for _, item := range podVolumeBackups.Items {
 		if item.Status.SnapshotID == "" {
 			continue
 		}
 
-		res = append(res, repository.SnapshotIdentifier{
+		if res[item.Spec.Pod.Namespace] == nil {
+			res[item.Spec.Pod.Namespace] = []repotypes.SnapshotIdentifier{}
+		}
+
+		snapshots := res[item.Spec.Pod.Namespace]
+
+		snapshots = append(snapshots, repotypes.SnapshotIdentifier{
 			VolumeNamespace:       item.Spec.Pod.Namespace,
 			BackupStorageLocation: item.Spec.BackupStorageLocation,
 			SnapshotID:            item.Status.SnapshotID,
 			RepositoryType:        getRepositoryType(item.Spec.UploaderType),
+			UploaderType:          item.Spec.UploaderType,
+			Source:                item.Status.Path,
+			RepoIdentifier:        item.Spec.RepoIdentifier,
 		})
+
+		res[item.Spec.Pod.Namespace] = snapshots
 	}
 
 	return res
+}
+
+func GetRealSource(pvb *velerov1api.PodVolumeBackup) string {
+	pvcName := ""
+	if pvb.Annotations != nil {
+		pvcName = pvb.Annotations[configs.PVCNameAnnotation]
+	}
+
+	if pvcName != "" {
+		return fmt.Sprintf("%s/%s/%s", pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name, pvcName)
+	} else {
+		return fmt.Sprintf("%s/%s/%s", pvb.Spec.Pod.Namespace, pvb.Spec.Pod.Name, pvb.Spec.Volume)
+	}
 }
 
 func getUploaderTypeOrDefault(uploaderType string) string {

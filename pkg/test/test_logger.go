@@ -40,13 +40,41 @@ type singleLogRecorder struct {
 }
 
 func (s *singleLogRecorder) Write(p []byte) (n int, err error) {
-	*s.buffer = string(p[:])
+	*s.buffer = *s.buffer + string(p[:])
 	return len(p), nil
 }
 
 func NewSingleLogger(buffer *string) logrus.FieldLogger {
 	logger := logrus.New()
 	logger.Out = &singleLogRecorder{buffer: buffer}
+	logger.Level = logrus.TraceLevel
+	return logrus.NewEntry(logger)
+}
+
+func NewSingleLoggerWithHooks(buffer *string, hooks []logrus.Hook) logrus.FieldLogger {
+	logger := logrus.New()
+	logger.Out = &singleLogRecorder{buffer: buffer}
+	logger.Level = logrus.TraceLevel
+
+	for _, hook := range hooks {
+		logger.Hooks.Add(hook)
+	}
+
+	return logrus.NewEntry(logger)
+}
+
+type multipleLogRecorder struct {
+	buffer *[]string
+}
+
+func (m *multipleLogRecorder) Write(p []byte) (n int, err error) {
+	*m.buffer = append(*m.buffer, string(p[:]))
+	return len(p), nil
+}
+
+func NewMultipleLogger(buffer *[]string) logrus.FieldLogger {
+	logger := logrus.New()
+	logger.Out = &multipleLogRecorder{buffer}
 	logger.Level = logrus.TraceLevel
 	return logrus.NewEntry(logger)
 }

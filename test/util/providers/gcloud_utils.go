@@ -19,6 +19,7 @@ package providers
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -65,6 +66,7 @@ func (s GCSStorage) IsObjectsInBucket(cloudCredentialsFile, bslBucket, bslPrefix
 		}
 	}
 }
+
 func (s GCSStorage) DeleteObjectsInBucket(cloudCredentialsFile, bslBucket, bslPrefix, bslConfig, backupObject string) error {
 	q := &storage.Query{
 		Prefix: bslPrefix,
@@ -95,7 +97,7 @@ func (s GCSStorage) DeleteObjectsInBucket(cloudCredentialsFile, bslBucket, bslPr
 		if strings.Contains(obj.Name, bslPrefix+backupObject+"/") {
 			fmt.Printf("Delete item: %s\n", obj.Name)
 			if err = bucket.Object(obj.Name).Delete(ctx); err != nil {
-				return errors.Wrapf(err, fmt.Sprintf("Fail to delete object %s in bucket %s", obj.Name, bslBucket))
+				return errors.Wrapf(err, "Fail to delete object %s in bucket %s", obj.Name, bslBucket)
 			}
 		}
 	}
@@ -105,12 +107,12 @@ func (s GCSStorage) IsSnapshotExisted(cloudCredentialsFile, bslConfig, backupObj
 	ctx := context.Background()
 	data, err := os.ReadFile(cloudCredentialsFile)
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("Failed reading gcloud credential file %s", cloudCredentialsFile))
+		return errors.Wrapf(err, "Failed reading gcloud credential file %s", cloudCredentialsFile)
 	}
 
 	creds, err := google.CredentialsFromJSON(ctx, data)
 	if err != nil {
-		return errors.Wrapf(err, fmt.Sprintf("Failed getting credentials from JSON data %s", string(data)))
+		return errors.Wrapf(err, "Failed getting credentials from JSON data %s", string(data))
 	}
 
 	computeService, err := compute.NewService(context.Background(), option.WithCredentialsFile(cloudCredentialsFile))
@@ -140,4 +142,14 @@ func (s GCSStorage) IsSnapshotExisted(cloudCredentialsFile, bslConfig, backupObj
 		fmt.Printf("Snapshot count %d is as expected %d\n", snapshotCountFound, len(snapshotCheck.SnapshotIDList))
 		return nil
 	}
+}
+
+func (s GCSStorage) GetObject(cloudCredentialsFile, bslBucket, bslPrefix, bslConfig, objectKey string) (io.ReadCloser, error) {
+	ctx := context.Background()
+	client, err := storage.NewClient(ctx, option.WithCredentialsFile(cloudCredentialsFile))
+	if err != nil {
+		return nil, errors.Wrapf(err, "fail to create GCloud client")
+	}
+
+	return client.Bucket(bslBucket).Object(strings.Join([]string{bslPrefix, objectKey}, "/")).NewReader(ctx)
 }

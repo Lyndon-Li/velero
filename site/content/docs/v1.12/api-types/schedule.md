@@ -30,6 +30,8 @@ metadata:
   namespace: velero
 # Parameters about the scheduled backup. Required.
 spec:
+  # Paused specifies whether the schedule is paused or not
+  paused: false
   # Schedule is a Cron expression defining when to run the Backup
   schedule: 0 7 * * *
   # Specifies whether to use OwnerReferences on backups created by this Schedule. 
@@ -41,6 +43,11 @@ spec:
     # CSI VolumeSnapshot status turns to ReadyToUse during creation, before
     # returning error as timeout. The default value is 10 minute.
     csiSnapshotTimeout: 10m
+    # resourcePolicy specifies the referenced resource policies that backup should follow
+    # optional
+    resourcePolicy:
+      kind: configmap
+      name: resource-policy-configmap
     # Array of namespaces to include in the scheduled backup. If unspecified, all namespaces are included.
     # Optional.
     includedNamespaces:
@@ -116,12 +123,12 @@ spec:
     ttl: 24h0m0s
     # whether pod volume file system backup should be used for all volumes by default.
     defaultVolumesToFsBackup: true
-    # The labels you want on backup objects, created from this schedule (instead of copying the labels you have on schedule object itself).
-    # When this field is set, the labels from the Schedule resource are not copied to the Backup resource.
     # Whether snapshot data should be moved. If set, data movement is launched after the snapshot is created.
     snapshotMoveData: true
     # The data mover to be used by the backup. If the value is "" or "velero", the built-in data mover will be used.
     datamover: velero
+    # The labels you want on backup objects, created from this schedule (instead of copying the labels you have on schedule object itself).
+    # When this field is set, the labels from the Schedule resource are not copied to the Backup resource.
     metadata:
       labels:
         labelname: somelabelvalue

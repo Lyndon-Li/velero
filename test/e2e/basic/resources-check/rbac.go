@@ -33,14 +33,12 @@ limitations under the License.
 package basic
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
+	. "github.com/onsi/ginkgo/v2"
 	"github.com/pkg/errors"
 
-	. "github.com/vmware-tanzu/velero/test"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 )
@@ -56,6 +54,7 @@ func (r *RBACCase) Init() error {
 	r.RestoreName = "restore-" + r.CaseBaseName
 	r.NamespacesTotal = 1
 	r.NSIncluded = &[]string{}
+
 	for nsNum := 0; nsNum < r.NamespacesTotal; nsNum++ {
 		createNSName := fmt.Sprintf("%s-%00000d", r.CaseBaseName, nsNum)
 		*r.NSIncluded = append(*r.NSIncluded, createNSName)
@@ -66,22 +65,19 @@ func (r *RBACCase) Init() error {
 		FailedMSG: "Failed to successfully backup and restore RBAC",
 	}
 	r.BackupArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", r.BackupName,
+		"create", "--namespace", r.VeleroCfg.VeleroNamespace, "backup", r.BackupName,
 		"--include-namespaces", strings.Join(*r.NSIncluded, ","),
 		"--default-volumes-to-fs-backup", "--wait",
 	}
-
 	r.RestoreArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", r.RestoreName,
+		"create", "--namespace", r.VeleroCfg.VeleroNamespace, "restore", r.RestoreName,
 		"--from-backup", r.BackupName, "--wait",
 	}
-	r.VeleroCfg = VeleroCfg
-	r.Client = *r.VeleroCfg.ClientToInstallVelero
+
 	return nil
 }
 
 func (r *RBACCase) CreateResources() error {
-	r.Ctx, r.CtxCancel = context.WithTimeout(context.Background(), 10*time.Minute)
 	for nsNum := 0; nsNum < r.NamespacesTotal; nsNum++ {
 		createNSName := fmt.Sprintf("%s-%00000d", r.CaseBaseName, nsNum)
 		fmt.Printf("Creating namespaces ...%s\n", createNSName)
@@ -181,8 +177,11 @@ func (r *RBACCase) Destroy() error {
 }
 
 func (r *RBACCase) Clean() error {
-	if !r.VeleroCfg.Debug {
+	if CurrentSpecReport().Failed() && r.VeleroCfg.FailFast {
+		fmt.Println("Test case failed and fail fast is enabled. Skip resource clean up.")
+	} else {
 		return r.Destroy()
 	}
+
 	return nil
 }

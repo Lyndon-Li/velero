@@ -23,7 +23,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	v1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
@@ -82,6 +82,7 @@ example: "@every 2h30m".`,
 
 type CreateOptions struct {
 	BackupOptions              *backup.CreateOptions
+	SkipOptions                *SkipOptions
 	Schedule                   string
 	UseOwnerReferencesInBackup bool
 	Paused                     bool
@@ -90,11 +91,13 @@ type CreateOptions struct {
 func NewCreateOptions() *CreateOptions {
 	return &CreateOptions{
 		BackupOptions: backup.NewCreateOptions(),
+		SkipOptions:   NewSkipOptions(),
 	}
 }
 
 func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	o.BackupOptions.BindFlags(flags)
+	o.SkipOptions.BindFlags(flags)
 	flags.StringVar(&o.Schedule, "schedule", o.Schedule, "A cron expression specifying a recurring schedule for this backup to run")
 	flags.BoolVar(&o.UseOwnerReferencesInBackup, "use-owner-references-in-backup", o.UseOwnerReferencesInBackup, "Specifies whether to use OwnerReferences on backups created by this Schedule. Notice: if set to true, when schedule is deleted, backups will be deleted too.")
 	flags.BoolVar(&o.Paused, "paused", o.Paused, "Specifies whether the newly created schedule is paused or not.")
@@ -115,7 +118,7 @@ func (o *CreateOptions) Complete(args []string, f client.Factory) error {
 func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 	var orders map[string]string
 
-	veleroClient, err := f.Client()
+	crClient, err := f.KubebuilderClient()
 	if err != nil {
 		return err
 	}
@@ -160,18 +163,25 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 			Schedule:                   o.Schedule,
 			UseOwnerReferencesInBackup: &o.UseOwnerReferencesInBackup,
 			Paused:                     o.Paused,
+			SkipImmediately:            o.SkipOptions.SkipImmediately.Value,
 		},
 	}
 
 	if o.BackupOptions.ResPoliciesConfigmap != "" {
-		schedule.Spec.Template.ResourcePolicy = &v1.TypedLocalObjectReference{Kind: resourcepolicies.ConfigmapRefType, Name: o.BackupOptions.ResPoliciesConfigmap}
+		schedule.Spec.Template.ResourcePolicy = &corev1api.TypedLocalObjectReference{Kind: resourcepolicies.ConfigmapRefType, Name: o.BackupOptions.ResPoliciesConfigmap}
+	}
+
+	if o.BackupOptions.ParallelFilesUpload > 0 {
+		schedule.Spec.Template.UploaderConfig = &api.UploaderConfigForBackup{
+			ParallelFilesUpload: o.BackupOptions.ParallelFilesUpload,
+		}
 	}
 
 	if printed, err := output.PrintWithFormat(c, schedule); printed || err != nil {
 		return err
 	}
 
-	_, err = veleroClient.VeleroV1().Schedules(schedule.Namespace).Create(context.TODO(), schedule, metav1.CreateOptions{})
+	err = crClient.Create(context.TODO(), schedule)
 	if err != nil {
 		return err
 	}

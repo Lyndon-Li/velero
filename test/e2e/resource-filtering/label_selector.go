@@ -17,16 +17,13 @@ limitations under the License.
 package filtering
 
 import (
-	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	. "github.com/vmware-tanzu/velero/test"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 )
@@ -62,21 +59,20 @@ func (l *LabelSelector) Init() error {
 	}
 	l.labelSelector = "resourcefiltering"
 	l.BackupArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", l.BackupName,
+		"create", "--namespace", l.VeleroCfg.VeleroNamespace, "backup", l.BackupName,
 		"--selector", "resourcefiltering=true",
 		"--include-namespaces", strings.Join(*l.NSIncluded, ","),
 		"--default-volumes-to-fs-backup", "--wait",
 	}
 
 	l.RestoreArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", l.RestoreName,
+		"create", "--namespace", l.VeleroCfg.VeleroNamespace, "restore", l.RestoreName,
 		"--from-backup", l.BackupName, "--wait",
 	}
 	return nil
 }
 
 func (l *LabelSelector) CreateResources() error {
-	l.Ctx, l.CtxCancel = context.WithTimeout(context.Background(), 10*time.Minute)
 	for nsNum := 0; nsNum < l.NamespacesTotal; nsNum++ {
 		namespace := fmt.Sprintf("%s-%00000d", l.CaseBaseName, nsNum)
 		fmt.Printf("Creating resources in namespace ...%s\n", namespace)
@@ -92,7 +88,7 @@ func (l *LabelSelector) CreateResources() error {
 		//Create deployment
 		fmt.Printf("Creating deployment in namespaces ...%s\n", namespace)
 
-		deployment := NewDeployment(l.CaseBaseName, namespace, l.replica, labels, nil).Result()
+		deployment := NewDeployment(l.CaseBaseName, namespace, l.replica, labels, l.VeleroCfg.ImageRegistryProxy).Result()
 		deployment, err := CreateDeployment(l.Client.ClientGo, namespace, deployment)
 		if err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to delete the namespace %q", namespace))
@@ -146,7 +142,7 @@ func (l *LabelSelector) Verify() error {
 			if err != nil {
 				return errors.Wrap(err, fmt.Sprintf("failed to list secrets in namespace: %q", namespace))
 			} else if len(secretsList.Items) == 0 {
-				return errors.Errorf(fmt.Sprintf("no secrets found in namespace: %q", namespace))
+				return errors.Errorf("no secrets found in namespace: %q", namespace)
 			}
 		} else { //exclude
 			if err == nil {

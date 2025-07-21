@@ -20,14 +20,16 @@ import (
 	"fmt"
 	"strings"
 
-	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	appsv1api "k8s.io/api/apps/v1"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 
 	"github.com/vmware-tanzu/velero/internal/velero"
+	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 )
 
-func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
+func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet {
 	c := &podTemplateConfig{
 		image: velero.DefaultVeleroImage(),
 	}
@@ -36,10 +38,10 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 		opt(c)
 	}
 
-	pullPolicy := corev1.PullAlways
+	pullPolicy := corev1api.PullAlways
 	imageParts := strings.Split(c.image, ":")
 	if len(imageParts) == 2 && imageParts[1] != "latest" {
-		pullPolicy = corev1.PullIfNotPresent
+		pullPolicy = corev1api.PullIfNotPresent
 	}
 
 	daemonSetArgs := []string{
@@ -50,60 +52,95 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 		daemonSetArgs = append(daemonSetArgs, fmt.Sprintf("--features=%s", strings.Join(c.features, ",")))
 	}
 
-	userID := int64(0)
-	mountPropagationMode := corev1.MountPropagationHostToContainer
+	if len(c.nodeAgentConfigMap) > 0 {
+		daemonSetArgs = append(daemonSetArgs, fmt.Sprintf("--node-agent-configmap=%s", c.nodeAgentConfigMap))
+	}
 
-	daemonSet := &appsv1.DaemonSet{
-		ObjectMeta: objectMeta(namespace, "node-agent"),
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "DaemonSet",
-			APIVersion: appsv1.SchemeGroupVersion.String(),
-		},
-		Spec: appsv1.DaemonSetSpec{
-			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{
-					"name": "node-agent",
+	userID := int64(0)
+	mountPropagationMode := corev1api.MountPropagationHostToContainer
+
+	dsName := "node-agent"
+	if c.forWindows {
+		dsName = "node-agent-windows"
+	}
+
+	volumes := []corev1api.Volume{}
+	volumeMounts := []corev1api.VolumeMount{}
+	if !c.nodeAgentDisableHostPath {
+		volumes = append(volumes, []corev1api.Volume{
+			{
+				Name: "host-pods",
+				VolumeSource: corev1api.VolumeSource{
+					HostPath: &corev1api.HostPathVolumeSource{
+						Path: "/var/lib/kubelet/pods",
+					},
 				},
 			},
-			Template: corev1.PodTemplateSpec{
+			{
+				Name: "host-plugins",
+				VolumeSource: corev1api.VolumeSource{
+					HostPath: &corev1api.HostPathVolumeSource{
+						Path: "/var/lib/kubelet/plugins",
+					},
+				},
+			},
+		}...)
+
+		volumeMounts = append(volumeMounts, []corev1api.VolumeMount{
+			{
+				Name:             nodeagent.HostPodVolumeMount,
+				MountPath:        nodeagent.HostPodVolumeMountPath(),
+				MountPropagation: &mountPropagationMode,
+			},
+			{
+				Name:             "host-plugins",
+				MountPath:        "/var/lib/kubelet/plugins",
+				MountPropagation: &mountPropagationMode,
+			},
+		}...)
+	}
+
+	volumes = append(volumes, corev1api.Volume{
+		Name: "scratch",
+		VolumeSource: corev1api.VolumeSource{
+			EmptyDir: new(corev1api.EmptyDirVolumeSource),
+		},
+	})
+
+	volumeMounts = append(volumeMounts, corev1api.VolumeMount{
+		Name:      "scratch",
+		MountPath: "/scratch",
+	})
+
+	daemonSet := &appsv1api.DaemonSet{
+		ObjectMeta: objectMeta(namespace, dsName),
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "DaemonSet",
+			APIVersion: appsv1api.SchemeGroupVersion.String(),
+		},
+		Spec: appsv1api.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"name": dsName,
+				},
+			},
+			Template: corev1api.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: podLabels(c.labels, map[string]string{
-						"name": "node-agent",
+						"name": dsName,
+						"role": "node-agent",
 					}),
 					Annotations: c.annotations,
 				},
-				Spec: corev1.PodSpec{
+				Spec: corev1api.PodSpec{
 					ServiceAccountName: c.serviceAccountName,
-					SecurityContext: &corev1.PodSecurityContext{
+					SecurityContext: &corev1api.PodSecurityContext{
 						RunAsUser: &userID,
 					},
-					Volumes: []corev1.Volume{
+					Volumes: volumes,
+					Containers: []corev1api.Container{
 						{
-							Name: "host-pods",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/var/lib/kubelet/pods",
-								},
-							},
-						},
-						{
-							Name: "host-plugins",
-							VolumeSource: corev1.VolumeSource{
-								HostPath: &corev1.HostPathVolumeSource{
-									Path: "/var/lib/kubelet/plugins",
-								},
-							},
-						},
-						{
-							Name: "scratch",
-							VolumeSource: corev1.VolumeSource{
-								EmptyDir: new(corev1.EmptyDirVolumeSource),
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:            "node-agent",
+							Name:            dsName,
 							Image:           c.image,
 							Ports:           containerPorts(),
 							ImagePullPolicy: pullPolicy,
@@ -111,38 +148,23 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 								"/velero",
 							},
 							Args: daemonSetArgs,
-							SecurityContext: &corev1.SecurityContext{
+							SecurityContext: &corev1api.SecurityContext{
 								Privileged: &c.privilegedNodeAgent,
 							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:             "host-pods",
-									MountPath:        "/host_pods",
-									MountPropagation: &mountPropagationMode,
-								},
-								{
-									Name:             "host-plugins",
-									MountPath:        "/var/lib/kubelet/plugins",
-									MountPropagation: &mountPropagationMode,
-								},
-								{
-									Name:      "scratch",
-									MountPath: "/scratch",
-								},
-							},
-							Env: []corev1.EnvVar{
+							VolumeMounts: volumeMounts,
+							Env: []corev1api.EnvVar{
 								{
 									Name: "NODE_NAME",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
+									ValueFrom: &corev1api.EnvVarSource{
+										FieldRef: &corev1api.ObjectFieldSelector{
 											FieldPath: "spec.nodeName",
 										},
 									},
 								},
 								{
 									Name: "VELERO_NAMESPACE",
-									ValueFrom: &corev1.EnvVarSource{
-										FieldRef: &corev1.ObjectFieldSelector{
+									ValueFrom: &corev1api.EnvVarSource{
+										FieldRef: &corev1api.ObjectFieldSelector{
 											FieldPath: "metadata.namespace",
 										},
 									},
@@ -163,11 +185,13 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 	if c.withSecret {
 		daemonSet.Spec.Template.Spec.Volumes = append(
 			daemonSet.Spec.Template.Spec.Volumes,
-			corev1.Volume{
+			corev1api.Volume{
 				Name: "cloud-credentials",
-				VolumeSource: corev1.VolumeSource{
-					Secret: &corev1.SecretVolumeSource{
-						SecretName: "cloud-credentials",
+				VolumeSource: corev1api.VolumeSource{
+					Secret: &corev1api.SecretVolumeSource{
+						// read-only for Owner, Group, Public
+						DefaultMode: ptr.To(int32(0444)),
+						SecretName:  "cloud-credentials",
 					},
 				},
 			},
@@ -175,13 +199,13 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 
 		daemonSet.Spec.Template.Spec.Containers[0].VolumeMounts = append(
 			daemonSet.Spec.Template.Spec.Containers[0].VolumeMounts,
-			corev1.VolumeMount{
+			corev1api.VolumeMount{
 				Name:      "cloud-credentials",
 				MountPath: "/credentials",
 			},
 		)
 
-		daemonSet.Spec.Template.Spec.Containers[0].Env = append(daemonSet.Spec.Template.Spec.Containers[0].Env, []corev1.EnvVar{
+		daemonSet.Spec.Template.Spec.Containers[0].Env = append(daemonSet.Spec.Template.Spec.Containers[0].Env, []corev1api.EnvVar{
 			{
 				Name:  "GOOGLE_APPLICATION_CREDENTIALS",
 				Value: "/credentials/cloud",
@@ -199,6 +223,32 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1.DaemonSet {
 				Value: "/credentials/cloud",
 			},
 		}...)
+	}
+
+	if c.forWindows {
+		daemonSet.Spec.Template.Spec.SecurityContext = nil
+		daemonSet.Spec.Template.Spec.Containers[0].SecurityContext = nil
+		daemonSet.Spec.Template.Spec.NodeSelector = map[string]string{
+			"kubernetes.io/os": "windows",
+		}
+		daemonSet.Spec.Template.Spec.OS = &corev1api.PodOS{
+			Name: "windows",
+		}
+		daemonSet.Spec.Template.Spec.Tolerations = []corev1api.Toleration{
+			{
+				Key:      "os",
+				Operator: "Equal",
+				Effect:   "NoSchedule",
+				Value:    "windows",
+			},
+		}
+	} else {
+		daemonSet.Spec.Template.Spec.NodeSelector = map[string]string{
+			"kubernetes.io/os": "linux",
+		}
+		daemonSet.Spec.Template.Spec.OS = &corev1api.PodOS{
+			Name: "linux",
+		}
 	}
 
 	daemonSet.Spec.Template.Spec.Containers[0].Env = append(daemonSet.Spec.Template.Spec.Containers[0].Env, c.envVars...)

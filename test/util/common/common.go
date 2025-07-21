@@ -11,6 +11,11 @@ import (
 	"os/exec"
 )
 
+const (
+	WorkerOSLinux   string = "linux"
+	WorkerOSWindows string = "windows"
+)
+
 type OsCommandLine struct {
 	Cmd  string
 	Args []string
@@ -20,11 +25,12 @@ func GetListByCmdPipes(ctx context.Context, cmdlines []*OsCommandLine) ([]string
 	var buf bytes.Buffer
 	var err error
 	var cmds []*exec.Cmd
+
 	for _, cmdline := range cmdlines {
 		cmd := exec.Command(cmdline.Cmd, cmdline.Args...)
 		cmds = append(cmds, cmd)
-		fmt.Println(cmd)
 	}
+	fmt.Println(cmds)
 	for i := 0; i < len(cmds); i++ {
 		if i == len(cmds)-1 {
 			break
@@ -55,7 +61,6 @@ func GetListByCmdPipes(ctx context.Context, cmdlines []*OsCommandLine) ([]string
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-
 	return ret, nil
 }
 
@@ -109,4 +114,7 @@ func WriteToFile(content, fileName string) error {
 		return err
 	}
 	return nil
+}
+func CreateFileContent(namespace, podName, volume string) string {
+	return fmt.Sprintf("ns-%s pod-%s volume-%s", namespace, podName, volume)
 }

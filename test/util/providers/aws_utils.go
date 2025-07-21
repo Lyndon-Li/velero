@@ -20,21 +20,20 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"strings"
 
-	"github.com/aws/aws-sdk-go-v2/config"
-	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
-
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	"github.com/aws/aws-sdk-go-v2/config"
 	s3manager "github.com/aws/aws-sdk-go-v2/feature/s3/manager"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/pkg/errors"
 	"golang.org/x/net/context"
 
@@ -129,7 +128,6 @@ func newS3Client(cfg aws.Config, url string, forcePathStyle bool) (*s3.Client, e
 // GetBucketRegion returns the AWS region that a bucket is in, or an error
 // if the region cannot be determined.
 func GetBucketRegion(bucket string) (string, error) {
-
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		return "", errors.WithStack(err)
@@ -310,19 +308,27 @@ func (s AWSStorage) IsSnapshotExisted(cloudCredentialsFile, bslConfig, backupObj
 	if region == "minio" {
 		return errors.New("No snapshot for Minio provider")
 	}
+
 	cfg, err := newAWSConfig(region, "", cloudCredentialsFile, false, "")
 	if err != nil {
 		return errors.Wrapf(err, "Failed to create AWS config of region %s", region)
 	}
+
 	ec2Client := ec2.NewFromConfig(cfg)
 	input := &ec2.DescribeSnapshotsInput{
 		OwnerIds: []string{"self"},
-		Filters: []ec2types.Filter{
-			{
-				Name:   aws.String("tag:velero.io/backup"),
-				Values: []string{backupObject},
+	}
+
+	if !snapshotCheck.EnableCSI {
+		input = &ec2.DescribeSnapshotsInput{
+			OwnerIds: []string{"self"},
+			Filters: []ec2types.Filter{
+				{
+					Name:   aws.String("tag:velero.io/backup"),
+					Values: []string{backupObject},
+				},
 			},
-		},
+		}
 	}
 
 	result, err := ec2Client.DescribeSnapshots(context.Background(), input)
@@ -330,21 +336,34 @@ func (s AWSStorage) IsSnapshotExisted(cloudCredentialsFile, bslConfig, backupObj
 		fmt.Println(err)
 	}
 
-	for _, n := range result.Snapshots {
-		fmt.Println(n.SnapshotId)
-		if n.SnapshotId != nil {
-			fmt.Println(*n.SnapshotId)
+	var actualCount int
+	if snapshotCheck.EnableCSI {
+		for _, snapshotId := range snapshotCheck.SnapshotIDList {
+			for _, n := range result.Snapshots {
+				if n.SnapshotId != nil && (*n.SnapshotId == snapshotId) {
+					actualCount++
+					fmt.Printf("SnapshotId: %v, Tags: %v \n", *n.SnapshotId, n.Tags)
+					if n.VolumeId != nil {
+						fmt.Printf("VolumeId: %v \n", *n.VolumeId)
+					}
+				}
+			}
 		}
-		fmt.Println(n.Tags)
-		fmt.Println(n.VolumeId)
-		if n.VolumeId != nil {
-			fmt.Println(*n.VolumeId)
-		}
-	}
-	if len(result.Snapshots) != snapshotCheck.ExpectCount {
-		return errors.New(fmt.Sprintf("Snapshot count is not as expected %d", snapshotCheck.ExpectCount))
 	} else {
-		fmt.Printf("Snapshot count %d is as expected %d\n", len(result.Snapshots), snapshotCheck.ExpectCount)
+		for _, n := range result.Snapshots {
+			if n.SnapshotId != nil {
+				fmt.Printf("SnapshotId: %v, Tags: %v \n", *n.SnapshotId, n.Tags)
+				if n.VolumeId != nil {
+					fmt.Printf("VolumeId: %v \n", *n.VolumeId)
+				}
+			}
+		}
+		actualCount = len(result.Snapshots)
+	}
+	if actualCount != snapshotCheck.ExpectCount {
+		return errors.New(fmt.Sprintf("Snapshot count %d is not as expected %d", actualCount, snapshotCheck.ExpectCount))
+	} else {
+		fmt.Printf("Snapshot count %d is as expected %d\n", actualCount, snapshotCheck.ExpectCount)
 		return nil
 	}
 }
@@ -391,8 +410,61 @@ func (s AWSStorage) GetMinioBucketSize(cloudCredentialsFile, bslBucket, bslPrefi
 			return 0, errors.Wrapf(err, "failed to list objects in bucket %s", bslBucket)
 		}
 		for _, obj := range page.Contents {
-			totalSize += obj.Size
+			totalSize += *obj.Size
 		}
 	}
 	return totalSize, nil
+}
+
+func (s AWSStorage) GetObject(cloudCredentialsFile, bslBucket, bslPrefix, bslConfig, objectKey string) (io.ReadCloser, error) {
+	config := flag.NewMap()
+	config.Set(bslConfig)
+	objectsInput := s3.ListObjectsV2Input{}
+	objectsInput.Bucket = aws.String(bslBucket)
+	objectsInput.Delimiter = aws.String("/")
+
+	if bslPrefix != "" {
+		objectsInput.Prefix = aws.String(bslPrefix)
+	}
+
+	var err error
+	var s3Config aws.Config
+	var s3Client *s3.Client
+	region := config.Data()["region"]
+	s3url := ""
+	if region == "" {
+		region, err = GetBucketRegion(bslBucket)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to get region for bucket %s", bslBucket)
+		}
+	}
+	if region == "minio" {
+		s3url = config.Data()["s3Url"]
+		s3Config, err = newAWSConfig(region, "", cloudCredentialsFile, true, "")
+		if err != nil {
+			return nil, errors.Wrapf(err, "Failed to create AWS config of region %s", region)
+		}
+		s3Client, err = newS3Client(s3Config, s3url, true)
+	} else {
+		s3Config, err = newAWSConfig(region, "", cloudCredentialsFile, false, "")
+		if err != nil {
+			return nil, errors.Wrapf(err, "Failed to create AWS config of region %s", region)
+		}
+		s3Client, err = newS3Client(s3Config, s3url, true)
+	}
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create S3 client of region %s", region)
+	}
+
+	fullObjectKey := strings.Trim(bslPrefix, "/") + "/" + strings.Trim(objectKey, "/")
+
+	result, err := s3Client.GetObject(context.TODO(), &s3.GetObjectInput{
+		Bucket: aws.String(bslBucket),
+		Key:    aws.String(fullObjectKey),
+	})
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to get object %s", fullObjectKey)
+	}
+
+	return result.Body, nil
 }

@@ -17,17 +17,14 @@ limitations under the License.
 package filtering
 
 import (
-	"context"
 	"fmt"
-	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
-	"github.com/pkg/errors"
-
-	. "github.com/vmware-tanzu/velero/test"
+	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 )
@@ -59,32 +56,31 @@ func (e *ExcludeFromBackup) Init() error {
 		*e.NSIncluded = append(*e.NSIncluded, createNSName)
 	}
 	e.labels = map[string]string{
-		"velero.io/exclude-from-backup": "true",
+		velerov1api.ExcludeFromBackupLabel: "true",
 	}
-	e.labelSelector = "velero.io/exclude-from-backup"
+	e.labelSelector = velerov1api.ExcludeFromBackupLabel
 
 	e.BackupArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", e.BackupName,
+		"create", "--namespace", e.VeleroCfg.VeleroNamespace, "backup", e.BackupName,
 		"--include-namespaces", e.CaseBaseName,
 		"--default-volumes-to-fs-backup", "--wait",
 	}
 
 	e.RestoreArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", e.RestoreName,
+		"create", "--namespace", e.VeleroCfg.VeleroNamespace, "restore", e.RestoreName,
 		"--from-backup", e.BackupName, "--wait",
 	}
 	return nil
 }
 
 func (e *ExcludeFromBackup) CreateResources() error {
-	e.Ctx, e.CtxCancel = context.WithTimeout(context.Background(), 10*time.Minute)
 	namespace := e.CaseBaseName
 	// These 2 labels for resources to be included
 	label1 := map[string]string{
 		"meaningless-label-resource-to-include": "true",
 	}
 	label2 := map[string]string{
-		"velero.io/exclude-from-backup": "false",
+		velerov1api.ExcludeFromBackupLabel: "false",
 	}
 	fmt.Printf("Creating resources in namespace ...%s\n", namespace)
 	if err := CreateNamespace(e.Ctx, e.Client, namespace); err != nil {
@@ -92,7 +88,7 @@ func (e *ExcludeFromBackup) CreateResources() error {
 	}
 	//Create deployment: to be included
 	fmt.Printf("Creating deployment in namespaces ...%s\n", namespace)
-	deployment := NewDeployment(e.CaseBaseName, namespace, e.replica, label2, nil).Result()
+	deployment := NewDeployment(e.CaseBaseName, namespace, e.replica, label2, e.VeleroCfg.ImageRegistryProxy).Result()
 	deployment, err := CreateDeployment(e.Client.ClientGo, namespace, deployment)
 	if err != nil {
 		return errors.Wrap(err, fmt.Sprintf("failed to delete the namespace %q", namespace))
@@ -136,7 +132,7 @@ func (e *ExcludeFromBackup) Verify() error {
 		//Check namespace
 		checkNS, err := GetNamespace(e.Ctx, e.Client, namespace)
 		Expect(err).ShouldNot(HaveOccurred(), fmt.Sprintf("Could not retrieve test namespace %s", namespace))
-		Expect(checkNS.Name == namespace).To(Equal(true), fmt.Sprintf("Retrieved namespace for %s has name %s instead", namespace, checkNS.Name))
+		Expect(checkNS.Name).To(Equal(namespace), fmt.Sprintf("Retrieved namespace for %s has name %s instead", namespace, checkNS.Name))
 
 		//Check deployment: should be included
 		_, err = GetDeployment(e.Client.ClientGo, namespace, e.CaseBaseName)
@@ -145,10 +141,10 @@ func (e *ExcludeFromBackup) Verify() error {
 		//Check secrets: secrets should not be included
 		_, err = GetSecret(e.Client.ClientGo, namespace, e.CaseBaseName)
 		Expect(err).Should(HaveOccurred(), fmt.Sprintf("failed to list deployment in namespace: %q", namespace))
-		Expect(apierrors.IsNotFound(err)).To(Equal(true))
+		Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 		//Check configmap: should be included
-		_, err = GetConfigmap(e.Client.ClientGo, namespace, e.CaseBaseName)
+		_, err = GetConfigMap(e.Client.ClientGo, namespace, e.CaseBaseName)
 		Expect(err).ShouldNot(HaveOccurred(), fmt.Sprintf("failed to list configmap in namespace: %q", namespace))
 	})
 	return nil

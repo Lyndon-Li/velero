@@ -28,8 +28,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/itemoperation"
 	"github.com/vmware-tanzu/velero/pkg/itemoperationmap"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
@@ -82,15 +84,19 @@ func NewRestoreOperationsReconciler(
 }
 
 func (r *restoreOperationsReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	s := kube.NewPeriodicalEnqueueSource(r.logger, mgr.GetClient(), &velerov1api.RestoreList{}, r.frequency, kube.PeriodicalEnqueueSourceOption{})
 	gp := kube.NewGenericEventPredicate(func(object client.Object) bool {
 		restore := object.(*velerov1api.Restore)
 		return (restore.Status.Phase == velerov1api.RestorePhaseWaitingForPluginOperations ||
 			restore.Status.Phase == velerov1api.RestorePhaseWaitingForPluginOperationsPartiallyFailed)
 	})
+	s := kube.NewPeriodicalEnqueueSource(r.logger.WithField("controller", constant.ControllerRestoreOperations), mgr.GetClient(), &velerov1api.RestoreList{}, r.frequency, kube.PeriodicalEnqueueSourceOption{
+		Predicates: []predicate.Predicate{gp},
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.Restore{}, builder.WithPredicates(kube.FalsePredicate{})).
-		Watches(s, nil, builder.WithPredicates(gp)).
+		WatchesRawSource(s).
+		Named(constant.ControllerRestoreOperations).
 		Complete(r)
 }
 
@@ -128,10 +134,8 @@ func (r *restoreOperationsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	info, err := r.fetchBackupInfo(restore.Spec.BackupName)
 	if err != nil {
-		log.Warnf("Cannot check progress on Restore operations because backup info is unavailable %s; marking restore PartiallyFailed", err.Error())
-		restore.Status.Phase = velerov1api.RestorePhasePartiallyFailed
-		restore.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
-		r.metrics.RegisterRestorePartialFailure(restore.Spec.ScheduleName)
+		log.Warnf("Cannot check progress on Restore operations because backup info is unavailable %s; marking restore FinalizingPartiallyFailed", err.Error())
+		restore.Status.Phase = velerov1api.RestorePhaseFinalizingPartiallyFailed
 		err2 := r.updateRestoreAndOperationsJSON(ctx, original, restore, nil, &itemoperationmap.OperationsForRestore{ErrsSinceUpdate: []string{err.Error()}}, false, false)
 		if err2 != nil {
 			log.WithError(err2).Error("error updating Restore")
@@ -178,15 +182,11 @@ func (r *restoreOperationsReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	// If the only changes are incremental progress, then no write is necessary, progress can remain in memory
 	if !stillInProgress {
 		if restore.Status.Phase == velerov1api.RestorePhaseWaitingForPluginOperations {
-			log.Infof("Marking restore %s completed", restore.Name)
-			restore.Status.Phase = velerov1api.RestorePhaseCompleted
-			restore.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
-			r.metrics.RegisterRestoreSuccess(restore.Spec.ScheduleName)
+			log.Infof("Marking restore %s Finalizing", restore.Name)
+			restore.Status.Phase = velerov1api.RestorePhaseFinalizing
 		} else {
 			log.Infof("Marking restore %s FinalizingPartiallyFailed", restore.Name)
-			restore.Status.Phase = velerov1api.RestorePhasePartiallyFailed
-			restore.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
-			r.metrics.RegisterRestorePartialFailure(restore.Spec.ScheduleName)
+			restore.Status.Phase = velerov1api.RestorePhaseFinalizingPartiallyFailed
 		}
 	}
 	err = r.updateRestoreAndOperationsJSON(ctx, original, restore, backupStore, operations, changes, completionChanges)
@@ -216,8 +216,8 @@ func (r *restoreOperationsReconciler) updateRestoreAndOperationsJSON(
 	removeIfComplete := true
 	defer func() {
 		// remove local operations list if complete
-		if removeIfComplete && (restore.Status.Phase == velerov1api.RestorePhaseCompleted ||
-			restore.Status.Phase == velerov1api.RestorePhasePartiallyFailed) {
+		if removeIfComplete && (restore.Status.Phase == velerov1api.RestorePhaseFinalizing ||
+			restore.Status.Phase == velerov1api.RestorePhaseFinalizingPartiallyFailed) {
 			r.itemOperationsMap.DeleteOperationsForRestore(restore.Name)
 		} else if changes {
 			r.itemOperationsMap.PutOperationsForRestore(operations, restore.Name)
@@ -226,8 +226,8 @@ func (r *restoreOperationsReconciler) updateRestoreAndOperationsJSON(
 
 	// update restore and upload progress if errs or complete
 	if len(operations.ErrsSinceUpdate) > 0 ||
-		restore.Status.Phase == velerov1api.RestorePhaseCompleted ||
-		restore.Status.Phase == velerov1api.RestorePhasePartiallyFailed {
+		restore.Status.Phase == velerov1api.RestorePhaseFinalizing ||
+		restore.Status.Phase == velerov1api.RestorePhaseFinalizingPartiallyFailed {
 		// update file store
 		if backupStore != nil {
 			if err := r.itemOperationsMap.UploadProgressAndPutOperationsForRestore(backupStore, operations, restore.Name); err != nil {

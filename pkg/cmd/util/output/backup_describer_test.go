@@ -1,3 +1,19 @@
+/*
+Copyright the Velero contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package output
 
 import (
@@ -6,22 +22,35 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/vmware-tanzu/velero/pkg/itemoperation"
-
-	"github.com/stretchr/testify/require"
-
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v4/apis/volumesnapshot/v1"
 	"github.com/stretchr/testify/assert"
-	v1 "k8s.io/api/core/v1"
+	"github.com/stretchr/testify/require"
+	corev1api "k8s.io/api/core/v1"
 
-	"github.com/vmware-tanzu/velero/pkg/builder"
-	"github.com/vmware-tanzu/velero/pkg/features"
-
+	"github.com/vmware-tanzu/velero/internal/volume"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	velerov2alpha1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
+	"github.com/vmware-tanzu/velero/pkg/builder"
+	"github.com/vmware-tanzu/velero/pkg/itemoperation"
 )
 
+func TestDescribeUploaderConfig(t *testing.T) {
+	input := builder.ForBackup("test-ns", "test-backup-1").ParallelFilesUpload(10).Result().Spec
+	d := &Describer{
+		Prefix: "",
+		out:    &tabwriter.Writer{},
+		buf:    &bytes.Buffer{},
+	}
+	d.out.Init(d.buf, 0, 8, 2, ' ', 0)
+	DescribeUploaderConfigForBackup(d, input)
+	d.out.Flush()
+	expect := `Uploader config:
+  Parallel files upload:  10
+`
+	assert.Equal(t, expect, d.buf.String())
+}
+
 func TestDescribeResourcePolicies(t *testing.T) {
-	input := &v1.TypedLocalObjectReference{
+	input := &corev1api.TypedLocalObjectReference{
 		Kind: "configmap",
 		Name: "test-resource-policy",
 	}
@@ -291,22 +320,239 @@ OrderedResources:
 	}
 }
 
-func TestDescribeSnapshot(t *testing.T) {
-	d := &Describer{
-		Prefix: "",
-		out:    &tabwriter.Writer{},
-		buf:    &bytes.Buffer{},
+func TestDescribeNativeSnapshots(t *testing.T) {
+	testcases := []struct {
+		name         string
+		volumeInfo   []*volume.BackupVolumeInfo
+		inputDetails bool
+		expect       string
+	}{
+		{
+			name: "no details",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod: volume.NativeSnapshot,
+					PVName:       "pv-1",
+					NativeSnapshotInfo: &volume.NativeSnapshotInfo{
+						SnapshotHandle: "snapshot-1",
+						VolumeType:     "ebs",
+						VolumeAZ:       "us-east-2",
+						IOPS:           "1000 mbps",
+					},
+				},
+			},
+			expect: `  Velero-Native Snapshots:
+    pv-1: specify --details for more information
+`,
+		},
+		{
+			name: "details",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod: volume.NativeSnapshot,
+					PVName:       "pv-1",
+					Result:       volume.VolumeResultSucceeded,
+					NativeSnapshotInfo: &volume.NativeSnapshotInfo{
+						SnapshotHandle: "snapshot-1",
+						VolumeType:     "ebs",
+						VolumeAZ:       "us-east-2",
+						IOPS:           "1000 mbps",
+					},
+				},
+			},
+			inputDetails: true,
+			expect: `  Velero-Native Snapshots:
+    pv-1:
+      Snapshot ID:        snapshot-1
+      Type:               ebs
+      Availability Zone:  us-east-2
+      IOPS:               1000 mbps
+      Result:             succeeded
+`,
+		},
 	}
-	d.out.Init(d.buf, 0, 8, 2, ' ', 0)
-	describeSnapshot(d, "pv-1", "snapshot-1", "ebs", "us-east-2", nil)
-	expect1 := `  pv-1:
-    Snapshot ID:        snapshot-1
-    Type:               ebs
-    Availability Zone:  us-east-2
-    IOPS:               <N/A>
-`
-	d.out.Flush()
-	assert.Equal(t, expect1, d.buf.String())
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(tt *testing.T) {
+			d := &Describer{
+				Prefix: "",
+				out:    &tabwriter.Writer{},
+				buf:    &bytes.Buffer{},
+			}
+			d.out.Init(d.buf, 0, 8, 2, ' ', 0)
+			describeNativeSnapshots(d, tc.inputDetails, tc.volumeInfo)
+			d.out.Flush()
+			assert.Equal(t, tc.expect, d.buf.String())
+		})
+	}
+}
+
+func TestCSISnapshots(t *testing.T) {
+	testcases := []struct {
+		name             string
+		volumeInfo       []*volume.BackupVolumeInfo
+		inputDetails     bool
+		expect           string
+		legacyInfoSource bool
+	}{
+		{
+			name:       "empty info, not legacy",
+			volumeInfo: []*volume.BackupVolumeInfo{},
+			expect: `  CSI Snapshots: <none included>
+`,
+		},
+		{
+			name:             "empty info, legacy",
+			volumeInfo:       []*volume.BackupVolumeInfo{},
+			legacyInfoSource: true,
+			expect: `  CSI Snapshots: <none included or not detectable>
+`,
+		},
+		{
+			name: "no details, local snapshot",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod:          volume.CSISnapshot,
+					PVCNamespace:          "pvc-ns-1",
+					PVCName:               "pvc-1",
+					PreserveLocalSnapshot: true,
+					CSISnapshotInfo: &volume.CSISnapshotInfo{
+						SnapshotHandle: "snapshot-1",
+						Size:           1024,
+						Driver:         "fake-driver",
+						VSCName:        "vsc-1",
+						OperationID:    "fake-operation-1",
+					},
+				},
+			},
+			expect: `  CSI Snapshots:
+    pvc-ns-1/pvc-1:
+      Snapshot: included, specify --details for more information
+`,
+		},
+		{
+			name: "details, local snapshot",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod:          volume.CSISnapshot,
+					PVCNamespace:          "pvc-ns-2",
+					PVCName:               "pvc-2",
+					PreserveLocalSnapshot: true,
+					Result:                volume.VolumeResultSucceeded,
+					CSISnapshotInfo: &volume.CSISnapshotInfo{
+						SnapshotHandle: "snapshot-2",
+						Size:           1024,
+						Driver:         "fake-driver",
+						VSCName:        "vsc-2",
+						OperationID:    "fake-operation-2",
+					},
+				},
+			},
+			inputDetails: true,
+			expect: `  CSI Snapshots:
+    pvc-ns-2/pvc-2:
+      Snapshot:
+        Operation ID: fake-operation-2
+        Snapshot Content Name: vsc-2
+        Storage Snapshot ID: snapshot-2
+        Snapshot Size (bytes): 1024
+        CSI Driver: fake-driver
+        Result: succeeded
+`,
+		},
+		{
+			name: "no details, data movement",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-3",
+					PVCName:           "pvc-3",
+					SnapshotDataMoved: true,
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
+						DataMover:      "velero",
+						UploaderType:   "fake-uploader",
+						SnapshotHandle: "fake-repo-id-3",
+						OperationID:    "fake-operation-3",
+					},
+				},
+			},
+			expect: `  CSI Snapshots:
+    pvc-ns-3/pvc-3:
+      Data Movement: included, specify --details for more information
+`,
+		},
+		{
+			name: "details, data movement",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-4",
+					PVCName:           "pvc-4",
+					SnapshotDataMoved: true,
+					Result:            volume.VolumeResultSucceeded,
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
+						DataMover:      "velero",
+						UploaderType:   "fake-uploader",
+						SnapshotHandle: "fake-repo-id-4",
+						OperationID:    "fake-operation-4",
+					},
+				},
+			},
+			inputDetails: true,
+			expect: `  CSI Snapshots:
+    pvc-ns-4/pvc-4:
+      Data Movement:
+        Operation ID: fake-operation-4
+        Data Mover: velero
+        Uploader Type: fake-uploader
+        Moved data Size (bytes): 0
+        Result: succeeded
+`,
+		},
+		{
+			name: "details, data movement, data mover is empty",
+			volumeInfo: []*volume.BackupVolumeInfo{
+				{
+					BackupMethod:      volume.CSISnapshot,
+					PVCNamespace:      "pvc-ns-5",
+					PVCName:           "pvc-5",
+					Result:            volume.VolumeResultFailed,
+					SnapshotDataMoved: true,
+					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
+						UploaderType:   "fake-uploader",
+						SnapshotHandle: "fake-repo-id-5",
+						OperationID:    "fake-operation-5",
+						Size:           100,
+						Phase:          velerov2alpha1.DataUploadPhaseFailed,
+					},
+				},
+			},
+			inputDetails: true,
+			expect: `  CSI Snapshots:
+    pvc-ns-5/pvc-5:
+      Data Movement:
+        Operation ID: fake-operation-5
+        Data Mover: velero
+        Uploader Type: fake-uploader
+        Moved data Size (bytes): 100
+        Result: failed
+`,
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(tt *testing.T) {
+			d := &Describer{
+				Prefix: "",
+				out:    &tabwriter.Writer{},
+				buf:    &bytes.Buffer{},
+			}
+			d.out.Init(d.buf, 0, 8, 2, ' ', 0)
+			describeCSISnapshots(d, tc.inputDetails, tc.volumeInfo, tc.legacyInfoSource)
+			d.out.Flush()
+			assert.Equal(t, tc.expect, d.buf.String())
+		})
+	}
 }
 
 func TestDescribePodVolumeBackups(t *testing.T) {
@@ -326,6 +572,54 @@ func TestDescribePodVolumeBackups(t *testing.T) {
 		PodName("pod-2").
 		PodNamespace("pod-ns-1").
 		SnapshotID("snap-2").Result()
+	pvb3 := builder.ForPodVolumeBackup("test-ns1", "test-pvb3").
+		UploaderType("kopia").
+		Phase(velerov1api.PodVolumeBackupPhaseFailed).
+		BackupStorageLocation("bsl-1").
+		Volume("vol-3").
+		PodName("pod-3").
+		PodNamespace("pod-ns-1").
+		SnapshotID("snap-3").Result()
+	pvb4 := builder.ForPodVolumeBackup("test-ns1", "test-pvb4").
+		UploaderType("kopia").
+		Phase(velerov1api.PodVolumeBackupPhaseCanceled).
+		BackupStorageLocation("bsl-1").
+		Volume("vol-4").
+		PodName("pod-4").
+		PodNamespace("pod-ns-1").
+		SnapshotID("snap-4").Result()
+	pvb5 := builder.ForPodVolumeBackup("test-ns1", "test-pvb5").
+		UploaderType("kopia").
+		Phase(velerov1api.PodVolumeBackupPhaseInProgress).
+		BackupStorageLocation("bsl-1").
+		Volume("vol-5").
+		PodName("pod-5").
+		PodNamespace("pod-ns-1").
+		SnapshotID("snap-5").Result()
+	pvb6 := builder.ForPodVolumeBackup("test-ns1", "test-pvb6").
+		UploaderType("kopia").
+		Phase(velerov1api.PodVolumeBackupPhaseCanceling).
+		BackupStorageLocation("bsl-1").
+		Volume("vol-6").
+		PodName("pod-6").
+		PodNamespace("pod-ns-1").
+		SnapshotID("snap-6").Result()
+	pvb7 := builder.ForPodVolumeBackup("test-ns1", "test-pvb7").
+		UploaderType("kopia").
+		Phase(velerov1api.PodVolumeBackupPhasePrepared).
+		BackupStorageLocation("bsl-1").
+		Volume("vol-7").
+		PodName("pod-7").
+		PodNamespace("pod-ns-1").
+		SnapshotID("snap-7").Result()
+	pvb8 := builder.ForPodVolumeBackup("test-ns1", "test-pvb6").
+		UploaderType("kopia").
+		Phase(velerov1api.PodVolumeBackupPhaseAccepted).
+		BackupStorageLocation("bsl-1").
+		Volume("vol-8").
+		PodName("pod-8").
+		PodNamespace("pod-ns-1").
+		SnapshotID("snap-8").Result()
 
 	testcases := []struct {
 		name         string
@@ -337,89 +631,51 @@ func TestDescribePodVolumeBackups(t *testing.T) {
 			name:         "empty list",
 			inputPVBList: []velerov1api.PodVolumeBackup{},
 			inputDetails: true,
-			expect:       ``,
+			expect: `  Pod Volume Backups: <none included>
+`,
 		},
 		{
 			name:         "2 completed pvbs no details",
 			inputPVBList: []velerov1api.PodVolumeBackup{*pvb1, *pvb2},
 			inputDetails: false,
-			expect: `kopia Backups (specify --details for more information):
-  Completed:  2
+			expect: `  Pod Volume Backups - kopia (specify --details for more information):
+    Completed:  2
 `,
 		},
 		{
 			name:         "2 completed pvbs with details",
 			inputPVBList: []velerov1api.PodVolumeBackup{*pvb1, *pvb2},
 			inputDetails: true,
-			expect: `kopia Backups:
-  Completed:
-    pod-ns-1/pod-1: vol-1
-    pod-ns-1/pod-2: vol-2
-`,
-		},
-	}
-
-	for _, tc := range testcases {
-		t.Run(tc.name, func(tt *testing.T) {
-			d := &Describer{
-				Prefix: "",
-				out:    &tabwriter.Writer{},
-				buf:    &bytes.Buffer{},
-			}
-			d.out.Init(d.buf, 0, 8, 2, ' ', 0)
-			DescribePodVolumeBackups(d, tc.inputPVBList, tc.inputDetails)
-			d.out.Flush()
-			assert.Equal(tt, tc.expect, d.buf.String())
-		})
-	}
-}
-
-func TestDescribeCSIVolumeSnapshots(t *testing.T) {
-	features.Enable(velerov1api.CSIFeatureFlag)
-	defer func() {
-		features.Disable(velerov1api.CSIFeatureFlag)
-	}()
-	handle := "handle-1"
-	readyToUse := true
-	size := int64(1024)
-	vsc1 := builder.ForVolumeSnapshotContent("vsc-1").
-		Status(&snapshotv1api.VolumeSnapshotContentStatus{
-			SnapshotHandle: &handle,
-			ReadyToUse:     &readyToUse,
-			RestoreSize:    &size,
-		}).Result()
-	testcases := []struct {
-		name         string
-		inputVSCList []snapshotv1api.VolumeSnapshotContent
-		inputDetails bool
-		expect       string
-	}{
-		{
-			name:         "empty list",
-			inputVSCList: []snapshotv1api.VolumeSnapshotContent{},
-			inputDetails: false,
-			expect: `CSI Volume Snapshots: <none included>
+			expect: `  Pod Volume Backups - kopia:
+    Completed:
+      pod-ns-1/pod-1: vol-1
+      pod-ns-1/pod-2: vol-2
 `,
 		},
 		{
-			name:         "1 vsc no details",
-			inputVSCList: []snapshotv1api.VolumeSnapshotContent{*vsc1},
-			inputDetails: false,
-			expect: `CSI Volume Snapshots:  1 included (specify --details for more information)
-`,
-		},
-		{
-			name:         "1 vsc with details",
-			inputVSCList: []snapshotv1api.VolumeSnapshotContent{*vsc1},
+			name:         "all phases with details",
+			inputPVBList: []velerov1api.PodVolumeBackup{*pvb1, *pvb2, *pvb3, *pvb4, *pvb5, *pvb6, *pvb7, *pvb8},
 			inputDetails: true,
-			expect: `CSI Volume Snapshots:
-Snapshot Content Name: vsc-1
-  Storage Snapshot ID: handle-1
-  Snapshot Size (bytes): 1024
-  Ready to use: true
+			expect: `  Pod Volume Backups - kopia:
+    Completed:
+      pod-ns-1/pod-1: vol-1
+      pod-ns-1/pod-2: vol-2
+    Failed:
+      pod-ns-1/pod-3: vol-3
+    Canceled:
+      pod-ns-1/pod-4: vol-4
+    In Progress:
+      pod-ns-1/pod-5: vol-5
+    Canceling:
+      pod-ns-1/pod-6: vol-6
+    Prepared:
+      pod-ns-1/pod-7: vol-7
+    Accepted:
+      pod-ns-1/pod-8: vol-8
 `,
 		},
 	}
+
 	for _, tc := range testcases {
 		t.Run(tc.name, func(tt *testing.T) {
 			d := &Describer{
@@ -428,7 +684,7 @@ Snapshot Content Name: vsc-1
 				buf:    &bytes.Buffer{},
 			}
 			d.out.Init(d.buf, 0, 8, 2, ' ', 0)
-			DescribeCSIVolumeSnapshots(d, tc.inputDetails, tc.inputVSCList)
+			describePodVolumeBackups(d, tc.inputDetails, tc.inputPVBList)
 			d.out.Flush()
 			assert.Equal(tt, tc.expect, d.buf.String())
 		})
@@ -437,14 +693,14 @@ Snapshot Content Name: vsc-1
 
 func TestDescribeDeleteBackupRequests(t *testing.T) {
 	t1, err1 := time.Parse("2006-Jan-02", "2023-Jun-26")
-	require.Nil(t, err1)
+	require.NoError(t, err1)
 	dbr1 := builder.ForDeleteBackupRequest("velero", "dbr1").
 		ObjectMeta(builder.WithCreationTimestamp(t1)).
 		BackupName("bak-1").
 		Phase(velerov1api.DeleteBackupRequestPhaseProcessed).
 		Errors("some error").Result()
 	t2, err2 := time.Parse("2006-Jan-02", "2023-Jun-25")
-	require.Nil(t, err2)
+	require.NoError(t, err2)
 	dbr2 := builder.ForDeleteBackupRequest("velero", "dbr2").
 		ObjectMeta(builder.WithCreationTimestamp(t2)).
 		BackupName("bak-2").
@@ -490,11 +746,11 @@ func TestDescribeDeleteBackupRequests(t *testing.T) {
 
 func TestDescribeBackupItemOperation(t *testing.T) {
 	t1, err1 := time.Parse("2006-Jan-02", "2023-Jun-26")
-	require.Nil(t, err1)
+	require.NoError(t, err1)
 	t2, err2 := time.Parse("2006-Jan-02", "2023-Jun-25")
-	require.Nil(t, err2)
+	require.NoError(t, err2)
 	t3, err3 := time.Parse("2006-Jan-02", "2023-Jun-24")
-	require.Nil(t, err3)
+	require.NoError(t, err3)
 	input := builder.ForBackupOperation().
 		BackupName("backup-1").
 		OperationID("op-1").

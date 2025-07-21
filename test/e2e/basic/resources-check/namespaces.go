@@ -23,16 +23,15 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	. "github.com/vmware-tanzu/velero/test"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 )
 
 type MultiNSBackup struct {
 	TestCase
-	IsScalTest      bool
+	IsScaleTest     bool
 	NSExcluded      *[]string
 	TimeoutDuration time.Duration
 }
@@ -42,12 +41,9 @@ func (m *MultiNSBackup) Init() error {
 	m.CaseBaseName = "nstest-" + m.UUIDgen
 	m.BackupName = "backup-" + m.CaseBaseName
 	m.RestoreName = "restore-" + m.CaseBaseName
-
-	m.VeleroCfg = VeleroCfg
-	m.Client = *m.VeleroCfg.ClientToInstallVelero
 	m.NSExcluded = &[]string{}
 
-	if m.IsScalTest {
+	if m.IsScaleTest {
 		m.NamespacesTotal = 2500
 		m.TimeoutDuration = time.Hour * 2
 		m.TestMsg = &TestMSG{
@@ -65,7 +61,7 @@ func (m *MultiNSBackup) Init() error {
 
 	// Currently it's hard to build a large list of namespaces to include and wildcards do not work so instead
 	// we will exclude all of the namespaces that existed prior to the test from the backup
-	namespaces, err := m.Client.ClientGo.CoreV1().Namespaces().List(context.Background(), v1.ListOptions{})
+	namespaces, err := m.Client.ClientGo.CoreV1().Namespaces().List(context.Background(), metav1.ListOptions{})
 	if err != nil {
 		return errors.Wrap(err, "Could not retrieve namespaces")
 	}
@@ -73,6 +69,8 @@ func (m *MultiNSBackup) Init() error {
 	for _, excludeNamespace := range namespaces.Items {
 		*m.NSExcluded = append(*m.NSExcluded, excludeNamespace.Name)
 	}
+	// Add Velero installed namespace into the exclude list.
+	*m.NSExcluded = append(*m.NSExcluded, m.VeleroCfg.VeleroNamespace)
 
 	m.BackupArgs = []string{
 		"create", "--namespace", m.VeleroCfg.VeleroNamespace, "backup", m.BackupName,
@@ -88,7 +86,6 @@ func (m *MultiNSBackup) Init() error {
 }
 
 func (m *MultiNSBackup) CreateResources() error {
-	m.Ctx, m.CtxCancel = context.WithTimeout(context.Background(), m.TimeoutDuration)
 	fmt.Printf("Creating namespaces ...\n")
 	labels := map[string]string{
 		"ns-test": "true",

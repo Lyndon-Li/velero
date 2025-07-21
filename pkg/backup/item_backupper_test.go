@@ -19,6 +19,7 @@ package backup
 import (
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -219,7 +220,7 @@ func TestGetPVName(t *testing.T) {
 			if tc.obj != nil {
 				data, err := runtime.DefaultUnstructuredConverter.ToUnstructured(tc.obj)
 				o = &unstructured.Unstructured{Object: data}
-				require.Nil(t, err)
+				require.NoError(t, err)
 			}
 			name, err2 := getPVName(o, tc.groupResource)
 			assert.Equal(t, tc.pvName, name)
@@ -236,4 +237,35 @@ func TestRandom(t *testing.T) {
 	err1 := runtime.DefaultUnstructuredConverter.FromUnstructured(o, pv)
 	err2 := runtime.DefaultUnstructuredConverter.FromUnstructured(o, pvc)
 	t.Logf("err1: %v, err2: %v", err1, err2)
+}
+
+func TestAddVolumeInfo(t *testing.T) {
+	tests := []struct {
+		name string
+		pv   *corev1api.PersistentVolume
+	}{
+		{
+			name: "PV has ClaimRef",
+			pv:   builder.ForPersistentVolume("testPV").ClaimRef("testNS", "testPVC").Result(),
+		},
+		{
+			name: "PV has no ClaimRef",
+			pv:   builder.ForPersistentVolume("testPV").Result(),
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ib := itemBackupper{}
+			ib.backupRequest = new(Request)
+			ib.backupRequest.VolumesInformation.Init()
+
+			pvObj, err := runtime.DefaultUnstructuredConverter.ToUnstructured(tc.pv)
+			require.NoError(t, err)
+			logger := logrus.StandardLogger()
+
+			err = ib.addVolumeInfo(&unstructured.Unstructured{Object: pvObj}, logger)
+			require.NoError(t, err)
+		})
+	}
 }

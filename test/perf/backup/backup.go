@@ -18,7 +18,6 @@ package backup
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -32,7 +31,7 @@ type BackupTest struct {
 
 func (b *BackupTest) Init() error {
 	b.TestCase.Init()
-	b.Ctx, b.CtxCancel = context.WithTimeout(context.Background(), 1*time.Hour)
+	b.Ctx, b.CtxCancel = context.WithTimeout(context.Background(), 6*time.Hour)
 	b.CaseBaseName = "backup"
 	b.BackupName = "backup-" + b.CaseBaseName + "-" + b.UUIDgen
 
@@ -48,7 +47,7 @@ func (b *BackupTest) Init() error {
 	b.TestMsg = &TestMSG{
 		Desc:      "Do backup resources for performance test",
 		FailedMSG: "Failed to backup resources",
-		Text:      fmt.Sprintf("Should backup resources success"),
+		Text:      "Should backup resources success",
 	}
 	return nil
 }

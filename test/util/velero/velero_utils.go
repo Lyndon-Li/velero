@@ -26,15 +26,19 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/user"
+	"path"
 	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/pkg/errors"
-	"golang.org/x/exp/slices"
+	"golang.org/x/mod/semver"
+	"k8s.io/apimachinery/pkg/labels"
 	ver "k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -53,101 +57,138 @@ const BackupObjectsPrefix = "backups"
 const RestoreObjectsPrefix = "restores"
 const PluginsObjectsPrefix = "plugins"
 
-var pluginsMatrix = map[string]map[string][]string{
-	"v1.7": {
-		"aws":     {"velero/velero-plugin-for-aws:v1.3.0"},
-		"azure":   {"velero/velero-plugin-for-microsoft-azure:v1.3.0"},
-		"vsphere": {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.3.0"},
-		"gcp":     {"velero/velero-plugin-for-gcp:v1.3.0"},
-		"csi":     {"velero/velero-plugin-for-csi:v0.2.0"},
+var ImagesMatrix = map[string]map[string][]string{
+	"v1.13": {
+		"aws":                   {"velero/velero-plugin-for-aws:v1.9.2"},
+		"azure":                 {"velero/velero-plugin-for-microsoft-azure:v1.9.2"},
+		"vsphere":               {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.2"},
+		"gcp":                   {"velero/velero-plugin-for-gcp:v1.9.2"},
+		"csi":                   {"velero/velero-plugin-for-csi:v0.7.1"},
+		"datamover":             {"velero/velero-plugin-for-aws:v1.9.2"},
+		"velero":                {"velero/velero:v1.13.2"},
+		"velero-restore-helper": {"velero/velero-restore-helper:v1.13.2"},
 	},
-	"v1.8": {
-		"aws":     {"velero/velero-plugin-for-aws:v1.4.0"},
-		"azure":   {"velero/velero-plugin-for-microsoft-azure:v1.4.0"},
-		"vsphere": {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.3.1"},
-		"gcp":     {"velero/velero-plugin-for-gcp:v1.4.0"},
-		"csi":     {"velero/velero-plugin-for-csi:v0.2.0"},
+	"v1.14": {
+		"aws":                   {"velero/velero-plugin-for-aws:v1.10.1"},
+		"azure":                 {"velero/velero-plugin-for-microsoft-azure:v1.10.1"},
+		"vsphere":               {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.2"},
+		"gcp":                   {"velero/velero-plugin-for-gcp:v1.10.1"},
+		"datamover":             {"velero/velero-plugin-for-aws:v1.10.1"},
+		"velero":                {"velero/velero:v1.14.1"},
+		"velero-restore-helper": {"velero/velero-restore-helper:v1.14.1"},
 	},
-	"v1.9": {
-		"aws":     {"velero/velero-plugin-for-aws:v1.5.0"},
-		"azure":   {"velero/velero-plugin-for-microsoft-azure:v1.5.0"},
-		"vsphere": {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.4.0"},
-		"gcp":     {"velero/velero-plugin-for-gcp:v1.5.0"},
-		"csi":     {"velero/velero-plugin-for-csi:v0.3.0"},
+	"v1.15": {
+		"aws":                   {"velero/velero-plugin-for-aws:v1.11.0"},
+		"azure":                 {"velero/velero-plugin-for-microsoft-azure:v1.11.0"},
+		"vsphere":               {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.2"},
+		"gcp":                   {"velero/velero-plugin-for-gcp:v1.11.0"},
+		"datamover":             {"velero/velero-plugin-for-aws:v1.11.0"},
+		"velero":                {"velero/velero:v1.15.2"},
+		"velero-restore-helper": {"velero/velero-restore-helper:v1.15.2"},
 	},
-	"v1.10": {
-		"aws":     {"velero/velero-plugin-for-aws:v1.6.0"},
-		"azure":   {"velero/velero-plugin-for-microsoft-azure:v1.6.0"},
-		"vsphere": {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.1"},
-		"gcp":     {"velero/velero-plugin-for-gcp:v1.6.0"},
-		"csi":     {"velero/velero-plugin-for-csi:v0.4.0"},
-	},
-	"v1.11": {
-		"aws":     {"velero/velero-plugin-for-aws:v1.7.0"},
-		"azure":   {"velero/velero-plugin-for-microsoft-azure:v1.7.0"},
-		"vsphere": {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.1"},
-		"gcp":     {"velero/velero-plugin-for-gcp:v1.7.0"},
-		"csi":     {"velero/velero-plugin-for-csi:v0.5.0"},
-	},
-	"v1.12": {
-		"aws":     {"velero/velero-plugin-for-aws:v1.8.0"},
-		"azure":   {"velero/velero-plugin-for-microsoft-azure:v1.8.0"},
-		"vsphere": {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.1"},
-		"gcp":     {"velero/velero-plugin-for-gcp:v1.8.0"},
-		"csi":     {"velero/velero-plugin-for-csi:v0.6.0"},
+	"v1.16": {
+		"aws":                   {"velero/velero-plugin-for-aws:v1.12.0"},
+		"azure":                 {"velero/velero-plugin-for-microsoft-azure:v1.12.0"},
+		"vsphere":               {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.2"},
+		"gcp":                   {"velero/velero-plugin-for-gcp:v1.12.0"},
+		"datamover":             {"velero/velero-plugin-for-aws:v1.12.0"},
+		"velero":                {"velero/velero:v1.15.0"},
+		"velero-restore-helper": {"velero/velero:v1.16.0"},
 	},
 	"main": {
-		"aws":       {"velero/velero-plugin-for-aws:main"},
-		"azure":     {"velero/velero-plugin-for-microsoft-azure:main"},
-		"vsphere":   {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.1"},
-		"gcp":       {"velero/velero-plugin-for-gcp:main"},
-		"csi":       {"velero/velero-plugin-for-csi:main"},
-		"datamover": {"velero/velero-plugin-for-aws:main"},
+		"aws":                   {"velero/velero-plugin-for-aws:main"},
+		"azure":                 {"velero/velero-plugin-for-microsoft-azure:main"},
+		"vsphere":               {"vsphereveleroplugin/velero-plugin-for-vsphere:v1.5.2"},
+		"gcp":                   {"velero/velero-plugin-for-gcp:main"},
+		"datamover":             {"velero/velero-plugin-for-aws:main"},
+		"velero":                {"velero/velero:main"},
+		"velero-restore-helper": {"velero/velero-restore-helper:main"},
 	},
 }
 
-func getPluginsByVersion(version, cloudProvider, objectStoreProvider, feature string, needDataMoverPlugin bool) ([]string, error) {
+// UpdateImagesMatrixByProxy is used to append the proxy to the image lists.
+func UpdateImagesMatrixByProxy(imageRegistryProxy string) {
+	if imageRegistryProxy != "" {
+		for i := range ImagesMatrix {
+			for j := range ImagesMatrix[i] {
+				ImagesMatrix[i][j][0] = path.Join(imageRegistryProxy, ImagesMatrix[i][j][0])
+			}
+		}
+	}
+}
+
+func SetImagesToDefaultValues(config VeleroConfig, version string) (VeleroConfig, error) {
+	fmt.Printf("Get the images for version %s\n", version)
+
+	ret := config
+
+	ret.Plugins = ""
+
+	versionWithoutPatch := semver.MajorMinor(version)
+	// Read migration case needs images from the PluginsMatrix map.
+	images, ok := ImagesMatrix[versionWithoutPatch]
+	if !ok {
+		return config, fmt.Errorf("fail to read the images for version %s from the ImagesMatrix",
+			versionWithoutPatch)
+	}
+
+	ret.VeleroImage = images[Velero][0]
+	ret.RestoreHelperImage = images[VeleroRestoreHelper][0]
+
+	if ret.CloudProvider == Azure {
+		ret.Plugins = images[Azure][0]
+	}
+	if ret.CloudProvider == AWS {
+		ret.Plugins = images[AWS][0]
+	}
+	// If HasVspherePlugin is false, only install the AWS plugin.
+	// If do nothing here, the default behavior is
+	// installing both AWS and vSphere plugins.
+	if ret.CloudProvider == Vsphere &&
+		!ret.HasVspherePlugin {
+		ret.Plugins = images[AWS][0]
+	}
+
+	// Because Velero CSI plugin is deprecated in v1.14,
+	// only need to install it for version lower than v1.14.
+	if strings.Contains(ret.Features, FeatureCSI) &&
+		semver.Compare(versionWithoutPatch, "v1.14") < 0 {
+		ret.Plugins = ret.Plugins + "," + images[CSI][0]
+	}
+	if ret.SnapshotMoveData && ret.CloudProvider == Azure {
+		ret.Plugins = ret.Plugins + "," + images[AWS][0]
+	}
+
+	return ret, nil
+}
+
+func getPluginsByVersion(version string, cloudProvider string, needDataMoverPlugin bool) ([]string, error) {
 	var cloudMap map[string][]string
 	arr := strings.Split(version, ".")
 	if len(arr) >= 3 {
-		cloudMap = pluginsMatrix[arr[0]+"."+arr[1]]
+		cloudMap = ImagesMatrix[arr[0]+"."+arr[1]]
 	}
 	if len(cloudMap) == 0 {
-		cloudMap = pluginsMatrix["main"]
+		cloudMap = ImagesMatrix["main"]
 		if len(cloudMap) == 0 {
 			return nil, errors.Errorf("fail to get plugins by version: main")
 		}
 	}
-	var pluginsForFeature []string
+	var plugins []string
+	var ok bool
 
-	if cloudProvider == "kind" {
-		plugins, ok := cloudMap["aws"]
+	if slices.Contains(LocalCloudProviders, cloudProvider) {
+		plugins, ok = cloudMap[AWS]
 		if !ok {
 			return nil, errors.Errorf("fail to get plugins by version: %s and provider %s", version, cloudProvider)
 		}
-		return plugins, nil
-	}
-
-	plugins, ok := cloudMap[cloudProvider]
-	if !ok {
-		return nil, errors.Errorf("fail to get plugins by version: %s and provider %s", version, cloudProvider)
-	}
-
-	if objectStoreProvider != cloudProvider {
-		pluginsForObjectStoreProvider, ok := cloudMap[objectStoreProvider]
+	} else {
+		plugins, ok = cloudMap[cloudProvider]
 		if !ok {
-			return nil, errors.Errorf("fail to get plugins by version: %s and object store provider %s", version, objectStoreProvider)
+			return nil, errors.Errorf("fail to get plugins by version: %s and provider %s", version, cloudProvider)
 		}
-		plugins = append(plugins, pluginsForObjectStoreProvider...)
 	}
 
-	if strings.EqualFold(feature, "EnableCSI") {
-		pluginsForFeature, ok = cloudMap["csi"]
-		if !ok {
-			return nil, errors.Errorf("fail to get CSI plugins by version: %s ", version)
-		}
-		plugins = append(plugins, pluginsForFeature...)
-	}
 	if needDataMoverPlugin {
 		pluginsForDatamover, ok := cloudMap["datamover"]
 		if !ok {
@@ -155,10 +196,9 @@ func getPluginsByVersion(version, cloudProvider, objectStoreProvider, feature st
 		}
 		for _, p := range pluginsForDatamover {
 			if !slices.Contains(plugins, p) {
-				plugins = append(plugins, pluginsForDatamover...)
+				plugins = append(plugins, p)
 			}
 		}
-
 	}
 	return plugins, nil
 }
@@ -166,21 +206,35 @@ func getPluginsByVersion(version, cloudProvider, objectStoreProvider, feature st
 // getProviderVeleroInstallOptions returns Velero InstallOptions for the provider.
 func getProviderVeleroInstallOptions(veleroCfg *VeleroConfig,
 	plugins []string) (*cliinstall.Options, error) {
-
-	if veleroCfg.CloudCredentialsFile == "" {
+	if veleroCfg.CloudCredentialsFile == "" && veleroCfg.ServiceAccountNameToInstall == "" {
 		return nil, errors.Errorf("No credentials were supplied to use for E2E tests")
-	}
-
-	realPath, err := filepath.Abs(veleroCfg.CloudCredentialsFile)
-	if err != nil {
-		return nil, err
 	}
 
 	io := cliinstall.NewInstallOptions()
 	// always wait for velero and restic pods to be running.
 	io.Wait = true
 	io.ProviderName = veleroCfg.ObjectStoreProvider
-	io.SecretFile = veleroCfg.CloudCredentialsFile
+
+	if veleroCfg.CloudCredentialsFile != "" {
+		// Expand home directory if it is specified. https://stackoverflow.com/a/17617721
+		if strings.HasPrefix(veleroCfg.CloudCredentialsFile, "~/") {
+			usr, _ := user.Current()
+			dir := usr.HomeDir
+			// Use strings.HasPrefix so we don't match paths like
+			// "/something/~/something/"
+			veleroCfg.CloudCredentialsFile = filepath.Join(dir, veleroCfg.CloudCredentialsFile[2:])
+		}
+		realPath, err := filepath.Abs(veleroCfg.CloudCredentialsFile)
+		if err != nil {
+			return nil, err
+		}
+		io.SecretFile = realPath
+	}
+
+	if veleroCfg.ServiceAccountNameToInstall != "" {
+		io.ServiceAccountName = veleroCfg.ServiceAccountNameToInstall
+		io.NoSecret = true
+	}
 
 	io.BucketName = veleroCfg.BSLBucket
 	io.Prefix = veleroCfg.BSLPrefix
@@ -190,11 +244,35 @@ func getProviderVeleroInstallOptions(veleroCfg *VeleroConfig,
 	io.VolumeSnapshotConfig = flag.NewMap()
 	io.VolumeSnapshotConfig.Set(veleroCfg.VSLConfig)
 
-	io.SecretFile = realPath
+	io.PodLabels = flag.NewMap()
+	io.PodLabels.Set(veleroCfg.PodLabels)
+
+	io.ServiceAccountAnnotations = flag.NewMap()
+	io.ServiceAccountAnnotations.Set(veleroCfg.ServiceAccountAnnotations)
+
 	io.Plugins = flag.NewStringArray(plugins...)
 	io.Features = veleroCfg.Features
 	io.DefaultVolumesToFsBackup = veleroCfg.DefaultVolumesToFsBackup
 	io.UseVolumeSnapshots = veleroCfg.UseVolumeSnapshots
+
+	io.UseNodeAgent = veleroCfg.UseNodeAgent
+	io.Image = veleroCfg.VeleroImage
+	io.Namespace = veleroCfg.VeleroNamespace
+	io.UploaderType = veleroCfg.UploaderType
+	GCFrequency, _ := time.ParseDuration(veleroCfg.GCFrequency)
+	io.GarbageCollectionFrequency = GCFrequency
+	io.PodVolumeOperationTimeout = veleroCfg.PodVolumeOperationTimeout
+	io.NodeAgentPodCPULimit = veleroCfg.NodeAgentPodCPULimit
+	io.NodeAgentPodCPURequest = veleroCfg.NodeAgentPodCPURequest
+	io.NodeAgentPodMemLimit = veleroCfg.NodeAgentPodMemLimit
+	io.NodeAgentPodMemRequest = veleroCfg.NodeAgentPodMemRequest
+	io.VeleroPodCPULimit = veleroCfg.VeleroPodCPULimit
+	io.VeleroPodCPURequest = veleroCfg.VeleroPodCPURequest
+	io.VeleroPodMemLimit = veleroCfg.VeleroPodMemLimit
+	io.VeleroPodMemRequest = veleroCfg.VeleroPodMemRequest
+	io.DisableInformerCache = veleroCfg.DisableInformerCache
+	io.ItemBlockWorkerCount = veleroCfg.ItemBlockWorkerCount
+
 	return io, nil
 }
 
@@ -255,7 +333,7 @@ func checkRestorePhase(ctx context.Context, veleroCLI string, veleroNamespace st
 
 func checkSchedulePhase(ctx context.Context, veleroCLI, veleroNamespace, scheduleName string) error {
 	return wait.PollImmediate(time.Second*5, time.Minute*2, func() (bool, error) {
-		checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "schedule", "get", scheduleName, "-ojson")
+		checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "schedule", "get", scheduleName, "-o", "json")
 		jsonBuf, err := common.CMDExecWithOutput(checkCMD)
 		if err != nil {
 			return false, err
@@ -275,7 +353,7 @@ func checkSchedulePhase(ctx context.Context, veleroCLI, veleroNamespace, schedul
 }
 
 func checkSchedulePause(ctx context.Context, veleroCLI, veleroNamespace, scheduleName string, pause bool) error {
-	checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "schedule", "get", scheduleName, "-ojson")
+	checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "schedule", "get", scheduleName, "-o", "json")
 	jsonBuf, err := common.CMDExecWithOutput(checkCMD)
 	if err != nil {
 		return err
@@ -293,7 +371,7 @@ func checkSchedulePause(ctx context.Context, veleroCLI, veleroNamespace, schedul
 	return nil
 }
 func CheckScheduleWithResourceOrder(ctx context.Context, veleroCLI, veleroNamespace, scheduleName string, order map[string]string) error {
-	checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "schedule", "get", scheduleName, "-ojson")
+	checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "schedule", "get", scheduleName, "-o", "json")
 	jsonBuf, err := common.CMDExecWithOutput(checkCMD)
 	if err != nil {
 		return err
@@ -314,8 +392,8 @@ func CheckScheduleWithResourceOrder(ctx context.Context, veleroCLI, veleroNamesp
 	}
 }
 
-func CheckBackupWithResourceOrder(ctx context.Context, veleroCLI, veleroNamespace, backupName string, order map[string]string) error {
-	checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "get", "backup", backupName, "-ojson")
+func CheckBackupWithResourceOrder(ctx context.Context, veleroCLI, veleroNamespace, backupName string, orderResources map[string]string) error {
+	checkCMD := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "get", "backup", backupName, "-o", "json")
 	jsonBuf, err := common.CMDExecWithOutput(checkCMD)
 	if err != nil {
 		return err
@@ -328,10 +406,10 @@ func CheckBackupWithResourceOrder(ctx context.Context, veleroCLI, veleroNamespac
 	if backup.Status.Phase != velerov1api.BackupPhaseCompleted {
 		return errors.Errorf("Unexpected restore phase got %s, expecting %s", backup.Status.Phase, velerov1api.BackupPhaseCompleted)
 	}
-	if reflect.DeepEqual(backup.Spec.OrderedResources, order) {
+	if reflect.DeepEqual(backup.Spec.OrderedResources, orderResources) {
 		return nil
 	} else {
-		return fmt.Errorf("resource order %v set in backup command is not equal with order %v stored in backup cr", order, backup.Spec.OrderedResources)
+		return fmt.Errorf("resource order %v set in backup command is not equal with order %v stored in backup cr", orderResources, backup.Spec.OrderedResources)
 	}
 }
 
@@ -373,7 +451,7 @@ func VeleroBackupNamespace(ctx context.Context, veleroCLI, veleroNamespace strin
 			args = append(args, "--snapshot-volumes=false")
 		} // if "--snapshot-volumes" is not provide, snapshot should be taken as default behavior.
 	} else { // DefaultVolumesToFsBackup is false
-		// Althrough DefaultVolumesToFsBackup is false, but probably DefaultVolumesToFsBackup
+		// Although DefaultVolumesToFsBackup is false, but probably DefaultVolumesToFsBackup
 		// was set to true in installation CLI in snapshot volume test, so set DefaultVolumesToFsBackup
 		// to false specifically to make sure volume snapshot was taken
 		if backupCfg.UseVolumeSnapshots {
@@ -383,7 +461,7 @@ func VeleroBackupNamespace(ctx context.Context, veleroCLI, veleroNamespace strin
 				args = append(args, "--default-volumes-to-fs-backup=false")
 			}
 		}
-		// Also Althrough DefaultVolumesToFsBackup is false, but probably DefaultVolumesToFsBackup
+		// Although DefaultVolumesToFsBackup is false, but probably DefaultVolumesToFsBackup
 		// was set to true in installation CLI in FS volume backup test, so do nothing here, no DefaultVolumesToFsBackup
 		// appear in backup CLI
 	}
@@ -537,9 +615,7 @@ func RunDebug(ctx context.Context, veleroCLI, veleroNamespace, backup, restore s
 	if len(backup) > 0 {
 		args = append(args, "--backup", backup)
 	}
-	if len(restore) > 0 {
-		//args = append(args, "--restore", restore)
-	}
+
 	fmt.Printf("Generating the debug tarball at %s\n", output)
 	if err := VeleroCmdExec(ctx, veleroCLI, args); err != nil {
 		fmt.Println(errors.Wrapf(err, "failed to run the debug command"))
@@ -588,38 +664,44 @@ func VeleroVersion(ctx context.Context, veleroCLI, veleroNamespace string) error
 	return nil
 }
 
-// getProviderPlugins only provide plugin for specific cloud provider
-func getProviderPlugins(ctx context.Context, veleroCLI string, cloudProvider string) ([]string, error) {
-	if cloudProvider == "" {
-		return []string{}, errors.New("CloudProvider should be provided")
-	}
+// GetPlugins will collect all kinds plugins for VeleroInstall, such as provider
+// plugins(cloud provider/object store provider, if object store provider is not
+// provided, it should be set to value as cloud provider's), feature plugins (CSI/Datamover)
+func GetPlugins(ctx context.Context, veleroCfg VeleroConfig, defaultBSL bool) ([]string, error) {
+	veleroCLI := veleroCfg.VeleroCLI
+	cloudProvider := veleroCfg.CloudProvider
+	objectStoreProvider := veleroCfg.ObjectStoreProvider
+	providerPlugins := veleroCfg.Plugins
+	needDataMoverPlugin := false
+	var plugins []string
 
 	version, err := GetVeleroVersion(ctx, veleroCLI, true)
 	if err != nil {
 		return nil, errors.WithMessage(err, "failed to get velero version")
 	}
 
-	plugins, err := getPluginsByVersion(version, cloudProvider, cloudProvider, "", false)
-	if err != nil {
-		return nil, errors.WithMessagef(err, "Fail to get plugin by provider %s and version %s", cloudProvider, version)
+	// Read the plugins for the additional BSL here.
+	if defaultBSL == false {
+		fmt.Printf("Additional BSL provider = %s\n", veleroCfg.AdditionalBSLProvider)
+		fmt.Printf("Additional BSL plugins = %v\n", veleroCfg.AddBSLPlugins)
+
+		if veleroCfg.AddBSLPlugins == "" {
+			if veleroCfg.AdditionalBSLProvider == "" {
+				return []string{}, errors.New("AdditionalBSLProvider should be provided.")
+			}
+
+			plugins, err = getPluginsByVersion(version, veleroCfg.AdditionalBSLProvider, false)
+			if err != nil {
+				return nil, errors.WithMessagef(err, "Fail to get plugin by provider %s and version %s", veleroCfg.AdditionalBSLProvider, version)
+			}
+		} else {
+			plugins = append(plugins, veleroCfg.AddBSLPlugins)
+		}
+
+		return plugins, nil
 	}
 
-	return plugins, nil
-}
-
-// getPlugins will collect all kinds plugins for VeleroInstall, such as provider
-// plugins(cloud provider/object store provider, if object store provider is not
-// provided, it should be set to value as cloud provider's), feature plugins (CSI/Datamover)
-func getPlugins(ctx context.Context, veleroCfg VeleroConfig) ([]string, error) {
-	veleroCLI := veleroCfg.VeleroCLI
-	cloudProvider := veleroCfg.CloudProvider
-	objectStoreProvider := veleroCfg.ObjectStoreProvider
-	providerPlugins := veleroCfg.Plugins
-	feature := veleroCfg.Features
-	needDataMoverPlugin := false
-
 	// Fetch the plugins for the provider before checking for the object store provider below.
-	var plugins []string
 	if len(providerPlugins) > 0 {
 		plugins = strings.Split(providerPlugins, ",")
 	} else {
@@ -630,47 +712,30 @@ func getPlugins(ctx context.Context, veleroCfg VeleroConfig) ([]string, error) {
 			objectStoreProvider = cloudProvider
 		}
 
-		var version string
-		var err error
 		if veleroCfg.VeleroVersion != "" {
 			version = veleroCfg.VeleroVersion
-		} else {
-			version, err = GetVeleroVersion(ctx, veleroCLI, true)
-			if err != nil {
-				return nil, errors.WithMessage(err, "failed to get velero version")
-			}
 		}
-		if veleroCfg.SnapshotMoveData && veleroCfg.DataMoverPlugin == "" {
+
+		if veleroCfg.SnapshotMoveData && veleroCfg.DataMoverPlugin == "" && !veleroCfg.IsUpgradeTest {
 			needDataMoverPlugin = true
 		}
-		plugins, err = getPluginsByVersion(version, cloudProvider, objectStoreProvider, feature, needDataMoverPlugin)
+
+		plugins, err = getPluginsByVersion(version, cloudProvider, needDataMoverPlugin)
 		if err != nil {
 			return nil, errors.WithMessagef(err, "Fail to get plugin by provider %s and version %s", objectStoreProvider, version)
 		}
 	}
+
 	return plugins, nil
 }
 
-// VeleroAddPluginsForProvider determines which plugins need to be installed for a provider and
-// installs them in the current Velero installation, skipping over those that are already installed.
-func VeleroAddPluginsForProvider(ctx context.Context, veleroCLI string, veleroNamespace string, provider string, plugin string) error {
-	var err error
-	var plugins []string
-	if plugin == "" {
-		plugins, err = getProviderPlugins(ctx, veleroCLI, provider)
-	} else {
-		plugins = append(plugins, plugin)
-	}
-	fmt.Printf("provider cmd = %v\n", provider)
-	fmt.Printf("plugins cmd = %v\n", plugins)
-	if err != nil {
-		return errors.WithMessage(err, "Failed to get plugins")
-	}
+// AddPlugins installs them in the current Velero installation, skipping over those that are already installed.
+func AddPlugins(plugins []string, veleroCfg VeleroConfig) error {
 	for _, plugin := range plugins {
 		stdoutBuf := new(bytes.Buffer)
 		stderrBuf := new(bytes.Buffer)
 
-		installPluginCmd := exec.CommandContext(ctx, veleroCLI, "--namespace", veleroNamespace, "plugin", "add", plugin)
+		installPluginCmd := exec.CommandContext(context.TODO(), veleroCfg.VeleroCLI, "--namespace", veleroCfg.VeleroNamespace, "plugin", "add", plugin, "--confirm")
 		fmt.Printf("installPluginCmd cmd =%v\n", installPluginCmd)
 		installPluginCmd.Stdout = stdoutBuf
 		installPluginCmd.Stderr = stderrBuf
@@ -712,19 +777,18 @@ func WaitForVSphereUploadCompletion(ctx context.Context, timeout time.Duration, 
 		for _, curLine := range lines {
 			fmt.Printf("%s %s\n", curLine, time.Now().Format("2006-01-02 15:04:05"))
 			comps := strings.Split(curLine, "=")
-			// SnapshotPhase represents the lifecycle phase of a Snapshot.
-			// New - No work yet, next phase is InProgress
-			// InProgress - snapshot being taken
-			// Snapshotted - local snapshot complete, next phase is Protecting or SnapshotFailed
-			// SnapshotFailed - end state, snapshot was not able to be taken
-			// Uploading - snapshot is being moved to durable storage
-			// Uploaded - end state, snapshot has been protected
-			// UploadFailed - end state, unable to move to durable storage
-			// Canceling - when the SanpshotCancel flag is set, if the Snapshot has not already moved into a terminal state, the
-			//             status will move to Canceling.  The snapshot ID will be removed from the status status if has been filled in
-			//             and the snapshot ID will not longer be valid for a Clone operation
-			// Canceled - the operation was canceled, the snapshot ID is not valid
-			// Canceled - the operation was canceled, the snapshot ID is not valid
+			// SnapshotPhase represents the lifecycle phase of a Snapshot:
+			// * New: No work yet, next phase is InProgress
+			// * InProgress:     snapshot being taken
+			// * Snapshotted:    local snapshot complete, next phase is Protecting or SnapshotFailed
+			// * SnapshotFailed: end state, snapshot was not able to be taken
+			// * Uploading:      snapshot is being moved to durable storage
+			// * Uploaded:       end state, snapshot has been protected
+			// * UploadFailed:   end state, unable to move to durable storage
+			// * Canceling:      when the SanpshotCancel flag is set, if the Snapshot has not already moved into a terminal state, the
+			//                   status will move to Canceling.  The snapshot ID will be removed from the status if the status has been filled in
+			//                   and the snapshot ID will not longer be valid for a Clone operation
+			// * Canceled:       the operation was canceled, the snapshot ID is not valid
 			if len(comps) == 2 {
 				phase := comps[1]
 				actualCount++
@@ -870,7 +934,9 @@ func getVeleroCliTarball(cliTarballUrl string) (*os.File, error) {
 	lastInd := strings.LastIndex(cliTarballUrl, "/")
 	tarball := cliTarballUrl[lastInd+1:]
 
-	resp, err := http.Get(cliTarballUrl)
+	cli := &http.Client{}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, cliTarballUrl, nil)
+	resp, err := cli.Do(req)
 	if err != nil {
 		return nil, errors.WithMessagef(err, "failed to access Velero CLI tarball")
 	}
@@ -892,8 +958,9 @@ func getVeleroCliTarball(cliTarballUrl string) (*os.File, error) {
 	return tmpfile, nil
 }
 
-func DeleteBackupResource(ctx context.Context, veleroCLI string, backupName string) error {
-	args := []string{"backup", "delete", backupName, "--confirm"}
+func DeleteBackup(ctx context.Context, backupName string, velerocfg *VeleroConfig) error {
+	veleroCLI := velerocfg.VeleroCLI
+	args := []string{"--namespace", velerocfg.VeleroNamespace, "backup", "delete", backupName, "--confirm"}
 
 	cmd := exec.CommandContext(ctx, veleroCLI, args...)
 	fmt.Println("Delete backup Command:" + cmd.String())
@@ -905,33 +972,67 @@ func DeleteBackupResource(ctx context.Context, veleroCLI string, backupName stri
 	output := strings.Replace(stdout, "\n", " ", -1)
 	fmt.Println("Backup delete command output:" + output)
 
-	args = []string{"backup", "get", backupName}
+	args = []string{"--namespace", velerocfg.VeleroNamespace, "backup", "get", backupName}
 
-	retryTimes := 5
-	for i := 1; i < retryTimes+1; i++ {
-		cmd = exec.CommandContext(ctx, veleroCLI, args...)
-		fmt.Printf("Try %d times to delete backup %s \n", i, cmd.String())
-		stdout, stderr, err = veleroexec.RunCommand(cmd)
-		if err != nil {
-			if strings.Contains(stderr, "not found") {
-				fmt.Printf("|| EXPECTED || - Backup %s was deleted successfully according to message %s\n", backupName, stderr)
-				return nil
+	err = wait.PollUntilContextTimeout(context.Background(), 5*time.Second, time.Minute, true,
+		func(context.Context) (bool, error) {
+			cmd = exec.CommandContext(ctx, veleroCLI, args...)
+			fmt.Printf("Try to get backup with cmd: %s \n", cmd.String())
+			stdout, stderr, err = veleroexec.RunCommand(cmd)
+			if err != nil {
+				if strings.Contains(stderr, "not found") {
+					fmt.Printf("|| EXPECTED || - Backup %s was deleted successfully according to message %s\n", backupName, stderr)
+					return true, nil
+				}
+				return false, errors.Wrapf(err, "Fail to perform get backup, stdout=%s, stderr=%s", stdout, stderr)
 			}
-			return errors.Wrapf(err, "Fail to perform get backup, stdout=%s, stderr=%s", stdout, stderr)
+
+			var status string
+			var drList []string
+			drList, err = KubectlGetAllDeleteBackupRequest(context.Background(), backupName, velerocfg.VeleroNamespace)
+			if len(drList) > 1 {
+				return false, errors.New(fmt.Sprintf("Count of DeleteBackupRequest %d is not expected", len(drList)))
+			}
+
+			// Record DeleteBackupRequest status for debugging
+			for _, dr := range drList {
+				status, err = KubectlGetDeleteBackupRequestStatus(context.Background(), dr, velerocfg.VeleroNamespace)
+				fmt.Printf("DeleteBackupRequest status: %s\n", status)
+			}
+
+			return true, nil
+		})
+
+	// Waiting for completion of handling deleteBackupRequest CR
+	time.Sleep(1 * time.Minute)
+
+	// Verify deleteBackupRequest are all gone because they are handled successfully
+	var drList []string
+	drList, err = KubectlGetAllDeleteBackupRequest(context.Background(), backupName, velerocfg.VeleroNamespace)
+	if len(drList) > 1 {
+		// Log deleteBackupRequest details for debug
+		for _, dr := range drList {
+			details, err := KubectlGetDeleteBackupRequestDetails(context.Background(), dr, velerocfg.VeleroNamespace)
+			if err != nil {
+				return errors.Wrapf(err, "fail to get DeleteBackupRequest %s details", dr)
+			}
+			fmt.Printf("Failed DeleteBackupRequest details: %s", details)
 		}
-		time.Sleep(1 * time.Minute)
+		return errors.New(fmt.Sprintf("Count of DeleteBackupRequest %d is not expected", len(drList)))
 	}
+
 	return nil
 }
 
-func GetBackup(ctx context.Context, veleroCLI string, backupName string) (string, string, error) {
-	args := []string{"backup", "get", backupName}
+func GetBackup(ctx context.Context, backupName string, veleroCfg *VeleroConfig) (string, string, error) {
+	veleroCLI := veleroCfg.VeleroCLI
+	args := []string{"--namespace", veleroCfg.VeleroNamespace, "backup", "get", backupName}
 	cmd := exec.CommandContext(ctx, veleroCLI, args...)
 	return veleroexec.RunCommand(cmd)
 }
 
-func IsBackupExist(ctx context.Context, veleroCLI string, backupName string) (bool, error) {
-	out, outerr, err := GetBackup(ctx, veleroCLI, backupName)
+func IsBackupExist(ctx context.Context, backupName string, veleroCfg *VeleroConfig) (bool, error) {
+	out, outerr, err := GetBackup(ctx, backupName, veleroCfg)
 	if err != nil {
 		if strings.Contains(outerr, "not found") {
 			fmt.Printf("Backup CR %s was not found\n", backupName)
@@ -943,9 +1044,9 @@ func IsBackupExist(ctx context.Context, veleroCLI string, backupName string) (bo
 	return true, nil
 }
 
-func WaitBackupDeleted(ctx context.Context, veleroCLI string, backupName string, timeout time.Duration) error {
+func WaitBackupDeleted(ctx context.Context, backupName string, timeout time.Duration, veleroCfg *VeleroConfig) error {
 	return wait.PollImmediate(10*time.Second, timeout, func() (bool, error) {
-		if exist, err := IsBackupExist(ctx, veleroCLI, backupName); err != nil {
+		if exist, err := IsBackupExist(ctx, backupName, veleroCfg); err != nil {
 			return false, err
 		} else {
 			if exist {
@@ -958,10 +1059,10 @@ func WaitBackupDeleted(ctx context.Context, veleroCLI string, backupName string,
 	})
 }
 
-func WaitForExpectedStateOfBackup(ctx context.Context, veleroCLI string, backupName string,
-	timeout time.Duration, existing bool) error {
+func WaitForExpectedStateOfBackup(ctx context.Context, backupName string,
+	timeout time.Duration, existing bool, veleroCfg *VeleroConfig) error {
 	return wait.PollImmediate(10*time.Second, timeout, func() (bool, error) {
-		if exist, err := IsBackupExist(ctx, veleroCLI, backupName); err != nil {
+		if exist, err := IsBackupExist(ctx, backupName, veleroCfg); err != nil {
 			return false, err
 		} else {
 			msg := "does not exist as expect"
@@ -979,19 +1080,19 @@ func WaitForExpectedStateOfBackup(ctx context.Context, veleroCLI string, backupN
 	})
 }
 
-func WaitForBackupToBeCreated(ctx context.Context, veleroCLI string, backupName string, timeout time.Duration) error {
-	return WaitForExpectedStateOfBackup(ctx, veleroCLI, backupName, timeout, true)
+func WaitForBackupToBeCreated(ctx context.Context, backupName string, timeout time.Duration, veleroCfg *VeleroConfig) error {
+	return WaitForExpectedStateOfBackup(ctx, backupName, timeout, true, veleroCfg)
 }
 
-func WaitForBackupToBeDeleted(ctx context.Context, veleroCLI string, backupName string, timeout time.Duration) error {
-	return WaitForExpectedStateOfBackup(ctx, veleroCLI, backupName, timeout, false)
+func WaitForBackupToBeDeleted(ctx context.Context, backupName string, timeout time.Duration, veleroCfg *VeleroConfig) error {
+	return WaitForExpectedStateOfBackup(ctx, backupName, timeout, false, veleroCfg)
 }
 
-func WaitForBackupsToBeDeleted(ctx context.Context, veleroCLI string, backups []string, timeout time.Duration) error {
+func WaitForBackupsToBeDeleted(ctx context.Context, backups []string, timeout time.Duration, veleroCfg *VeleroConfig) error {
 	var err error
 	for _, backupName := range backups {
 		fmt.Println("Waiting for deletion of backup <" + backupName + ">")
-		err = WaitForExpectedStateOfBackup(ctx, veleroCLI, backupName, timeout, false)
+		err = WaitForExpectedStateOfBackup(ctx, backupName, timeout, false, veleroCfg)
 		if err != nil {
 			return err
 		}
@@ -1068,51 +1169,35 @@ func GetLatestSuccessBackupsFromBSL(ctx context.Context, veleroCLI, bslName stri
 	return backups[0], nil
 }
 
-func GetScheduledBackupsCreationTime(ctx context.Context, veleroCLI, bslName, scheduleName string) ([]string, error) {
-	var creationTimes []string
-	backups, err := GetBackupsCreationTime(ctx, veleroCLI, bslName)
-	if err != nil {
-		return nil, err
-	}
-	for _, b := range backups {
-		if strings.Contains(b, scheduleName) {
-			creationTimes = append(creationTimes, b)
-		}
-	}
-	return creationTimes, nil
-}
-func GetBackupsCreationTime(ctx context.Context, veleroCLI, bslName string) ([]string, error) {
-	args1 := []string{"get", "backups"}
-	createdTime := "$1,\",\" $5,$6,$7,$8"
-	if strings.TrimSpace(bslName) != "" {
-		args1 = append(args1, "-l", "velero.io/storage-location="+bslName)
-	}
-	cmds := []*common.OsCommandLine{}
+func GetBackupsForSchedule(
+	ctx context.Context,
+	client kbclient.Client,
+	scheduleName string,
+	namespace string,
+) ([]velerov1api.Backup, error) {
+	backupList := new(velerov1api.BackupList)
 
-	cmd := &common.OsCommandLine{
-		Cmd:  veleroCLI,
-		Args: args1,
+	if err := client.List(
+		ctx,
+		backupList,
+		&kbclient.ListOptions{
+			Namespace: namespace,
+			LabelSelector: labels.SelectorFromSet(map[string]string{
+				velerov1api.ScheduleNameLabel: scheduleName,
+			}),
+		},
+	); err != nil {
+		return nil, fmt.Errorf("failed to list backup in %s namespace for schedule %s: %s",
+			namespace, scheduleName, err.Error())
 	}
-	cmds = append(cmds, cmd)
 
-	cmd = &common.OsCommandLine{
-		Cmd:  "awk",
-		Args: []string{"{print " + createdTime + "}"},
-	}
-	cmds = append(cmds, cmd)
-
-	cmd = &common.OsCommandLine{
-		Cmd:  "tail",
-		Args: []string{"-n", "+2"},
-	}
-	cmds = append(cmds, cmd)
-
-	return common.GetListByCmdPipes(ctx, cmds)
+	return backupList.Items, nil
 }
 
 func GetAllBackups(ctx context.Context, veleroCLI string) ([]string, error) {
 	return GetBackupsFromBsl(ctx, veleroCLI, "")
 }
+
 func DeleteBslResource(ctx context.Context, veleroCLI string, bslName string) error {
 	args := []string{"backup-location", "delete", bslName, "--confirm"}
 
@@ -1132,7 +1217,6 @@ func DeleteBslResource(ctx context.Context, veleroCLI string, bslName string) er
 }
 
 func SnapshotCRsCountShouldBe(ctx context.Context, namespace, backupName string, expectedCount int) error {
-
 	checkSnapshotCmd := exec.CommandContext(ctx, "kubectl",
 		"get", "-n", namespace, "snapshots.backupdriver.cnsdp.vmware.com", "-o=jsonpath='{range .items[*]}{.metadata.labels.velero\\.io\\/backup-name}{\"\\n\"}{end}'")
 	fmt.Printf("checkSnapshotCmd cmd =%v\n", checkSnapshotCmd)
@@ -1193,29 +1277,21 @@ func GetRepositories(ctx context.Context, veleroNamespace, targetNamespace strin
 	return common.GetListByCmdPipes(ctx, cmds)
 }
 
-func GetSnapshotCheckPoint(client TestClient, VeleroCfg VeleroConfig, expectCount int, namespaceBackedUp, backupName string, KibishiiPVCNameList []string) (SnapshotCheckPoint, error) {
+func GetSnapshotCheckPoint(client TestClient, veleroCfg VeleroConfig, expectCount int, namespaceBackedUp, backupName string, KibishiiPVCNameList []string) (SnapshotCheckPoint, error) {
+	var err error
 	var snapshotCheckPoint SnapshotCheckPoint
 
 	snapshotCheckPoint.ExpectCount = expectCount
 	snapshotCheckPoint.NamespaceBackedUp = namespaceBackedUp
 	snapshotCheckPoint.PodName = KibishiiPVCNameList
-	if VeleroCfg.CloudProvider == "azure" && strings.EqualFold(VeleroCfg.Features, "EnableCSI") {
+	if (veleroCfg.CloudProvider == Azure || veleroCfg.CloudProvider == AWS) && strings.EqualFold(veleroCfg.Features, FeatureCSI) {
 		snapshotCheckPoint.EnableCSI = true
-		resourceName := "snapshot.storage.k8s.io"
 
-		srcVersions, err := GetAPIVersions(VeleroCfg.DefaultClient, resourceName)
-
-		if err != nil {
-			return snapshotCheckPoint, err
-		}
-		if len(srcVersions) == 0 {
-			return snapshotCheckPoint, errors.New("Fail to get APIVersion")
-		}
-		if snapshotCheckPoint.SnapshotIDList, err = util.CheckVolumeSnapshotCR(client, backupName, expectCount, srcVersions[0]); err != nil {
+		if snapshotCheckPoint.SnapshotIDList, err = util.CheckVolumeSnapshotCR(client, map[string]string{"backupNameLabel": backupName}, expectCount); err != nil {
 			return snapshotCheckPoint, errors.Wrapf(err, "Fail to get Azure CSI snapshot content")
 		}
 	}
-	fmt.Println(snapshotCheckPoint)
+	fmt.Printf("snapshotCheckPoint: %v \n", snapshotCheckPoint)
 	return snapshotCheckPoint, nil
 }
 
@@ -1249,47 +1325,35 @@ func GetVersionList(veleroCli, veleroVersion string) []VeleroCLI2Version {
 	}
 	return veleroCLI2VersionList
 }
-func DeleteAllBackups(ctx context.Context, client TestClient) error {
+func DeleteAllBackups(ctx context.Context, veleroCfg *VeleroConfig) error {
+	client := veleroCfg.ClientToInstallVelero
 	backupList := new(velerov1api.BackupList)
-	if err := client.Kubebuilder.List(ctx, backupList, &kbclient.ListOptions{Namespace: VeleroCfg.VeleroNamespace}); err != nil {
-		return fmt.Errorf("failed to list backup object in %s namespace with err %v", VeleroCfg.VeleroNamespace, err)
+	if err := client.Kubebuilder.List(ctx, backupList, &kbclient.ListOptions{Namespace: veleroCfg.VeleroNamespace}); err != nil {
+		return fmt.Errorf("failed to list backup object in %s namespace with err %v", veleroCfg.VeleroNamespace, err)
 	}
 	for _, backup := range backupList.Items {
 		fmt.Printf("Backup %s is going to be deleted...\n", backup.Name)
-		if err := VeleroBackupDelete(ctx, VeleroCfg.VeleroCLI, VeleroCfg.VeleroNamespace, backup.Name); err != nil {
+		if err := VeleroBackupDelete(ctx, veleroCfg.VeleroCLI, veleroCfg.VeleroNamespace, backup.Name); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func DeleteBackups(ctx context.Context, client TestClient, backupNames []string) error {
+func DeleteBackups(ctx context.Context, backupNames []string, veleroCfg *VeleroConfig) error {
+	client := veleroCfg.ClientToInstallVelero
 	backupList := new(velerov1api.BackupList)
-	if err := client.Kubebuilder.List(ctx, backupList, &kbclient.ListOptions{Namespace: VeleroCfg.VeleroNamespace}); err != nil {
-		return fmt.Errorf("failed to list backup object in %s namespace with err %v", VeleroCfg.VeleroNamespace, err)
+	if err := client.Kubebuilder.List(ctx, backupList, &kbclient.ListOptions{Namespace: veleroCfg.VeleroNamespace}); err != nil {
+		return fmt.Errorf("failed to list backup object in %s namespace with err %v", veleroCfg.VeleroNamespace, err)
 	}
 	for _, backup := range backupList.Items {
 		for _, bn := range backupNames {
 			if backup.Name == bn {
 				fmt.Printf("Backup %s is going to be deleted...\n", backup.Name)
-				if err := VeleroBackupDelete(ctx, VeleroCfg.VeleroCLI, VeleroCfg.VeleroNamespace, backup.Name); err != nil {
+				if err := VeleroBackupDelete(ctx, veleroCfg.VeleroCLI, veleroCfg.VeleroNamespace, backup.Name); err != nil {
 					return err
 				}
 			}
-		}
-	}
-	return nil
-}
-
-func DeleteRestores(ctx context.Context, client TestClient) error {
-	restoreList := new(velerov1api.RestoreList)
-	if err := client.Kubebuilder.List(ctx, restoreList, &kbclient.ListOptions{Namespace: VeleroCfg.VeleroNamespace}); err != nil {
-		return fmt.Errorf("failed to list restore object in %s namespace with err %v", VeleroCfg.VeleroNamespace, err)
-	}
-	for _, restore := range restoreList.Items {
-		fmt.Printf("Restore %s is going to be deleted...\n", restore.Name)
-		if err := VeleroRestoreDelete(ctx, VeleroCfg.VeleroCLI, VeleroCfg.VeleroNamespace, restore.Name); err != nil {
-			return err
 		}
 	}
 	return nil
@@ -1335,8 +1399,9 @@ func VeleroUpgrade(ctx context.Context, veleroCfg VeleroConfig) error {
 			return errors.Wrap(err, "Fail to update node agent")
 		}
 	}
-	return waitVeleroReady(ctx, veleroCfg.VeleroNamespace, veleroCfg.UseNodeAgent)
+	return waitVeleroReady(ctx, veleroCfg.VeleroNamespace, veleroCfg.UseNodeAgent, veleroCfg.UseNodeAgentWindows)
 }
+
 func ApplyCRDs(ctx context.Context, veleroCLI string) ([]string, error) {
 	cmds := []*common.OsCommandLine{}
 
@@ -1360,14 +1425,6 @@ func UpdateVeleroDeployment(ctx context.Context, veleroCfg VeleroConfig) ([]stri
 	cmd := &common.OsCommandLine{
 		Cmd:  "kubectl",
 		Args: []string{"get", "deploy", "-n", veleroCfg.VeleroNamespace, "-ojson"},
-	}
-	cmds = append(cmds, cmd)
-
-	args := fmt.Sprintf("s#\\\"image\\\"\\: \\\"velero\\/velero\\:v[0-9]*.[0-9]*.[0-9]\\\"#\\\"image\\\"\\: \\\"gcr.io\\/velero-gcp\\/nightly\\/velero\\:%s\\\"#g", veleroCfg.VeleroVersion)
-
-	cmd = &common.OsCommandLine{
-		Cmd:  "sed",
-		Args: []string{args},
 	}
 	cmds = append(cmds, cmd)
 
@@ -1410,14 +1467,6 @@ func UpdateNodeAgent(ctx context.Context, veleroCfg VeleroConfig, dsjson string)
 	cmd := &common.OsCommandLine{
 		Cmd:  "echo",
 		Args: []string{dsjson},
-	}
-	cmds = append(cmds, cmd)
-
-	args := fmt.Sprintf("s#\\\"image\\\"\\: \\\"velero\\/velero\\:v[0-9]*.[0-9]*.[0-9]\\\"#\\\"image\\\"\\: \\\"gcr.io\\/velero-gcp\\/nightly\\/velero\\:%s\\\"#g", veleroCfg.VeleroVersion)
-
-	cmd = &common.OsCommandLine{
-		Cmd:  "sed",
-		Args: []string{args},
 	}
 	cmds = append(cmds, cmd)
 
@@ -1535,20 +1584,32 @@ func GetVeleroPodName(ctx context.Context) ([]string, error) {
 	return common.GetListByCmdPipes(ctx, cmds)
 }
 
-func InstallTestStorageClasses(path string) error {
+// InstallStorageClasses create the "e2e-storage-class" and "e2e-storage-class-2"
+// StorageClasses for E2E tests.
+//
+// e2e-storage-class is the default StorageClass for E2E.
+// e2e-storage-class-2 is used for the StorageClass mapping test case.
+// Kibishii StorageClass is not covered here.
+func InstallStorageClasses(provider string) error {
 	ctx, ctxCancel := context.WithTimeout(context.Background(), time.Minute*5)
 	defer ctxCancel()
-	err := InstallStorageClass(ctx, path)
-	if err != nil {
+
+	storageClassFilePath := fmt.Sprintf("../testdata/storage-class/%s.yaml", provider)
+
+	if err := InstallStorageClass(ctx, storageClassFilePath); err != nil {
 		return err
 	}
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(storageClassFilePath)
 	if err != nil {
-		return errors.Wrapf(err, "failed to get %s when install storage class", path)
+		return errors.Wrapf(err, "failed to get %s when install storage class", storageClassFilePath)
 	}
 
-	// replace sc to new value
-	newContent := strings.ReplaceAll(string(content), fmt.Sprintf("name: %s", StorageClassName), fmt.Sprintf("name: %s", StorageClassName2))
+	// Replace the name to e2e-storage-class-2
+	newContent := strings.ReplaceAll(
+		string(content),
+		fmt.Sprintf("name: %s", StorageClassName),
+		fmt.Sprintf("name: %s", StorageClassName2),
+	)
 
 	tmpFile, err := os.CreateTemp("", "sc-file")
 	if err != nil {
@@ -1560,4 +1621,174 @@ func InstallTestStorageClasses(path string) error {
 		return errors.Wrapf(err, "failed to write content into temp file %s when install storage class", tmpFile.Name())
 	}
 	return InstallStorageClass(ctx, tmpFile.Name())
+}
+
+func GetPvName(ctx context.Context, client TestClient, pvcName, namespace string) (string, error) {
+	pvcList, err := GetPvcByPVCName(context.Background(), namespace, pvcName)
+	if err != nil {
+		return "", err
+	}
+
+	if len(pvcList) != 1 {
+		return "", errors.New(fmt.Sprintf("Only 1 PV of PVC %s pod %s should be found under namespace %s", pvcList[0], pvcName, namespace))
+	}
+
+	pvList, err := GetPvByPvc(context.Background(), namespace, pvcList[0])
+	if err != nil {
+		return "", err
+	}
+	if len(pvList) != 1 {
+		return "", errors.New(fmt.Sprintf("Only 1 PV of PVC %s pod %s should be found under namespace %s", pvcList[0], pvcName, namespace))
+	}
+
+	return pvList[0], nil
+}
+func DeletePVs(ctx context.Context, client TestClient, pvList []string) error {
+	for _, pv := range pvList {
+		args := []string{"delete", "pv", pv, "--timeout=0s"}
+		fmt.Println(args)
+		err := exec.CommandContext(ctx, "kubectl", args...).Run()
+		if err != nil {
+			return errors.New(fmt.Sprintf("Deleted PV  %s ", pv))
+		}
+	}
+	return nil
+}
+
+func CleanAllRetainedPV(ctx context.Context, client TestClient) {
+	pvNameList, err := GetAllPVNames(ctx, client)
+	if err != nil {
+		fmt.Println("fail to list PV")
+	}
+	for _, pv := range pvNameList {
+		args := []string{"patch", "pv", pv, "-p", "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"Delete\"}}"}
+		fmt.Println(args)
+		cmd := exec.CommandContext(ctx, "kubectl", args...)
+		stdout, errMsg, err := veleroexec.RunCommand(cmd)
+		if err != nil {
+			fmt.Printf("fail to patch PV %s reclaim policy to delete: stdout: %s, stderr: %s", pv, stdout, errMsg)
+		}
+
+		args = []string{"delete", "pv", pv, "--timeout=60s"}
+		fmt.Println(args)
+		cmd = exec.CommandContext(ctx, "kubectl", args...)
+		stdout, errMsg, err = veleroexec.RunCommand(cmd)
+		if err != nil {
+			fmt.Printf("fail to delete PV %s reclaim policy to delete: stdout: %s, stderr: %s", pv, stdout, errMsg)
+		}
+	}
+}
+
+func KubectlGetBackupRepository(ctx context.Context, uploaderType, veleroNamespace string) ([]string, error) {
+	args1 := []string{"get", "backuprepository", "-n", veleroNamespace}
+
+	cmds := []*common.OsCommandLine{}
+
+	cmd := &common.OsCommandLine{
+		Cmd:  "kubectl",
+		Args: args1,
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "grep",
+		Args: []string{uploaderType},
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "awk",
+		Args: []string{"{print $1}"},
+	}
+	cmds = append(cmds, cmd)
+
+	return common.GetListByCmdPipes(ctx, cmds)
+}
+
+func KubectlGetPodVolumeBackup(ctx context.Context, backupName, veleroNamespace string) ([]string, error) {
+	args1 := []string{"get", "podvolumebackup", "-n", veleroNamespace}
+
+	cmds := []*common.OsCommandLine{}
+
+	cmd := &common.OsCommandLine{
+		Cmd:  "kubectl",
+		Args: args1,
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "grep",
+		Args: []string{backupName},
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "awk",
+		Args: []string{"{print $1}"},
+	}
+	cmds = append(cmds, cmd)
+
+	return common.GetListByCmdPipes(ctx, cmds)
+}
+
+func KubectlGetDeleteBackupRequestDetails(ctx context.Context, deleteBackupRequest, veleroNamespace string) (string, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "deletebackuprequests", "-n", veleroNamespace, deleteBackupRequest, "-o", "json")
+	fmt.Printf("Get DeleteBackupRequest details cmd =%v\n", cmd)
+	stdout, stderr, err := veleroexec.RunCommand(cmd)
+	if err != nil {
+		fmt.Print(stdout)
+		fmt.Print(stderr)
+		return "", errors.Wrap(err, fmt.Sprintf("failed to run command %s", cmd))
+	}
+	return stdout, err
+}
+func KubectlGetDeleteBackupRequestStatus(ctx context.Context, deleteBackupRequest, veleroNamespace string) (string, error) {
+	args1 := []string{"get", "deletebackuprequests", "-n", veleroNamespace, deleteBackupRequest, "-o", "json"}
+
+	cmds := []*common.OsCommandLine{}
+
+	cmd := &common.OsCommandLine{
+		Cmd:  "kubectl",
+		Args: args1,
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "jq",
+		Args: []string{"-r", ".status.phase"},
+	}
+	cmds = append(cmds, cmd)
+
+	ret, err := common.GetListByCmdPipes(ctx, cmds)
+
+	if len(ret) != 1 {
+		return "", errors.New(fmt.Sprintf("fail to get status of deletebackuprequests %s", deleteBackupRequest))
+	}
+	return ret[0], err
+}
+
+func KubectlGetAllDeleteBackupRequest(ctx context.Context, backupName, veleroNamespace string) ([]string, error) {
+	args1 := []string{"get", "deletebackuprequests", "-n", veleroNamespace}
+
+	cmds := []*common.OsCommandLine{}
+
+	cmd := &common.OsCommandLine{
+		Cmd:  "kubectl",
+		Args: args1,
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "grep",
+		Args: []string{backupName},
+	}
+	cmds = append(cmds, cmd)
+
+	cmd = &common.OsCommandLine{
+		Cmd:  "awk",
+		Args: []string{"{print $1}"},
+	}
+	cmds = append(cmds, cmd)
+
+	return common.GetListByCmdPipes(ctx, cmds)
 }

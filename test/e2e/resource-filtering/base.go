@@ -19,12 +19,10 @@ package filtering
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/pkg/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	. "github.com/vmware-tanzu/velero/test"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 )
@@ -46,16 +44,14 @@ func (f *FilteringCase) Init() error {
 	f.replica = int32(2)
 	f.labels = map[string]string{"resourcefiltering": "true"}
 	f.labelSelector = "resourcefiltering"
-	f.VeleroCfg = VeleroCfg
-	f.Client = *f.VeleroCfg.ClientToInstallVelero
 	f.NamespacesTotal = 3
 	f.BackupArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", f.BackupName,
+		"create", "--namespace", f.VeleroCfg.VeleroNamespace, "backup", f.BackupName,
 		"--default-volumes-to-fs-backup", "--wait",
 	}
 
 	f.RestoreArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", f.RestoreName,
+		"create", "--namespace", f.VeleroCfg.VeleroNamespace, "restore", f.RestoreName,
 		"--from-backup", f.BackupName, "--wait",
 	}
 
@@ -64,7 +60,6 @@ func (f *FilteringCase) Init() error {
 }
 
 func (f *FilteringCase) CreateResources() error {
-	f.Ctx, f.CtxCancel = context.WithTimeout(context.Background(), 30*time.Minute)
 	for nsNum := 0; nsNum < f.NamespacesTotal; nsNum++ {
 		namespace := fmt.Sprintf("%s-%00000d", f.CaseBaseName, nsNum)
 		fmt.Printf("Creating resources in namespace ...%s\n", namespace)
@@ -73,7 +68,7 @@ func (f *FilteringCase) CreateResources() error {
 		}
 		//Create deployment
 		fmt.Printf("Creating deployment in namespaces ...%s\n", namespace)
-		deployment := NewDeployment(f.CaseBaseName, namespace, f.replica, f.labels, nil).Result()
+		deployment := NewDeployment(f.CaseBaseName, namespace, f.replica, f.labels, f.VeleroCfg.ImageRegistryProxy).Result()
 		deployment, err := CreateDeployment(f.Client.ClientGo, namespace, deployment)
 		if err != nil {
 			return errors.Wrap(err, fmt.Sprintf("failed to delete the namespace %q", namespace))

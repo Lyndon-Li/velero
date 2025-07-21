@@ -26,18 +26,23 @@ builds:
       - arm
       - arm64
       - ppc64le
+      - s390x
     ignore:
       # don't build arm for darwin and arm/arm64 for windows
       - goos: darwin
         goarch: arm
       - goos: darwin
         goarch: ppc64le
+      - goos: darwin
+        goarch: s390x
       - goos: windows
         goarch: arm
       - goos: windows
         goarch: arm64
       - goos: windows
         goarch: ppc64le
+      - goos: windows
+        goarch: s390x
     ldflags:
       - -X "github.com/vmware-tanzu/velero/pkg/buildinfo.Version={{ .Tag }}" -X "github.com/vmware-tanzu/velero/pkg/buildinfo.GitSHA={{ .FullCommit }}" -X "github.com/vmware-tanzu/velero/pkg/buildinfo.GitTreeState={{ .Env.GIT_TREE_STATE }}" -X "github.com/vmware-tanzu/velero/pkg/buildinfo.ImageRegistry={{ .Env.REGISTRY }}"
 archives:
@@ -46,9 +51,6 @@ archives:
     files:
       - LICENSE
       - examples/**/*
-    # Add the setting to resolve the DEPRECATED warning. Actually, Velero's case is not affected by the rlcp behavior change.
-    # https://github.com/orgs/goreleaser/discussions/3659#discussioncomment-4587257
-    rlcp: true 
 checksum:
   name_template: 'CHECKSUM'
 release:

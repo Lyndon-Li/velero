@@ -25,7 +25,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
-	corev1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/cache"
@@ -39,6 +39,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/cmd/util/output"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+	"github.com/vmware-tanzu/velero/pkg/util/velero/restore"
 )
 
 func NewCreateCommand(f client.Factory, use string) *cobra.Command {
@@ -83,6 +84,7 @@ type CreateOptions struct {
 	RestoreVolumes            flag.OptionalBool
 	PreserveNodePorts         flag.OptionalBool
 	Labels                    flag.Map
+	Annotations               flag.Map
 	IncludeNamespaces         flag.StringArray
 	ExcludeNamespaces         flag.StringArray
 	ExistingResourcePolicy    string
@@ -98,17 +100,21 @@ type CreateOptions struct {
 	AllowPartiallyFailed      flag.OptionalBool
 	ItemOperationTimeout      time.Duration
 	ResourceModifierConfigMap string
+	WriteSparseFiles          flag.OptionalBool
+	ParallelFilesDownload     int
 	client                    kbclient.WithWatch
 }
 
 func NewCreateOptions() *CreateOptions {
 	return &CreateOptions{
 		Labels:                  flag.NewMap(),
+		Annotations:             flag.NewMap(),
 		IncludeNamespaces:       flag.NewStringArray("*"),
 		NamespaceMappings:       flag.NewMap().WithEntryDelimiter(',').WithKeyValueDelimiter(':'),
 		RestoreVolumes:          flag.NewOptionalBool(nil),
 		PreserveNodePorts:       flag.NewOptionalBool(nil),
 		IncludeClusterResources: flag.NewOptionalBool(nil),
+		WriteSparseFiles:        flag.NewOptionalBool(nil),
 	}
 }
 
@@ -119,6 +125,7 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	flags.Var(&o.ExcludeNamespaces, "exclude-namespaces", "Namespaces to exclude from the restore.")
 	flags.Var(&o.NamespaceMappings, "namespace-mappings", "Namespace mappings from name in the backup to desired restored name in the form src1:dst1,src2:dst2,...")
 	flags.Var(&o.Labels, "labels", "Labels to apply to the restore.")
+	flags.Var(&o.Annotations, "annotations", "Annotations to apply to the restore.")
 	flags.Var(&o.IncludeResources, "include-resources", "Resources to include in the restore, formatted as resource.group, such as storageclasses.storage.k8s.io (use '*' for all resources).")
 	flags.Var(&o.ExcludeResources, "exclude-resources", "Resources to exclude from the restore, formatted as resource.group, such as storageclasses.storage.k8s.io.")
 	flags.StringVar(&o.ExistingResourcePolicy, "existing-resource-policy", "", "Restore Policy to be used during the restore workflow, can be - none or update")
@@ -146,6 +153,11 @@ func (o *CreateOptions) BindFlags(flags *pflag.FlagSet) {
 	flags.BoolVarP(&o.Wait, "wait", "w", o.Wait, "Wait for the operation to complete.")
 
 	flags.StringVar(&o.ResourceModifierConfigMap, "resource-modifier-configmap", "", "Reference to the resource modifier configmap that restore will use")
+
+	f = flags.VarPF(&o.WriteSparseFiles, "write-sparse-files", "", "Whether to write sparse files during restoring volumes")
+	f.NoOptDefVal = cmd.TRUE
+
+	flags.IntVar(&o.ParallelFilesDownload, "parallel-files-download", 0, "The number of restore operations to run in parallel. If set to 0, the default parallelism will be the number of CPUs for the node that node agent pod is running.")
 }
 
 func (o *CreateOptions) Complete(args []string, f client.Factory) error {
@@ -191,8 +203,12 @@ func (o *CreateOptions) Validate(c *cobra.Command, args []string, f client.Facto
 		return errors.New("either a 'selector' or an 'or-selector' can be specified, but not both")
 	}
 
-	if len(o.ExistingResourcePolicy) > 0 && !isResourcePolicyValid(o.ExistingResourcePolicy) {
+	if len(o.ExistingResourcePolicy) > 0 && !restore.IsResourcePolicyValid(o.ExistingResourcePolicy) {
 		return errors.New("existing-resource-policy has invalid value, it accepts only none, update as value")
+	}
+
+	if o.ParallelFilesDownload < 0 {
+		return errors.New("parallel-files-download cannot be negative")
 	}
 
 	switch {
@@ -283,12 +299,12 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 		}
 	}
 
-	var resModifiers *corev1.TypedLocalObjectReference = nil
+	var resModifiers *corev1api.TypedLocalObjectReference
 
 	if o.ResourceModifierConfigMap != "" {
-		resModifiers = &corev1.TypedLocalObjectReference{
+		resModifiers = &corev1api.TypedLocalObjectReference{
 			// Group for core API is ""
-			APIGroup: &corev1.SchemeGroupVersion.Group,
+			APIGroup: &corev1api.SchemeGroupVersion.Group,
 			Kind:     resourcemodifiers.ConfigmapRefType,
 			Name:     o.ResourceModifierConfigMap,
 		}
@@ -296,9 +312,10 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 
 	restore := &api.Restore{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: f.Namespace(),
-			Name:      o.RestoreName,
-			Labels:    o.Labels.Data(),
+			Namespace:   f.Namespace(),
+			Name:        o.RestoreName,
+			Labels:      o.Labels.Data(),
+			Annotations: o.Annotations.Data(),
 		},
 		Spec: api.RestoreSpec{
 			BackupName:              o.BackupName,
@@ -317,6 +334,10 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 			ResourceModifier:        resModifiers,
 			ItemOperationTimeout: metav1.Duration{
 				Duration: o.ItemOperationTimeout,
+			},
+			UploaderConfig: &api.UploaderConfigForRestore{
+				WriteSparseFiles:      o.WriteSparseFiles.Value,
+				ParallelFilesDownload: o.ParallelFilesDownload,
 			},
 		},
 	}
@@ -346,9 +367,9 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 		}
 		restoreInformer := cache.NewSharedInformer(&lw, &api.Restore{}, time.Second)
 
-		restoreInformer.AddEventHandler(
+		_, _ = restoreInformer.AddEventHandler(
 			cache.FilteringResourceEventHandler{
-				FilterFunc: func(obj interface{}) bool {
+				FilterFunc: func(obj any) bool {
 					restore, ok := obj.(*api.Restore)
 					if !ok {
 						return false
@@ -356,14 +377,14 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 					return restore.Name == o.RestoreName
 				},
 				Handler: cache.ResourceEventHandlerFuncs{
-					UpdateFunc: func(_, obj interface{}) {
+					UpdateFunc: func(_, obj any) {
 						restore, ok := obj.(*api.Restore)
 						if !ok {
 							return
 						}
 						updates <- restore
 					},
-					DeleteFunc: func(obj interface{}) {
+					DeleteFunc: func(obj any) {
 						restore, ok := obj.(*api.Restore)
 						if !ok {
 							return
@@ -411,11 +432,4 @@ func (o *CreateOptions) Run(c *cobra.Command, f client.Factory) error {
 	fmt.Printf("Run `velero restore describe %s` or `velero restore logs %s` for more details.\n", restore.Name, restore.Name)
 
 	return nil
-}
-
-func isResourcePolicyValid(resourcePolicy string) bool {
-	if resourcePolicy == string(api.PolicyTypeNone) || resourcePolicy == string(api.PolicyTypeUpdate) {
-		return true
-	}
-	return false
 }

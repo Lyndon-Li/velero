@@ -22,7 +22,7 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"github.com/robfig/cron"
+	cron "github.com/robfig/cron/v3"
 	"github.com/sirupsen/logrus"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,9 +31,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	bld "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/builder"
+	"github.com/vmware-tanzu/velero/pkg/constant"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -44,10 +46,11 @@ const (
 
 type scheduleReconciler struct {
 	client.Client
-	namespace string
-	logger    logrus.FieldLogger
-	clock     clocks.WithTickerAndDelayedExecution
-	metrics   *metrics.ServerMetrics
+	namespace       string
+	logger          logrus.FieldLogger
+	clock           clocks.WithTickerAndDelayedExecution
+	metrics         *metrics.ServerMetrics
+	skipImmediately bool
 }
 
 func NewScheduleReconciler(
@@ -55,30 +58,34 @@ func NewScheduleReconciler(
 	logger logrus.FieldLogger,
 	client client.Client,
 	metrics *metrics.ServerMetrics,
+	skipImmediately bool,
 ) *scheduleReconciler {
 	return &scheduleReconciler{
-		Client:    client,
-		namespace: namespace,
-		logger:    logger,
-		clock:     clocks.RealClock{},
-		metrics:   metrics,
+		Client:          client,
+		namespace:       namespace,
+		logger:          logger,
+		clock:           clocks.RealClock{},
+		metrics:         metrics,
+		skipImmediately: skipImmediately,
 	}
 }
 
 func (c *scheduleReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	s := kube.NewPeriodicalEnqueueSource(c.logger, mgr.GetClient(), &velerov1.ScheduleList{}, scheduleSyncPeriod, kube.PeriodicalEnqueueSourceOption{})
+	pred := kube.NewAllEventPredicate(func(obj client.Object) bool {
+		schedule := obj.(*velerov1.Schedule)
+		if pause := schedule.Spec.Paused; pause {
+			c.logger.Infof("schedule %s is paused, skip", schedule.Name)
+			return false
+		}
+		return true
+	})
+	s := kube.NewPeriodicalEnqueueSource(c.logger.WithField("controller", constant.ControllerSchedule), mgr.GetClient(), &velerov1.ScheduleList{}, scheduleSyncPeriod,
+		kube.PeriodicalEnqueueSourceOption{
+			Predicates: []predicate.Predicate{pred},
+		})
 	return ctrl.NewControllerManagedBy(mgr).
-		// global predicate, works for both For and Watch
-		WithEventFilter(kube.NewAllEventPredicate(func(obj client.Object) bool {
-			schedule := obj.(*velerov1.Schedule)
-			if pause := schedule.Spec.Paused; pause {
-				c.logger.Infof("schedule %s is paused, skip", schedule.Name)
-				return false
-			}
-			return true
-		})).
-		For(&velerov1.Schedule{}, bld.WithPredicates(kube.SpecChangePredicate{})).
-		Watches(s, nil).
+		For(&velerov1.Schedule{}, bld.WithPredicates(kube.SpecChangePredicate{}, pred)).
+		WatchesRawSource(s).
 		Complete(c)
 }
 
@@ -99,10 +106,17 @@ func (c *scheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{}, errors.Wrapf(err, "error getting schedule %s", req.String())
 	}
-
 	c.metrics.InitSchedule(schedule.Name)
 
 	original := schedule.DeepCopy()
+
+	if schedule.Spec.SkipImmediately == nil {
+		schedule.Spec.SkipImmediately = &c.skipImmediately
+	}
+	if schedule.Spec.SkipImmediately != nil && *schedule.Spec.SkipImmediately {
+		*schedule.Spec.SkipImmediately = false
+		schedule.Status.LastSkipped = &metav1.Time{Time: c.clock.Now()}
+	}
 
 	// validation - even if the item is Enabled, we can't trust it
 	// so re-validate
@@ -114,12 +128,28 @@ func (c *scheduleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		schedule.Status.ValidationErrors = errs
 	} else {
 		schedule.Status.Phase = velerov1.SchedulePhaseEnabled
+		schedule.Status.ValidationErrors = nil
 	}
 
-	// update status if it's changed
+	scheduleNeedsPatch := false
+	errStringArr := make([]string, 0)
 	if currentPhase != schedule.Status.Phase {
+		scheduleNeedsPatch = true
+		errStringArr = append(errStringArr, fmt.Sprintf("phase to %s", schedule.Status.Phase))
+	}
+	// update spec.SkipImmediately if it's changed
+	if original.Spec.SkipImmediately != schedule.Spec.SkipImmediately {
+		scheduleNeedsPatch = true
+		errStringArr = append(errStringArr, fmt.Sprintf("spec.skipImmediately to %v", schedule.Spec.SkipImmediately))
+	}
+	// update status if it's changed
+	if original.Status.LastSkipped != schedule.Status.LastSkipped {
+		scheduleNeedsPatch = true
+		errStringArr = append(errStringArr, fmt.Sprintf("last skipped to %v", schedule.Status.LastSkipped))
+	}
+	if scheduleNeedsPatch {
 		if err := c.Patch(ctx, schedule, client.MergeFrom(original)); err != nil {
-			return ctrl.Result{}, errors.Wrapf(err, "error updating phase of schedule %s to %s", req.String(), schedule.Status.Phase)
+			return ctrl.Result{}, errors.Wrapf(err, "error updating %v for schedule %s", errStringArr, req.String())
 		}
 	}
 
@@ -248,6 +278,9 @@ func getNextRunTime(schedule *velerov1.Schedule, cronSchedule cron.Schedule, asO
 		lastBackupTime = schedule.Status.LastBackup.Time
 	} else {
 		lastBackupTime = schedule.CreationTimestamp.Time
+	}
+	if schedule.Status.LastSkipped != nil && schedule.Status.LastSkipped.After(lastBackupTime) {
+		lastBackupTime = schedule.Status.LastSkipped.Time
 	}
 
 	nextRunTime := cronSchedule.Next(lastBackupTime)

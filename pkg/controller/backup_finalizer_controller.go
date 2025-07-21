@@ -20,6 +20,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -31,6 +32,10 @@ import (
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	pkgbackup "github.com/vmware-tanzu/velero/pkg/backup"
+	"github.com/vmware-tanzu/velero/pkg/client"
+	"github.com/vmware-tanzu/velero/pkg/constant"
+	"github.com/vmware-tanzu/velero/pkg/itemoperation"
+	"github.com/vmware-tanzu/velero/pkg/kuberesource"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/persistence"
 	"github.com/vmware-tanzu/velero/pkg/plugin/clientmgmt"
@@ -41,6 +46,7 @@ import (
 // backupFinalizerReconciler reconciles a Backup object
 type backupFinalizerReconciler struct {
 	client            kbclient.Client
+	globalCRClient    kbclient.Client
 	clock             clocks.WithTickerAndDelayedExecution
 	backupper         pkgbackup.Backupper
 	newPluginManager  func(logrus.FieldLogger) clientmgmt.Manager
@@ -48,11 +54,13 @@ type backupFinalizerReconciler struct {
 	metrics           *metrics.ServerMetrics
 	backupStoreGetter persistence.ObjectBackupStoreGetter
 	log               logrus.FieldLogger
+	resourceTimeout   time.Duration
 }
 
 // NewBackupFinalizerReconciler initializes and returns backupFinalizerReconciler struct.
 func NewBackupFinalizerReconciler(
 	client kbclient.Client,
+	globalCRClient kbclient.Client,
 	clock clocks.WithTickerAndDelayedExecution,
 	backupper pkgbackup.Backupper,
 	newPluginManager func(logrus.FieldLogger) clientmgmt.Manager,
@@ -60,9 +68,11 @@ func NewBackupFinalizerReconciler(
 	backupStoreGetter persistence.ObjectBackupStoreGetter,
 	log logrus.FieldLogger,
 	metrics *metrics.ServerMetrics,
+	resourceTimeout time.Duration,
 ) *backupFinalizerReconciler {
 	return &backupFinalizerReconciler{
 		client:            client,
+		globalCRClient:    globalCRClient,
 		clock:             clock,
 		backupper:         backupper,
 		newPluginManager:  newPluginManager,
@@ -106,11 +116,19 @@ func (r *backupFinalizerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	original := backup.DeepCopy()
 	defer func() {
 		switch backup.Status.Phase {
-		case velerov1api.BackupPhaseCompleted, velerov1api.BackupPhasePartiallyFailed, velerov1api.BackupPhaseFailed, velerov1api.BackupPhaseFailedValidation:
+		case
+			velerov1api.BackupPhaseCompleted,
+			velerov1api.BackupPhasePartiallyFailed,
+			velerov1api.BackupPhaseFailed,
+			velerov1api.BackupPhaseFailedValidation:
 			r.backupTracker.Delete(backup.Namespace, backup.Name)
 		}
 		// Always attempt to Patch the backup object and status after each reconciliation.
-		if err := r.client.Patch(ctx, backup, kbclient.MergeFrom(original)); err != nil {
+		//
+		// if this patch fails, there may not be another opportunity to update the backup object without external update event.
+		// so we retry
+		// This retries updating Finalzing/FinalizingPartiallyFailed to Completed/PartiallyFailed
+		if err := client.RetryOnErrorMaxBackOff(r.resourceTimeout, func() error { return r.client.Patch(ctx, backup, kbclient.MergeFrom(original)) }); err != nil {
 			log.WithError(err).Error("Error updating backup")
 			return
 		}
@@ -143,10 +161,10 @@ func (r *backupFinalizerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		Backup:           backup,
 		StorageLocation:  location,
 		SkippedPVTracker: pkgbackup.NewSkipPVTracker(),
+		BackedUpItems:    pkgbackup.NewBackedUpItemsMap(),
 	}
 	var outBackupFile *os.File
 	if len(operations) > 0 {
-		// Call itemBackupper.BackupItem for the list of items updated by async operations
 		log.Info("Setting up finalized backup temp file")
 		inBackupFile, err := downloadToTempFile(backup.Name, backupStore, log)
 		if err != nil {
@@ -167,7 +185,17 @@ func (r *backupFinalizerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			return ctrl.Result{}, errors.WithStack(err)
 		}
 		backupItemActionsResolver := framework.NewBackupItemActionResolverV2(actions)
-		err = r.backupper.FinalizeBackup(log, backupRequest, inBackupFile, outBackupFile, backupItemActionsResolver, operations)
+
+		// Call itemBackupper.BackupItem for the list of items updated by async operations
+		err = r.backupper.FinalizeBackup(
+			log,
+			backupRequest,
+			inBackupFile,
+			outBackupFile,
+			backupItemActionsResolver,
+			operations,
+			backupStore,
+		)
 		if err != nil {
 			log.WithError(err).Error("error finalizing Backup")
 			return ctrl.Result{}, errors.WithStack(err)
@@ -184,7 +212,10 @@ func (r *backupFinalizerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		r.metrics.RegisterBackupPartialFailure(backupScheduleName)
 		r.metrics.RegisterBackupLastStatus(backupScheduleName, metrics.BackupLastStatusFailure)
 	}
+
 	backup.Status.CompletionTimestamp = &metav1.Time{Time: r.clock.Now()}
+	backup.Status.CSIVolumeSnapshotsCompleted = updateCSIVolumeSnapshotsCompleted(operations)
+
 	recordBackupMetrics(log, backup, outBackupFile, r.metrics, true)
 
 	// update backup metadata in object store
@@ -208,5 +239,22 @@ func (r *backupFinalizerReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *backupFinalizerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&velerov1api.Backup{}).
+		Named(constant.ControllerBackupFinalizer).
 		Complete(r)
+}
+
+// updateCSIVolumeSnapshotsCompleted calculate the completed VS number according to
+// the backup's async operation list.
+func updateCSIVolumeSnapshotsCompleted(
+	operations []*itemoperation.BackupOperation) int {
+	completedNum := 0
+
+	for index := range operations {
+		if operations[index].Spec.ResourceIdentifier.String() == kuberesource.VolumeSnapshots.String() &&
+			operations[index].Status.Phase == itemoperation.OperationPhaseCompleted {
+			completedNum++
+		}
+	}
+
+	return completedNum
 }

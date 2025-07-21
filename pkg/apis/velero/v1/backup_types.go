@@ -17,7 +17,7 @@ limitations under the License.
 package v1
 
 import (
-	v1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -113,6 +113,10 @@ type BackupSpec struct {
 	// +optional
 	TTL metav1.Duration `json:"ttl,omitempty"`
 
+	// VolumeGroupSnapshotLabelKey specifies the label key to group PVCs under a VGS.
+	// +optional
+	VolumeGroupSnapshotLabelKey string `json:"volumeGroupSnapshotLabelKey,omitempty"`
+
 	// IncludeClusterResources specifies whether cluster-scoped resources
 	// should be included for consideration in the backup.
 	// +optional
@@ -159,12 +163,12 @@ type BackupSpec struct {
 	CSISnapshotTimeout metav1.Duration `json:"csiSnapshotTimeout,omitempty"`
 
 	// ItemOperationTimeout specifies the time used to wait for asynchronous BackupItemAction operations
-	// The default value is 1 hour.
+	// The default value is 4 hour.
 	// +optional
 	ItemOperationTimeout metav1.Duration `json:"itemOperationTimeout,omitempty"`
 	// ResourcePolicy specifies the referenced resource policies that backup should follow
 	// +optional
-	ResourcePolicy *v1.TypedLocalObjectReference `json:"resourcePolicy,omitempty"`
+	ResourcePolicy *corev1api.TypedLocalObjectReference `json:"resourcePolicy,omitempty"`
 
 	// SnapshotMoveData specifies whether snapshot data should be moved
 	// +optional
@@ -175,6 +179,18 @@ type BackupSpec struct {
 	// If DataMover is "" or "velero", the built-in data mover will be used.
 	// +optional
 	DataMover string `json:"datamover,omitempty"`
+
+	// UploaderConfig specifies the configuration for the uploader.
+	// +optional
+	// +nullable
+	UploaderConfig *UploaderConfigForBackup `json:"uploaderConfig,omitempty"`
+}
+
+// UploaderConfigForBackup defines the configuration for the uploader when doing backup.
+type UploaderConfigForBackup struct {
+	// ParallelFilesUpload is the number of files parallel uploads to perform when using the uploader.
+	// +optional
+	ParallelFilesUpload int `json:"parallelFilesUpload,omitempty"`
 }
 
 // BackupHooks contains custom behaviors that should be executed at different phases of the backup.
@@ -261,12 +277,12 @@ type ExecHook struct {
 type HookErrorMode string
 
 const (
-	// HookErrorModeContinue means that an error from a hook is acceptable, and the backup can
-	// proceed.
+	// HookErrorModeContinue means that an error from a hook is acceptable and the backup/restore can
+	// proceed with the rest of hooks' execution. This backup/restore should be in `PartiallyFailed` status.
 	HookErrorModeContinue HookErrorMode = "Continue"
 
-	// HookErrorModeFail means that an error from a hook is problematic, and the backup should be in
-	// error.
+	// HookErrorModeFail means that an error from a hook is problematic and Velero should stop executing following hooks.
+	// This backup/restore should be in `PartiallyFailed` status.
 	HookErrorModeFail HookErrorMode = "Fail"
 )
 
@@ -434,6 +450,11 @@ type BackupStatus struct {
 	// BackupItemAction operations for this backup which ended with an error.
 	// +optional
 	BackupItemOperationsFailed int `json:"backupItemOperationsFailed,omitempty"`
+
+	// HookStatus contains information about the status of the hooks.
+	// +optional
+	// +nullable
+	HookStatus *HookStatus `json:"hookStatus,omitempty"`
 }
 
 // BackupProgress stores information about the progress of a Backup's execution.
@@ -449,6 +470,19 @@ type BackupProgress struct {
 	// backup tarball so far.
 	// +optional
 	ItemsBackedUp int `json:"itemsBackedUp,omitempty"`
+}
+
+// HookStatus stores information about the status of the hooks.
+type HookStatus struct {
+	// HooksAttempted is the total number of attempted hooks
+	// Specifically, HooksAttempted represents the number of hooks that failed to execute
+	// and the number of hooks that executed successfully.
+	// +optional
+	HooksAttempted int `json:"hooksAttempted,omitempty"`
+
+	// HooksFailed is the total number of hooks which ended with an error
+	// +optional
+	HooksFailed int `json:"hooksFailed,omitempty"`
 }
 
 // +genclient

@@ -21,13 +21,18 @@ import (
 
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
-	v1 "k8s.io/api/core/v1"
+	"github.com/stretchr/testify/require"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
 
 func TestGetResourceModifiersFromConfig(t *testing.T) {
-	cm1 := &v1.ConfigMap{
+	cm1 := &corev1api.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-configmap",
 			Namespace: "test-namespace",
@@ -60,7 +65,7 @@ func TestGetResourceModifiersFromConfig(t *testing.T) {
 			},
 		},
 	}
-	cm2 := &v1.ConfigMap{
+	cm2 := &corev1api.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-configmap",
 			Namespace: "test-namespace",
@@ -95,7 +100,7 @@ func TestGetResourceModifiersFromConfig(t *testing.T) {
 		},
 	}
 
-	cm3 := &v1.ConfigMap{
+	cm3 := &corev1api.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-configmap",
 			Namespace: "test-namespace",
@@ -105,7 +110,7 @@ func TestGetResourceModifiersFromConfig(t *testing.T) {
 		},
 	}
 
-	cm4 := &v1.ConfigMap{
+	cm4 := &corev1api.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test-configmap",
 			Namespace: "test-namespace",
@@ -131,8 +136,188 @@ func TestGetResourceModifiersFromConfig(t *testing.T) {
 		},
 	}
 
+	cm5 := &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap",
+			Namespace: "test-namespace",
+		},
+		Data: map[string]string{
+			"sub.yml": "version: v1\nresourceModifierRules:\n- conditions:\n    groupResource: pods\n    namespaces:\n    - ns1\n    matches:\n    - path: /metadata/annotations/foo\n      value: bar\n  mergePatches:\n  - patchData: |\n      metadata:\n        annotations:\n          foo: null",
+		},
+	}
+
+	rules5 := &ResourceModifiers{
+		Version: "v1",
+		ResourceModifierRules: []ResourceModifierRule{
+			{
+				Conditions: Conditions{
+					GroupResource: "pods",
+					Namespaces: []string{
+						"ns1",
+					},
+					Matches: []MatchRule{
+						{
+							Path:  "/metadata/annotations/foo",
+							Value: "bar",
+						},
+					},
+				},
+				MergePatches: []JSONMergePatch{
+					{
+						PatchData: "metadata:\n  annotations:\n    foo: null",
+					},
+				},
+			},
+		},
+	}
+
+	cm6 := &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap",
+			Namespace: "test-namespace",
+		},
+		Data: map[string]string{
+			"sub.yml": "version: v1\nresourceModifierRules:\n- conditions:\n    groupResource: pods\n    namespaces:\n    - ns1\n  strategicPatches:\n  - patchData: |\n      spec:\n        containers:\n        - name: nginx\n          image: repo2/nginx",
+		},
+	}
+
+	rules6 := &ResourceModifiers{
+		Version: "v1",
+		ResourceModifierRules: []ResourceModifierRule{
+			{
+				Conditions: Conditions{
+					GroupResource: "pods",
+					Namespaces: []string{
+						"ns1",
+					},
+				},
+				StrategicPatches: []StrategicMergePatch{
+					{
+						PatchData: "spec:\n  containers:\n  - name: nginx\n    image: repo2/nginx",
+					},
+				},
+			},
+		},
+	}
+
+	cm7 := &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap",
+			Namespace: "test-namespace",
+		},
+		Data: map[string]string{
+			"sub.yml": "version: v1\nresourceModifierRules:\n- conditions:\n    groupResource: pods\n    namespaces:\n    - ns1\n  mergePatches:\n  - patchData: |\n      {\"metadata\":{\"annotations\":{\"foo\":null}}}",
+		},
+	}
+
+	rules7 := &ResourceModifiers{
+		Version: "v1",
+		ResourceModifierRules: []ResourceModifierRule{
+			{
+				Conditions: Conditions{
+					GroupResource: "pods",
+					Namespaces: []string{
+						"ns1",
+					},
+				},
+				MergePatches: []JSONMergePatch{
+					{
+						PatchData: `{"metadata":{"annotations":{"foo":null}}}`,
+					},
+				},
+			},
+		},
+	}
+
+	cm8 := &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap",
+			Namespace: "test-namespace",
+		},
+		Data: map[string]string{
+			"sub.yml": "version: v1\nresourceModifierRules:\n- conditions:\n    groupResource: pods\n    namespaces:\n    - ns1\n  strategicPatches:\n  - patchData: |\n      {\"spec\":{\"containers\":[{\"name\": \"nginx\",\"image\": \"repo2/nginx\"}]}}",
+		},
+	}
+
+	rules8 := &ResourceModifiers{
+		Version: "v1",
+		ResourceModifierRules: []ResourceModifierRule{
+			{
+				Conditions: Conditions{
+					GroupResource: "pods",
+					Namespaces: []string{
+						"ns1",
+					},
+				},
+				StrategicPatches: []StrategicMergePatch{
+					{
+						PatchData: `{"spec":{"containers":[{"name": "nginx","image": "repo2/nginx"}]}}`,
+					},
+				},
+			},
+		},
+	}
+	cm9 := &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap",
+			Namespace: "test-namespace",
+		},
+		Data: map[string]string{
+			"sub.yml": "version: v1\nresourceModifierRules:\n- conditions:\n    groupResource: deployments.apps\n    resourceNameRegex: \"^test-.*$\"\n    namespaces:\n    - bar\n    - foo\n  patches:\n  - operation: replace\n    path: \"/value/bool\"\n    value: \"\\\"true\\\"\"\n\n\n",
+		},
+	}
+
+	rules9 := &ResourceModifiers{
+		Version: "v1",
+		ResourceModifierRules: []ResourceModifierRule{
+			{
+				Conditions: Conditions{
+					GroupResource:     "deployments.apps",
+					ResourceNameRegex: "^test-.*$",
+					Namespaces:        []string{"bar", "foo"},
+				},
+				Patches: []JSONPatch{
+					{
+						Operation: "replace",
+						Path:      "/value/bool",
+						Value:     `"true"`,
+					},
+				},
+			},
+		},
+	}
+	cm10 := &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-configmap",
+			Namespace: "test-namespace",
+		},
+		Data: map[string]string{
+			"sub.yml": "version: v1\nresourceModifierRules:\n- conditions:\n    groupResource: deployments.apps\n    resourceNameRegex: \"^test-.*$\"\n    namespaces:\n    - bar\n    - foo\n  patches:\n  - operation: replace\n    path: \"/value/bool\"\n    value: \"true\"\n\n\n",
+		},
+	}
+
+	rules10 := &ResourceModifiers{
+		Version: "v1",
+		ResourceModifierRules: []ResourceModifierRule{
+			{
+				Conditions: Conditions{
+					GroupResource:     "deployments.apps",
+					ResourceNameRegex: "^test-.*$",
+					Namespaces:        []string{"bar", "foo"},
+				},
+				Patches: []JSONPatch{
+					{
+						Operation: "replace",
+						Path:      "/value/bool",
+						Value:     "true",
+					},
+				},
+			},
+		},
+	}
+
 	type args struct {
-		cm *v1.ConfigMap
+		cm *corev1api.ConfigMap
 	}
 	tests := []struct {
 		name    string
@@ -180,6 +365,54 @@ func TestGetResourceModifiersFromConfig(t *testing.T) {
 			want:    nil,
 			wantErr: true,
 		},
+		{
+			name: "complex yaml data with json merge patch",
+			args: args{
+				cm: cm5,
+			},
+			want:    rules5,
+			wantErr: false,
+		},
+		{
+			name: "complex yaml data with strategic merge patch",
+			args: args{
+				cm: cm6,
+			},
+			want:    rules6,
+			wantErr: false,
+		},
+		{
+			name: "complex json data with json merge patch",
+			args: args{
+				cm: cm7,
+			},
+			want:    rules7,
+			wantErr: false,
+		},
+		{
+			name: "complex json data with strategic merge patch",
+			args: args{
+				cm: cm8,
+			},
+			want:    rules8,
+			wantErr: false,
+		},
+		{
+			name: "bool value as string",
+			args: args{
+				cm: cm9,
+			},
+			want:    rules9,
+			wantErr: false,
+		},
+		{
+			name: "bool value as bool",
+			args: args{
+				cm: cm10,
+			},
+			want:    rules10,
+			wantErr: false,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -196,57 +429,70 @@ func TestGetResourceModifiersFromConfig(t *testing.T) {
 }
 
 func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
-
 	pvcStandardSc := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "PersistentVolumeClaim",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "test-pvc",
 				"namespace": "foo",
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"storageClassName": "standard",
 			},
 		},
 	}
 
 	pvcPremiumSc := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "v1",
 			"kind":       "PersistentVolumeClaim",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "test-pvc",
 				"namespace": "foo",
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"storageClassName": "premium",
 			},
 		},
 	}
 
+	pvcGoldSc := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "PersistentVolumeClaim",
+			"metadata": map[string]any{
+				"name":      "test-pvc",
+				"namespace": "foo",
+			},
+			"spec": map[string]any{
+				"storageClassName": "gold",
+			},
+		},
+	}
+
 	deployNginxOneReplica := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "test-deployment",
 				"namespace": "foo",
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app": "nginx",
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": int64(1),
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"labels": map[string]interface{}{
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
 							"app": "nginx",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx",
 								"image": "nginx:latest",
 							},
@@ -257,27 +503,27 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 		},
 	}
 	deployNginxTwoReplica := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "test-deployment",
 				"namespace": "foo",
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app": "nginx",
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": int64(2),
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"labels": map[string]interface{}{
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
 							"app": "nginx",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx",
 								"image": "nginx:latest",
 							},
@@ -288,31 +534,31 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 		},
 	}
 	deployNginxMysql := &unstructured.Unstructured{
-		Object: map[string]interface{}{
+		Object: map[string]any{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
-			"metadata": map[string]interface{}{
+			"metadata": map[string]any{
 				"name":      "test-deployment",
 				"namespace": "foo",
-				"labels": map[string]interface{}{
+				"labels": map[string]any{
 					"app": "nginx",
 				},
 			},
-			"spec": map[string]interface{}{
+			"spec": map[string]any{
 				"replicas": int64(1),
-				"template": map[string]interface{}{
-					"metadata": map[string]interface{}{
-						"labels": map[string]interface{}{
+				"template": map[string]any{
+					"metadata": map[string]any{
+						"labels": map[string]any{
 							"app": "nginx",
 						},
 					},
-					"spec": map[string]interface{}{
-						"containers": []interface{}{
-							map[string]interface{}{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
 								"name":  "nginx",
 								"image": "nginx:latest",
 							},
-							map[string]interface{}{
+							map[string]any{
 								"name":  "mysql",
 								"image": "mysql:latest",
 							},
@@ -322,7 +568,24 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 			},
 		},
 	}
-
+	cmTrue := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"data": map[string]any{
+				"test": "true",
+			},
+		},
+	}
+	cmFalse := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"data": map[string]any{
+				"test": "false",
+			},
+		},
+	}
 	type fields struct {
 		Version               string
 		ResourceModifierRules []ResourceModifierRule
@@ -338,6 +601,33 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 		wantErr bool
 		wantObj *unstructured.Unstructured
 	}{
+		{
+			name: "configmap true false string",
+			fields: fields{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource:     "configmaps",
+							ResourceNameRegex: ".*",
+						},
+						Patches: []JSONPatch{
+							{
+								Operation: "replace",
+								Path:      "/data/test",
+								Value:     `"false"`,
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				obj:           cmTrue.DeepCopy(),
+				groupResource: "configmaps",
+			},
+			wantErr: false,
+			wantObj: cmFalse.DeepCopy(),
+		},
 		{
 			name: "Invalid Regex throws error",
 			fields: fields{
@@ -405,6 +695,110 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 			wantObj: pvcPremiumSc.DeepCopy(),
 		},
 		{
+			name: "pvc with standard storage class should be patched to premium, even when rules are [standard => premium, premium => gold]",
+			fields: fields{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource:     "persistentvolumeclaims",
+							ResourceNameRegex: ".*",
+							Matches: []MatchRule{
+								{
+									Path:  "/spec/storageClassName",
+									Value: "standard",
+								},
+							},
+						},
+						Patches: []JSONPatch{
+							{
+								Operation: "replace",
+								Path:      "/spec/storageClassName",
+								Value:     "premium",
+							},
+						},
+					},
+					{
+						Conditions: Conditions{
+							GroupResource:     "persistentvolumeclaims",
+							ResourceNameRegex: ".*",
+							Matches: []MatchRule{
+								{
+									Path:  "/spec/storageClassName",
+									Value: "premium",
+								},
+							},
+						},
+						Patches: []JSONPatch{
+							{
+								Operation: "replace",
+								Path:      "/spec/storageClassName",
+								Value:     "gold",
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				obj:           pvcStandardSc.DeepCopy(),
+				groupResource: "persistentvolumeclaims",
+			},
+			wantErr: false,
+			wantObj: pvcPremiumSc.DeepCopy(),
+		},
+		{
+			name: "pvc with standard storage class should be patched to gold, even when rules are [standard => premium, standard => gold]",
+			fields: fields{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource:     "persistentvolumeclaims",
+							ResourceNameRegex: ".*",
+							Matches: []MatchRule{
+								{
+									Path:  "/spec/storageClassName",
+									Value: "standard",
+								},
+							},
+						},
+						Patches: []JSONPatch{
+							{
+								Operation: "replace",
+								Path:      "/spec/storageClassName",
+								Value:     "premium",
+							},
+						},
+					},
+					{
+						Conditions: Conditions{
+							GroupResource:     "persistentvolumeclaims",
+							ResourceNameRegex: ".*",
+							Matches: []MatchRule{
+								{
+									Path:  "/spec/storageClassName",
+									Value: "standard",
+								},
+							},
+						},
+						Patches: []JSONPatch{
+							{
+								Operation: "replace",
+								Path:      "/spec/storageClassName",
+								Value:     "gold",
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				obj:           pvcStandardSc.DeepCopy(),
+				groupResource: "persistentvolumeclaims",
+			},
+			wantErr: false,
+			wantObj: pvcGoldSc.DeepCopy(),
+		},
+		{
 			name: "nginx deployment: 1 -> 2 replicas",
 			fields: fields{
 				Version: "v1",
@@ -469,6 +863,38 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 			},
 			wantErr: false,
 			wantObj: deployNginxOneReplica.DeepCopy(),
+		},
+		{
+			name: "nginx deployment: Empty Resource Regex",
+			fields: fields{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "deployments.apps",
+							Namespaces:    []string{"foo"},
+						},
+						Patches: []JSONPatch{
+							{
+								Operation: "test",
+								Path:      "/spec/replicas",
+								Value:     "1",
+							},
+							{
+								Operation: "replace",
+								Path:      "/spec/replicas",
+								Value:     "2",
+							},
+						},
+					},
+				},
+			},
+			args: args{
+				obj:           deployNginxOneReplica.DeepCopy(),
+				groupResource: "deployments.apps",
+			},
+			wantErr: false,
+			wantObj: deployNginxTwoReplica.DeepCopy(),
 		},
 		{
 			name: "nginx deployment: Empty Resource Regex",
@@ -719,10 +1145,666 @@ func TestResourceModifiers_ApplyResourceModifierRules(t *testing.T) {
 				Version:               tt.fields.Version,
 				ResourceModifierRules: tt.fields.ResourceModifierRules,
 			}
-			got := p.ApplyResourceModifierRules(tt.args.obj, tt.args.groupResource, logrus.New())
+			got := p.ApplyResourceModifierRules(tt.args.obj, tt.args.groupResource, nil, logrus.New())
 
 			assert.Equal(t, tt.wantErr, len(got) > 0)
 			assert.Equal(t, *tt.wantObj, *tt.args.obj)
+		})
+	}
+}
+
+var podYAMLWithNginxImage = `
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod1
+  namespace: fake
+spec:
+  containers:
+  - image: nginx
+    name: nginx
+`
+
+var podYAMLWithNginx1Image = `
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod1
+  namespace: fake
+spec:
+  containers:
+  - image: nginx1
+    name: nginx
+`
+
+var podYAMLWithNFSVolume = `
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod1
+  namespace: fake
+spec:
+  containers:
+  - image: fake
+    name: fake
+    volumeMounts:
+    - mountPath: /fake1
+      name: vol1
+    - mountPath: /fake2
+      name: vol2
+  volumes:
+  - name: vol1
+    nfs:
+      path: /fake2
+  - name: vol2
+    emptyDir: {}
+`
+
+var podYAMLWithPVCVolume = `
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod1
+  namespace: fake
+spec:
+  containers:
+  - image: fake
+    name: fake
+    volumeMounts:
+    - mountPath: /fake1
+      name: vol1
+    - mountPath: /fake2
+      name: vol2
+  volumes:
+  - name: vol1
+    persistentVolumeClaim:
+      claimName: pvc1
+  - name: vol2
+    emptyDir: {}
+`
+
+var svcYAMLWithPort8000 = `
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc1
+  namespace: fake
+spec:
+  ports:
+  - name: fake1
+    port: 8001
+    protocol: TCP
+    targetPort: 8001
+  - name: fake
+    port: 8000
+    protocol: TCP
+    targetPort: 8000
+  - name: fake2
+    port: 8002
+    protocol: TCP
+    targetPort: 8002
+`
+
+var svcYAMLWithPort9000 = `
+apiVersion: v1
+kind: Service
+metadata:
+  name: svc1
+  namespace: fake
+spec:
+  ports:
+  - name: fake1
+    port: 8001
+    protocol: TCP
+    targetPort: 8001
+  - name: fake
+    port: 9000
+    protocol: TCP
+    targetPort: 9000
+  - name: fake2
+    port: 8002
+    protocol: TCP
+    targetPort: 8002
+`
+
+var cmYAMLWithLabelAToB = `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm1
+  namespace: fake
+  labels:
+    a: b
+    c: d
+`
+
+var cmYAMLWithLabelAToC = `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm1
+  namespace: fake
+  labels:
+    a: c
+    c: d
+`
+
+var cmYAMLWithoutLabelA = `
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cm1
+  namespace: fake
+  labels:
+    c: d
+`
+
+func TestResourceModifiers_ApplyResourceModifierRules_StrategicMergePatch(t *testing.T) {
+	scheme := runtime.NewScheme()
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+	unstructuredSerializer := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	o1, _, err := unstructuredSerializer.Decode([]byte(podYAMLWithNFSVolume), nil, nil)
+	require.NoError(t, err)
+	podWithNFSVolume := o1.(*unstructured.Unstructured)
+
+	o2, _, err := unstructuredSerializer.Decode([]byte(podYAMLWithPVCVolume), nil, nil)
+	require.NoError(t, err)
+	podWithPVCVolume := o2.(*unstructured.Unstructured)
+
+	o3, _, err := unstructuredSerializer.Decode([]byte(svcYAMLWithPort8000), nil, nil)
+	require.NoError(t, err)
+	svcWithPort8000 := o3.(*unstructured.Unstructured)
+
+	o4, _, err := unstructuredSerializer.Decode([]byte(svcYAMLWithPort9000), nil, nil)
+	require.NoError(t, err)
+	svcWithPort9000 := o4.(*unstructured.Unstructured)
+
+	o5, _, err := unstructuredSerializer.Decode([]byte(podYAMLWithNginxImage), nil, nil)
+	require.NoError(t, err)
+	podWithNginxImage := o5.(*unstructured.Unstructured)
+
+	o6, _, err := unstructuredSerializer.Decode([]byte(podYAMLWithNginx1Image), nil, nil)
+	require.NoError(t, err)
+	podWithNginx1Image := o6.(*unstructured.Unstructured)
+
+	tests := []struct {
+		name          string
+		rm            *ResourceModifiers
+		obj           *unstructured.Unstructured
+		groupResource string
+		wantErr       bool
+		wantObj       *unstructured.Unstructured
+	}{
+		{
+			name: "update image",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "pods",
+							Namespaces:    []string{"fake"},
+						},
+						StrategicPatches: []StrategicMergePatch{
+							{
+								PatchData: `{"spec":{"containers":[{"name":"nginx","image":"nginx1"}]}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           podWithNginxImage.DeepCopy(),
+			groupResource: "pods",
+			wantErr:       false,
+			wantObj:       podWithNginx1Image.DeepCopy(),
+		},
+		{
+			name: "update image with yaml format",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "pods",
+							Namespaces:    []string{"fake"},
+						},
+						StrategicPatches: []StrategicMergePatch{
+							{
+								PatchData: `spec:
+  containers:
+  - name: nginx
+    image: nginx1`,
+							},
+						},
+					},
+				},
+			},
+			obj:           podWithNginxImage.DeepCopy(),
+			groupResource: "pods",
+			wantErr:       false,
+			wantObj:       podWithNginx1Image.DeepCopy(),
+		},
+		{
+			name: "replace nfs with pvc in volume",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "pods",
+							Namespaces:    []string{"fake"},
+						},
+						StrategicPatches: []StrategicMergePatch{
+							{
+								PatchData: `{"spec":{"volumes":[{"nfs":null,"name":"vol1","persistentVolumeClaim":{"claimName":"pvc1"}}]}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           podWithNFSVolume.DeepCopy(),
+			groupResource: "pods",
+			wantErr:       false,
+			wantObj:       podWithPVCVolume.DeepCopy(),
+		},
+		{
+			name: "replace any other volume source with pvc in volume",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "pods",
+							Namespaces:    []string{"fake"},
+						},
+						StrategicPatches: []StrategicMergePatch{
+							{
+								PatchData: `{"spec":{"volumes":[{"$retainKeys":["name","persistentVolumeClaim"],"name":"vol1","persistentVolumeClaim":{"claimName":"pvc1"}}]}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           podWithNFSVolume.DeepCopy(),
+			groupResource: "pods",
+			wantErr:       false,
+			wantObj:       podWithPVCVolume.DeepCopy(),
+		},
+		{
+			name: "update a service port",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "services",
+							Namespaces:    []string{"fake"},
+						},
+						StrategicPatches: []StrategicMergePatch{
+							{
+								PatchData: `{"spec":{"$setElementOrder/ports":[{"port":8001},{"port":9000},{"port":8002}],"ports":[{"name":"fake","port":9000,"protocol":"TCP","targetPort":9000},{"$patch":"delete","port":8000}]}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           svcWithPort8000.DeepCopy(),
+			groupResource: "services",
+			wantErr:       false,
+			wantObj:       svcWithPort9000.DeepCopy(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rm.ApplyResourceModifierRules(tt.obj, tt.groupResource, scheme, logrus.New())
+
+			assert.Equal(t, tt.wantErr, len(got) > 0)
+			assert.Equal(t, *tt.wantObj, *tt.obj)
+		})
+	}
+}
+
+func TestResourceModifiers_ApplyResourceModifierRules_JSONMergePatch(t *testing.T) {
+	unstructuredSerializer := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	o1, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithLabelAToB), nil, nil)
+	require.NoError(t, err)
+	cmWithLabelAToB := o1.(*unstructured.Unstructured)
+
+	o2, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithLabelAToC), nil, nil)
+	require.NoError(t, err)
+	cmWithLabelAToC := o2.(*unstructured.Unstructured)
+
+	o3, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithoutLabelA), nil, nil)
+	require.NoError(t, err)
+	cmWithoutLabelA := o3.(*unstructured.Unstructured)
+
+	tests := []struct {
+		name          string
+		rm            *ResourceModifiers
+		obj           *unstructured.Unstructured
+		groupResource string
+		wantErr       bool
+		wantObj       *unstructured.Unstructured
+	}{
+		{
+			name: "update labels",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "configmaps",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"c"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToC.DeepCopy(),
+		},
+		{
+			name: "update labels in yaml format",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "configmaps",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `metadata:
+  labels:
+    a: c`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToC.DeepCopy(),
+		},
+		{
+			name: "delete labels",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "configmaps",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":null}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithoutLabelA.DeepCopy(),
+		},
+		{
+			name: "add labels",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "configmaps",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"b"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithoutLabelA.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToB.DeepCopy(),
+		},
+		{
+			name: "delete non-existing labels",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "configmaps",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":null}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithoutLabelA.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithoutLabelA.DeepCopy(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rm.ApplyResourceModifierRules(tt.obj, tt.groupResource, nil, logrus.New())
+
+			assert.Equal(t, tt.wantErr, len(got) > 0)
+			assert.Equal(t, *tt.wantObj, *tt.obj)
+		})
+	}
+}
+
+func TestResourceModifiers_wildcard_in_GroupResource(t *testing.T) {
+	unstructuredSerializer := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	o1, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithLabelAToB), nil, nil)
+	require.NoError(t, err)
+	cmWithLabelAToB := o1.(*unstructured.Unstructured)
+
+	o2, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithLabelAToC), nil, nil)
+	require.NoError(t, err)
+	cmWithLabelAToC := o2.(*unstructured.Unstructured)
+
+	tests := []struct {
+		name          string
+		rm            *ResourceModifiers
+		obj           *unstructured.Unstructured
+		groupResource string
+		wantErr       bool
+		wantObj       *unstructured.Unstructured
+	}{
+		{
+			name: "match all groups and resources",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "*",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"c"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToC.DeepCopy(),
+		},
+		{
+			name: "match all resources in group apps",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "*.apps",
+							Namespaces:    []string{"fake"},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"c"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "fake.apps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToC.DeepCopy(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rm.ApplyResourceModifierRules(tt.obj, tt.groupResource, nil, logrus.New())
+
+			assert.Equal(t, tt.wantErr, len(got) > 0)
+			assert.Equal(t, *tt.wantObj, *tt.obj)
+		})
+	}
+}
+
+func TestResourceModifiers_conditional_patches(t *testing.T) {
+	unstructuredSerializer := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	o1, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithLabelAToB), nil, nil)
+	require.NoError(t, err)
+	cmWithLabelAToB := o1.(*unstructured.Unstructured)
+
+	o2, _, err := unstructuredSerializer.Decode([]byte(cmYAMLWithLabelAToC), nil, nil)
+	require.NoError(t, err)
+	cmWithLabelAToC := o2.(*unstructured.Unstructured)
+
+	tests := []struct {
+		name          string
+		rm            *ResourceModifiers
+		obj           *unstructured.Unstructured
+		groupResource string
+		wantErr       bool
+		wantObj       *unstructured.Unstructured
+	}{
+		{
+			name: "match conditions and apply patches",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "*",
+							Namespaces:    []string{"fake"},
+							Matches: []MatchRule{
+								{
+									Path:  "/metadata/labels/a",
+									Value: "b",
+								},
+							},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"c"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToC.DeepCopy(),
+		},
+		{
+			name: "mismatch conditions and skip patches",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "*",
+							Namespaces:    []string{"fake"},
+							Matches: []MatchRule{
+								{
+									Path:  "/metadata/labels/a",
+									Value: "c",
+								},
+							},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"c"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToB.DeepCopy(),
+		},
+		{
+			name: "missing condition path and skip patches",
+			rm: &ResourceModifiers{
+				Version: "v1",
+				ResourceModifierRules: []ResourceModifierRule{
+					{
+						Conditions: Conditions{
+							GroupResource: "*",
+							Namespaces:    []string{"fake"},
+							Matches: []MatchRule{
+								{
+									Path:  "/metadata/labels/a/b",
+									Value: "c",
+								},
+							},
+						},
+						MergePatches: []JSONMergePatch{
+							{
+								PatchData: `{"metadata":{"labels":{"a":"c"}}}`,
+							},
+						},
+					},
+				},
+			},
+			obj:           cmWithLabelAToB.DeepCopy(),
+			groupResource: "configmaps",
+			wantErr:       false,
+			wantObj:       cmWithLabelAToB.DeepCopy(),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.rm.ApplyResourceModifierRules(tt.obj, tt.groupResource, nil, logrus.New())
+
+			assert.Equal(t, tt.wantErr, len(got) > 0)
+			assert.Equal(t, *tt.wantObj, *tt.obj)
 		})
 	}
 }

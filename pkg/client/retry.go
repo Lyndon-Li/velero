@@ -18,27 +18,48 @@ package client
 
 import (
 	"context"
+	"math"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	kbclient "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 func CreateRetryGenerateName(client kbclient.Client, ctx context.Context, obj kbclient.Object) error {
-	return CreateRetryGenerateNameWithFunc(obj, func() error {
-		return client.Create(ctx, obj, &kbclient.CreateOptions{})
-	})
-}
-
-func CreateRetryGenerateNameWithFunc(obj kbclient.Object, createFn func() error) error {
 	retryCreateFn := func() error {
 		// needed to ensure that the name from the failed create isn't left on the object between retries
 		obj.SetName("")
-		return createFn()
+		return client.Create(ctx, obj, &kbclient.CreateOptions{})
 	}
 	if obj.GetGenerateName() != "" && obj.GetName() == "" {
 		return retry.OnError(retry.DefaultRetry, apierrors.IsAlreadyExists, retryCreateFn)
 	} else {
-		return createFn()
+		return client.Create(ctx, obj, &kbclient.CreateOptions{})
 	}
+}
+
+// CapBackoff provides a backoff with a set backoff cap
+func CapBackoff(cap time.Duration) wait.Backoff {
+	if cap < 0 {
+		cap = 0
+	}
+	return wait.Backoff{
+		Steps:    math.MaxInt,
+		Duration: 10 * time.Millisecond,
+		Cap:      cap,
+		Factor:   retry.DefaultBackoff.Factor,
+		Jitter:   retry.DefaultBackoff.Jitter,
+	}
+}
+
+// RetryOnRetriableMaxBackOff accepts a patch function param, retrying when the provided retriable function returns true.
+func RetryOnRetriableMaxBackOff(maxDuration time.Duration, fn func() error, retriable func(error) bool) error {
+	return retry.OnError(CapBackoff(maxDuration), func(err error) bool { return retriable(err) }, fn)
+}
+
+// RetryOnErrorMaxBackOff accepts a patch function param, retrying when the error is not nil.
+func RetryOnErrorMaxBackOff(maxDuration time.Duration, fn func() error) error {
+	return RetryOnRetriableMaxBackOff(maxDuration, fn, func(err error) bool { return err != nil })
 }

@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
-	. "github.com/onsi/ginkgo"
+	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	. "github.com/vmware-tanzu/velero/test"
 	. "github.com/vmware-tanzu/velero/test/e2e/test"
 	. "github.com/vmware-tanzu/velero/test/util/k8s"
 	. "github.com/vmware-tanzu/velero/test/util/kibishii"
@@ -33,11 +31,12 @@ func (n *NamespaceMapping) Init() error {
 	n.CaseBaseName = "ns-mp-" + n.UUIDgen
 	n.BackupName = "backup-" + n.CaseBaseName
 	n.RestoreName = "restore-" + n.CaseBaseName
-	n.VeleroCfg = VeleroCfg
-	n.Client = *n.VeleroCfg.ClientToInstallVelero
 	n.VeleroCfg.UseVolumeSnapshots = n.UseVolumeSnapshots
 	n.VeleroCfg.UseNodeAgent = !n.UseVolumeSnapshots
 	n.kibishiiData = &KibishiiData{Levels: 2, DirsPerLevel: 10, FilesPerLevel: 10, FileLength: 1024, BlockSize: 1024, PassNum: 0, ExpectedNodes: 2}
+	if n.VeleroCfg.CloudProvider == "kind" {
+		n.kibishiiData = &KibishiiData{Levels: 0, DirsPerLevel: 0, FilesPerLevel: 0, FileLength: 0, BlockSize: 0, PassNum: 0, ExpectedNodes: 2}
+	}
 	backupType := "restic"
 	if n.UseVolumeSnapshots {
 		backupType = "snapshot"
@@ -64,17 +63,21 @@ func (n *NamespaceMapping) Init() error {
 	n.MappedNamespaceList = mappedNSList
 	fmt.Println(mappedNSList)
 	n.BackupArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "backup", n.BackupName,
+		"create", "--namespace", n.VeleroCfg.VeleroNamespace, "backup", n.BackupName,
 		"--include-namespaces", strings.Join(*n.NSIncluded, ","), "--wait",
 	}
-	if n.UseVolumeSnapshots {
+	if n.VeleroCfg.CloudProvider == "kind" {
+		// don't test volume snapshotter or file system backup on kind
+		n.BackupArgs = append(n.BackupArgs, "--snapshot-volumes=false")
+		n.UseVolumeSnapshots = false
+	} else if n.UseVolumeSnapshots {
 		n.BackupArgs = append(n.BackupArgs, "--snapshot-volumes")
 	} else {
 		n.BackupArgs = append(n.BackupArgs, "--snapshot-volumes=false")
 		n.BackupArgs = append(n.BackupArgs, "--default-volumes-to-fs-backup")
 	}
 	n.RestoreArgs = []string{
-		"create", "--namespace", VeleroCfg.VeleroNamespace, "restore", n.RestoreName,
+		"create", "--namespace", n.VeleroCfg.VeleroNamespace, "restore", n.RestoreName,
 		"--from-backup", n.BackupName, "--namespace-mappings", mappedNS,
 		"--wait",
 	}
@@ -82,16 +85,24 @@ func (n *NamespaceMapping) Init() error {
 }
 
 func (n *NamespaceMapping) CreateResources() error {
-	n.Ctx, n.CtxCancel = context.WithTimeout(context.Background(), 60*time.Minute)
 	for index, ns := range *n.NSIncluded {
 		n.kibishiiData.Levels = len(*n.NSIncluded) + index
 		By(fmt.Sprintf("Creating namespaces ...%s\n", ns), func() {
 			Expect(CreateNamespace(n.Ctx, n.Client, ns)).To(Succeed(), fmt.Sprintf("Failed to create namespace %s", ns))
 		})
 		By("Deploy sample workload of Kibishii", func() {
-			Expect(KibishiiPrepareBeforeBackup(n.Ctx, n.Client, VeleroCfg.CloudProvider,
-				ns, VeleroCfg.RegistryCredentialFile, VeleroCfg.Features,
-				VeleroCfg.KibishiiDirectory, false, n.kibishiiData)).To(Succeed())
+			Expect(KibishiiPrepareBeforeBackup(
+				n.Ctx,
+				n.Client,
+				n.VeleroCfg.CloudProvider,
+				ns,
+				n.VeleroCfg.RegistryCredentialFile,
+				n.VeleroCfg.Features,
+				n.VeleroCfg.KibishiiDirectory,
+				n.kibishiiData,
+				n.VeleroCfg.ImageRegistryProxy,
+				n.VeleroCfg.WorkerOS,
+			)).To(Succeed())
 		})
 	}
 	return nil
@@ -101,8 +112,14 @@ func (n *NamespaceMapping) Verify() error {
 	for index, ns := range n.MappedNamespaceList {
 		n.kibishiiData.Levels = len(*n.NSIncluded) + index
 		By(fmt.Sprintf("Verify workload %s after restore ", ns), func() {
-			Expect(KibishiiVerifyAfterRestore(n.Client, ns,
-				n.Ctx, n.kibishiiData)).To(Succeed(), "Fail to verify workload after restore")
+			Expect(KibishiiVerifyAfterRestore(
+				n.Client,
+				ns,
+				n.Ctx,
+				n.kibishiiData,
+				"",
+				n.VeleroCfg.WorkerOS,
+			)).To(Succeed(), "Fail to verify workload after restore")
 		})
 	}
 	for _, ns := range *n.NSIncluded {
@@ -114,7 +131,9 @@ func (n *NamespaceMapping) Verify() error {
 }
 
 func (n *NamespaceMapping) Clean() error {
-	if !n.VeleroCfg.Debug {
+	if CurrentSpecReport().Failed() && n.VeleroCfg.FailFast {
+		fmt.Println("Test case failed and fail fast is enabled. Skip resource clean up.")
+	} else {
 		if err := DeleteStorageClass(context.Background(), n.Client, KibishiiStorageClassName); err != nil {
 			return err
 		}
@@ -126,5 +145,6 @@ func (n *NamespaceMapping) Clean() error {
 
 		return n.GetTestCase().Clean()
 	}
+
 	return nil
 }

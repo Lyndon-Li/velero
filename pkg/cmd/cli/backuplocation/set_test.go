@@ -26,11 +26,13 @@ import (
 	flag "github.com/spf13/pflag"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	factorymocks "github.com/vmware-tanzu/velero/pkg/client/mocks"
 	cmdtest "github.com/vmware-tanzu/velero/pkg/cmd/test"
 	veleroflag "github.com/vmware-tanzu/velero/pkg/cmd/util/flag"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
+	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	veleroexec "github.com/vmware-tanzu/velero/pkg/util/exec"
 )
 
@@ -65,18 +67,18 @@ func TestNewSetCommand(t *testing.T) {
 	args := []string{backupName}
 	o.Complete(args, f)
 	e := o.Validate(c, args, f)
-	assert.Equal(t, e, nil)
+	require.NoError(t, e)
 
 	e = o.Run(c, f)
-	assert.Contains(t, e.Error(), fmt.Sprintf("%s: no such file or directory", cacert))
+	require.ErrorContains(t, e, fmt.Sprintf("%s: no such file or directory", cacert))
 
 	// verify all options are set as expected
 	assert.Equal(t, backupName, o.Name)
 	assert.Equal(t, cacert, o.CACertFile)
-	assert.Equal(t, defaultBackupStorageLocation, o.DefaultBackupStorageLocation)
-	assert.Equal(t, true, reflect.DeepEqual(credential, o.Credential))
+	assert.Equal(t, defaultBackupStorageLocation, boolptr.IsSetToTrue(o.DefaultBackupStorageLocation.Value))
+	assert.True(t, reflect.DeepEqual(credential, o.Credential))
 
-	assert.Contains(t, e.Error(), fmt.Sprintf("%s: no such file or directory", cacert))
+	assert.ErrorContains(t, e, fmt.Sprintf("%s: no such file or directory", cacert))
 }
 
 func TestSetCommand_Execute(t *testing.T) {
@@ -102,7 +104,7 @@ func TestSetCommand_Execute(t *testing.T) {
 	_, stderr, err := veleroexec.RunCommand(cmd)
 
 	if err != nil {
-		assert.Contains(t, stderr, fmt.Sprintf("backupstoragelocations.velero.io \"%s\" not found", bsl))
+		assert.Contains(t, stderr, "backupstoragelocations.velero.io \"bsl-1\" not found")
 		return
 	}
 	t.Fatalf("process ran with err %v, want backup delete successfully", err)

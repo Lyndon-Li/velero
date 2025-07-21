@@ -51,7 +51,7 @@ type DataUploadSpec struct {
 	// DataMoverConfig is for data-mover-specific configuration fields.
 	// +optional
 	// +nullable
-	DataMoverConfig *map[string]string `json:"dataMoverConfig,omitempty"`
+	DataMoverConfig map[string]string `json:"dataMoverConfig,omitempty"`
 
 	// Cancel indicates request to cancel the ongoing DataUpload. It can be set
 	// when the DataUpload is in InProgress phase
@@ -79,6 +79,10 @@ type CSISnapshotSpec struct {
 	// SnapshotClass is the name of the snapshot class that the volume snapshot is created with
 	// +optional
 	SnapshotClass string `json:"snapshotClass"`
+
+	// Driver is the driver used by the VolumeSnapshotContent
+	// +optional
+	Driver string `json:"driver,omitempty"`
 }
 
 // DataUploadPhase represents the lifecycle phase of a DataUpload.
@@ -94,6 +98,16 @@ const (
 	DataUploadPhaseCanceled   DataUploadPhase = "Canceled"
 	DataUploadPhaseCompleted  DataUploadPhase = "Completed"
 	DataUploadPhaseFailed     DataUploadPhase = "Failed"
+)
+
+// NodeOS represents OS of a node.
+// +kubebuilder:validation:Enum=auto;linux;windows
+type NodeOS string
+
+const (
+	NodeOSLinux   NodeOS = "linux"
+	NodeOSWindows NodeOS = "windows"
+	NodeOSAuto    NodeOS = "auto"
 )
 
 // DataUploadStatus is the current status of a DataUpload.
@@ -144,6 +158,20 @@ type DataUploadStatus struct {
 	// Node is name of the node where the DataUpload is processed.
 	// +optional
 	Node string `json:"node,omitempty"`
+
+	// NodeOS is OS of the node where the DataUpload is processed.
+	// +optional
+	NodeOS NodeOS `json:"nodeOS,omitempty"`
+
+	// AcceptedByNode is name of the node where the DataUpload is prepared.
+	// +optional
+	AcceptedByNode string `json:"acceptedByNode,omitempty"`
+
+	// AcceptedTimestamp records the time the DataUpload is to be prepared.
+	// The server's time is used for AcceptedTimestamp
+	// +optional
+	// +nullable
+	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
 }
 
 // TODO(2.0) After converting all resources to use the runttime-controller client,
@@ -161,6 +189,7 @@ type DataUploadStatus struct {
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp",description="Time duration since this DataUpload was created"
 // +kubebuilder:printcolumn:name="Node",type="string",JSONPath=".status.node",description="Name of the node where the DataUpload is processed"
 
+// DataUpload acts as the protocol between data mover plugins and data mover controller for the datamover backup operation
 type DataUpload struct {
 	metav1.TypeMeta `json:",inline"`
 
@@ -211,4 +240,8 @@ type DataUploadResult struct {
 	// +optional
 	// +nullable
 	DataMoverResult *map[string]string `json:"dataMoverResult,omitempty"`
+
+	// NodeOS is OS of the node where the DataUpload is processed.
+	// +optional
+	NodeOS NodeOS `json:"nodeOS,omitempty"`
 }

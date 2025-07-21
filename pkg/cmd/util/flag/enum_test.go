@@ -14,15 +14,15 @@ func TestStringOfEnum(t *testing.T) {
 
 func TestSetOfEnum(t *testing.T) {
 	enum := NewEnum("a", "a", "b", "c")
-	assert.NotNil(t, enum.Set("d"))
+	require.Error(t, enum.Set("d"))
 
-	require.Nil(t, enum.Set("b"))
+	require.NoError(t, enum.Set("b"))
 	assert.Equal(t, "b", enum.String())
 }
 
 func TestTypeOfEnum(t *testing.T) {
 	enum := NewEnum("a", "a", "b", "c")
-	assert.Equal(t, "", enum.Type())
+	assert.Empty(t, enum.Type())
 }
 
 func TestAllowedValuesOfEnum(t *testing.T) {

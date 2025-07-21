@@ -18,16 +18,16 @@ package resourcemodifiers
 import (
 	"fmt"
 	"regexp"
-	"strconv"
-	"strings"
 
-	jsonpatch "github.com/evanphx/json-patch"
+	jsonpatch "github.com/evanphx/json-patch/v5"
+	"github.com/gobwas/glob"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/yaml"
 
 	"github.com/vmware-tanzu/velero/pkg/util/collections"
@@ -38,11 +38,9 @@ const (
 	ResourceModifierSupportedVersionV1 = "v1"
 )
 
-type JSONPatch struct {
-	Operation string `json:"operation"`
-	From      string `json:"from,omitempty"`
-	Path      string `json:"path"`
-	Value     string `json:"value,omitempty"`
+type MatchRule struct {
+	Path  string `json:"path,omitempty"`
+	Value string `json:"value,omitempty"`
 }
 
 type Conditions struct {
@@ -50,11 +48,14 @@ type Conditions struct {
 	GroupResource     string                `json:"groupResource"`
 	ResourceNameRegex string                `json:"resourceNameRegex,omitempty"`
 	LabelSelector     *metav1.LabelSelector `json:"labelSelector,omitempty"`
+	Matches           []MatchRule           `json:"matches,omitempty"`
 }
 
 type ResourceModifierRule struct {
-	Conditions Conditions  `json:"conditions"`
-	Patches    []JSONPatch `json:"patches"`
+	Conditions       Conditions            `json:"conditions"`
+	Patches          []JSONPatch           `json:"patches,omitempty"`
+	MergePatches     []JSONMergePatch      `json:"mergePatches,omitempty"`
+	StrategicPatches []StrategicMergePatch `json:"strategicPatches,omitempty"`
 }
 
 type ResourceModifiers struct {
@@ -62,7 +63,7 @@ type ResourceModifiers struct {
 	ResourceModifierRules []ResourceModifierRule `json:"resourceModifierRules"`
 }
 
-func GetResourceModifiersFromConfig(cm *v1.ConfigMap) (*ResourceModifiers, error) {
+func GetResourceModifiersFromConfig(cm *corev1api.ConfigMap) (*ResourceModifiers, error) {
 	if cm == nil {
 		return nil, fmt.Errorf("could not parse config from nil configmap")
 	}
@@ -83,10 +84,24 @@ func GetResourceModifiersFromConfig(cm *v1.ConfigMap) (*ResourceModifiers, error
 	return resModifiers, nil
 }
 
-func (p *ResourceModifiers) ApplyResourceModifierRules(obj *unstructured.Unstructured, groupResource string, log logrus.FieldLogger) []error {
+func (p *ResourceModifiers) ApplyResourceModifierRules(obj *unstructured.Unstructured, groupResource string, scheme *runtime.Scheme, log logrus.FieldLogger) []error {
 	var errs []error
+	origin := obj
+	// If there are more than one rules, we need to keep the original object for condition matching
+	if len(p.ResourceModifierRules) > 1 {
+		origin = obj.DeepCopy()
+	}
 	for _, rule := range p.ResourceModifierRules {
-		err := rule.Apply(obj, groupResource, log)
+		matched, err := rule.match(origin, groupResource, log)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		} else if !matched {
+			continue
+		}
+
+		log.Infof("Applying resource modifier patch on %s/%s", origin.GetNamespace(), origin.GetName())
+		err = rule.applyPatch(obj, scheme, log)
 		if err != nil {
 			errs = append(errs, err)
 		}
@@ -95,117 +110,116 @@ func (p *ResourceModifiers) ApplyResourceModifierRules(obj *unstructured.Unstruc
 	return errs
 }
 
-func (r *ResourceModifierRule) Apply(obj *unstructured.Unstructured, groupResource string, log logrus.FieldLogger) error {
-	namespaceInclusion := collections.NewIncludesExcludes().Includes(r.Conditions.Namespaces...)
-	if !namespaceInclusion.ShouldInclude(obj.GetNamespace()) {
-		return nil
+func (r *ResourceModifierRule) match(obj *unstructured.Unstructured, groupResource string, log logrus.FieldLogger) (bool, error) {
+	ns := obj.GetNamespace()
+	if ns != "" {
+		namespaceInclusion := collections.NewIncludesExcludes().Includes(r.Conditions.Namespaces...)
+		if !namespaceInclusion.ShouldInclude(ns) {
+			return false, nil
+		}
 	}
 
-	if r.Conditions.GroupResource != groupResource {
-		return nil
+	g, err := glob.Compile(r.Conditions.GroupResource, '.')
+	if err != nil {
+		log.Errorf("Bad glob pattern of groupResource in condition, groupResource: %s, err: %s", r.Conditions.GroupResource, err)
+		return false, err
+	}
+
+	if !g.Match(groupResource) {
+		return false, nil
 	}
 
 	if r.Conditions.ResourceNameRegex != "" {
 		match, err := regexp.MatchString(r.Conditions.ResourceNameRegex, obj.GetName())
 		if err != nil {
-			return errors.Errorf("error in matching regex %s", err.Error())
+			return false, errors.Errorf("error in matching regex %s", err.Error())
 		}
 		if !match {
-			return nil
+			return false, nil
 		}
 	}
 
 	if r.Conditions.LabelSelector != nil {
 		selector, err := metav1.LabelSelectorAsSelector(r.Conditions.LabelSelector)
 		if err != nil {
-			return errors.Errorf("error in creating label selector %s", err.Error())
+			return false, errors.Errorf("error in creating label selector %s", err.Error())
 		}
 		if !selector.Matches(labels.Set(obj.GetLabels())) {
-			return nil
+			return false, nil
 		}
 	}
 
-	patches, err := r.PatchArrayToByteArray()
+	match, err := matchConditions(obj, r.Conditions.Matches, log)
 	if err != nil {
-		return err
+		return false, err
+	} else if !match {
+		log.Info("Conditions do not match, skip it")
+		return false, nil
 	}
-	log.Infof("Applying resource modifier patch on %s/%s", obj.GetNamespace(), obj.GetName())
-	err = ApplyPatch(patches, obj, log)
-	if err != nil {
-		return err
-	}
-	return nil
+
+	return true, nil
 }
 
-// PatchArrayToByteArray converts all JsonPatch to string array with the format of jsonpatch.Patch and then convert it to byte array
-func (r *ResourceModifierRule) PatchArrayToByteArray() ([]byte, error) {
-	var patches []string
-	for _, patch := range r.Patches {
-		patches = append(patches, patch.ToString())
+func matchConditions(u *unstructured.Unstructured, rules []MatchRule, _ logrus.FieldLogger) (bool, error) {
+	if len(rules) == 0 {
+		return true, nil
 	}
-	patchesStr := strings.Join(patches, ",\n\t")
-	return []byte(fmt.Sprintf(`[%s]`, patchesStr)), nil
-}
 
-func (p *JSONPatch) ToString() string {
-	if addQuotes(p.Value) {
-		return fmt.Sprintf(`{"op": "%s", "from": "%s", "path": "%s", "value": "%s"}`, p.Operation, p.From, p.Path, p.Value)
-	}
-	return fmt.Sprintf(`{"op": "%s", "from": "%s", "path": "%s", "value": %s}`, p.Operation, p.From, p.Path, p.Value)
-}
-
-func ApplyPatch(patch []byte, obj *unstructured.Unstructured, log logrus.FieldLogger) error {
-	jsonPatch, err := jsonpatch.DecodePatch(patch)
-	if err != nil {
-		return fmt.Errorf("error in decoding json patch %s", err.Error())
-	}
-	objBytes, err := obj.MarshalJSON()
-	if err != nil {
-		return fmt.Errorf("error in marshaling object %s", err.Error())
-	}
-	modifiedObjBytes, err := jsonPatch.Apply(objBytes)
-	if err != nil {
-		if errors.Is(err, jsonpatch.ErrTestFailed) {
-			log.Infof("Test operation failed for JSON Patch %s", err.Error())
-			return nil
+	var fixed []JSONPatch
+	for _, rule := range rules {
+		if rule.Path == "" {
+			return false, fmt.Errorf("path is required for match rule")
 		}
-		return fmt.Errorf("error in applying JSON Patch %s", err.Error())
+
+		fixed = append(fixed, JSONPatch{
+			Operation: "test",
+			Path:      rule.Path,
+			Value:     rule.Value,
+		})
 	}
-	err = obj.UnmarshalJSON(modifiedObjBytes)
+
+	p := &JSONPatcher{patches: fixed}
+	_, err := p.applyPatch(u)
 	if err != nil {
-		return fmt.Errorf("error in unmarshalling modified object %s", err.Error())
+		if errors.Is(err, jsonpatch.ErrTestFailed) || errors.Is(err, jsonpatch.ErrMissing) {
+			return false, nil
+		}
+		return false, err
 	}
-	return nil
+
+	return true, nil
 }
 
 func unmarshalResourceModifiers(yamlData []byte) (*ResourceModifiers, error) {
 	resModifiers := &ResourceModifiers{}
 	err := yaml.UnmarshalStrict(yamlData, resModifiers)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode yaml data into resource modifiers  %v", err)
+		return nil, fmt.Errorf("failed to decode yaml data into resource modifiers, err: %s", err)
 	}
 	return resModifiers, nil
 }
 
-func addQuotes(value string) bool {
-	if value == "" {
-		return true
+type patcher interface {
+	Patch(u *unstructured.Unstructured, logger logrus.FieldLogger) (*unstructured.Unstructured, error)
+}
+
+func (r *ResourceModifierRule) applyPatch(u *unstructured.Unstructured, scheme *runtime.Scheme, logger logrus.FieldLogger) error {
+	var p patcher
+	if len(r.Patches) > 0 {
+		p = &JSONPatcher{patches: r.Patches}
+	} else if len(r.MergePatches) > 0 {
+		p = &JSONMergePatcher{patches: r.MergePatches}
+	} else if len(r.StrategicPatches) > 0 {
+		p = &StrategicMergePatcher{patches: r.StrategicPatches, scheme: scheme}
+	} else {
+		return fmt.Errorf("no patch data found")
 	}
-	// if value is null, then don't add quotes
-	if value == "null" {
-		return false
+
+	updated, err := p.Patch(u, logger)
+	if err != nil {
+		return fmt.Errorf("error in applying patch %s", err)
 	}
-	// if value is a boolean, then don't add quotes
-	if _, err := strconv.ParseBool(value); err == nil {
-		return false
-	}
-	// if value is a json object or array, then don't add quotes.
-	if strings.HasPrefix(value, "{") || strings.HasPrefix(value, "[") {
-		return false
-	}
-	// if value is a number, then don't add quotes
-	if _, err := strconv.ParseFloat(value, 64); err == nil {
-		return false
-	}
-	return true
+
+	u.SetUnstructuredContent(updated.Object)
+	return nil
 }

@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"time"
 
-	v1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/vmware-tanzu/velero/internal/resourcepolicies"
@@ -240,6 +240,12 @@ func (b *BackupBuilder) TTL(ttl time.Duration) *BackupBuilder {
 	return b
 }
 
+// VolumeGroupSnapshotLabelKey sets the label key to group PVCs for VolumeGroupSnapshot.
+func (b *BackupBuilder) VolumeGroupSnapshotLabelKey(labelKey string) *BackupBuilder {
+	b.object.Spec.VolumeGroupSnapshotLabelKey = labelKey
+	return b
+}
+
 // Expiration sets the Backup's expiration.
 func (b *BackupBuilder) Expiration(val time.Time) *BackupBuilder {
 	b.object.Status.Expiration = &metav1.Time{Time: val}
@@ -284,7 +290,7 @@ func (b *BackupBuilder) ItemOperationTimeout(timeout time.Duration) *BackupBuild
 
 // ResourcePolicies sets the Backup's resource polices.
 func (b *BackupBuilder) ResourcePolicies(name string) *BackupBuilder {
-	b.object.Spec.ResourcePolicy = &v1.TypedLocalObjectReference{Kind: resourcepolicies.ConfigmapRefType, Name: name}
+	b.object.Spec.ResourcePolicy = &corev1api.TypedLocalObjectReference{Kind: resourcepolicies.ConfigmapRefType, Name: name}
 	return b
 }
 
@@ -297,5 +303,20 @@ func (b *BackupBuilder) SnapshotMoveData(val bool) *BackupBuilder {
 // DataMover sets the Backup's data mover
 func (b *BackupBuilder) DataMover(name string) *BackupBuilder {
 	b.object.Spec.DataMover = name
+	return b
+}
+
+// ParallelFilesUpload sets the Backup's uploader parallel uploads
+func (b *BackupBuilder) ParallelFilesUpload(parallel int) *BackupBuilder {
+	if b.object.Spec.UploaderConfig == nil {
+		b.object.Spec.UploaderConfig = &velerov1api.UploaderConfigForBackup{}
+	}
+	b.object.Spec.UploaderConfig.ParallelFilesUpload = parallel
+	return b
+}
+
+// WithStatus sets the Backup's status.
+func (b *BackupBuilder) WithStatus(status velerov1api.BackupStatus) *BackupBuilder {
+	b.object.Status = status
 	return b
 }

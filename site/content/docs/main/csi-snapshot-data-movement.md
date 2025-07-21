@@ -18,7 +18,7 @@ On the other hand, there are quite some cases that CSI snapshot is not available
 
 CSI Snapshot Data Movement supports both built-in data mover and customized data movers. For the details of how Velero works with customized data movers, check the [Volume Snapshot Data Movement design][1]. Velero provides a built-in data mover which uses Velero built-in uploaders (at present the available uploader is Kopia uploader) to read the snapshot data and write to the Unified Repository (by default implemented by Kopia repository).    
 
-The way for Velero built-in data mover to access the snapshot data is based on the hostpath access by Velero node-agent, so the node-agent pods need to run as root user and even under privileged mode in some environments, as same as [File System Backup][3].  
+Velero built-in data mover restores both volume data and metadata, so the data mover pods need to run as root user.  
 
 ## Setup CSI Snapshot Data Movement
 
@@ -31,105 +31,11 @@ The way for Velero built-in data mover to access the snapshot data is based on t
 
 ### Install Velero Node Agent
 
-Velero Node Agent is a Kubernetes daemonset that hosts Velero data movement modules, i.e., data mover controller, uploader & repository. 
+Velero Node Agent is a Kubernetes daemonset that hosts Velero data movement controllers and launches data mover pods. 
 If you are using Velero built-in data mover, Node Agent must be installed. To install Node Agent, use the `--use-node-agent` flag. 
 
 ```
 velero install --use-node-agent
-```
-
-### Configure Node Agent DaemonSet spec
-
-After installation, some PaaS/CaaS platforms based on Kubernetes also require modifications the node-agent DaemonSet spec. 
-The steps in this section are only needed if you are installing on RancherOS, Nutanix, OpenShift, VMware Tanzu Kubernetes Grid 
-Integrated Edition (formerly VMware Enterprise PKS), or Microsoft Azure.  
-
-
-**RancherOS**
-
-
-Update the host path for volumes in the node-agent DaemonSet in the Velero namespace from `/var/lib/kubelet/pods` to 
-`/opt/rke/var/lib/kubelet/pods`.  
-
-```yaml
-hostPath:
-  path: /var/lib/kubelet/pods
-```
-
-to
-
-```yaml
-hostPath:
-  path: /opt/rke/var/lib/kubelet/pods
-```
-
-**Nutanix**
-
-Update the host path for volumes in the node-agent DaemonSet in the Velero namespace from `/var/lib/kubelet/pods` to
-`/var/nutanix/var/lib/kubelet`.
-
-```yaml
-hostPath:
-  path: /var/lib/kubelet/pods
-```
-
-to
-
-```yaml
-hostPath:
-  path: /var/nutanix/var/lib/kubelet
-```
-
-**OpenShift**
-
-
-To mount the correct hostpath to pods volumes, run the node-agent pod in `privileged` mode.
-
-1. Add the `velero` ServiceAccount to the `privileged` SCC:
-
-    ```
-    oc adm policy add-scc-to-user privileged -z velero -n velero
-    ```
-
-2. Install Velero with the '--privileged-node-agent' option to request a privileged mode:
-  
-    ```
-    velero install --use-node-agent --privileged-node-agent
-    ```
-
-If node-agent is not running in a privileged mode, it will not be able to access snapshot volumes within the mounted 
-hostpath directory because of the default enforced SELinux mode configured in the host system level. You can 
-[create a custom SCC][6] to relax the 
-security in your cluster so that node-agent pods are allowed to use the hostPath volume plugin without granting 
-them access to the `privileged` SCC.  
-
-By default a userland openshift namespace will not schedule pods on all nodes in the cluster.  
-
-To schedule on all nodes the namespace needs an annotation:  
-
-```
-oc annotate namespace <velero namespace> openshift.io/node-selector=""
-```
-
-This should be done before velero installation.  
-
-Or the ds needs to be deleted and recreated:  
-
-```
-oc get ds node-agent -o yaml -n <velero namespace> > ds.yaml
-oc annotate namespace <velero namespace> openshift.io/node-selector=""
-oc create -n <velero namespace> -f ds.yaml
-```
-
-**VMware Tanzu Kubernetes Grid Integrated Edition (formerly VMware Enterprise PKS)**  
-
-You need to enable the `Allow Privileged` option in your plan configuration so that Velero is able to mount the hostpath.  
-
-The hostPath should be changed from `/var/lib/kubelet/pods` to `/var/vcap/data/kubelet/pods`
-
-```yaml
-hostPath:
-  path: /var/vcap/data/kubelet/pods
 ```
 
 ### Configure A Backup Storage Location
@@ -152,14 +58,22 @@ Backup repository is created during the first execution of backup targeting to i
 
 ## Install Velero with CSI support on source cluster
 
-On source cluster, Velero needs to manipulate CSI snapshots through the CSI volume snapshot APIs, so you must enable the `EnableCSI` feature flag and install the Velero [CSI plugin][2] on the Velero server.  
+On source cluster, Velero needs to manipulate CSI snapshots through the CSI volume snapshot APIs, so you must enable the `EnableCSI` feature flag on the Velero server.  
 
-Both of these can be added with the `velero install` command.
+To integrate Velero with the CSI volume snapshot APIs, you must enable the `EnableCSI` feature flag.
+
+From release-1.14, the `github.com/vmware-tanzu/velero-plugin-for-csi` repository, which is the Velero CSI plugin, is merged into the `github.com/vmware-tanzu/velero` repository.
+The reasons to merge the CSI plugin are:
+* The VolumeSnapshot data mover depends on the CSI plugin, it's reasonabe to integrate them.
+* This change reduces the Velero deploying complexity.
+* This makes performance tuning easier in the future.
+
+As a result, no need to install Velero CSI plugin anymore.
 
 ```bash
 velero install \
 --features=EnableCSI \
---plugins=<object storage plugin>,velero/velero-plugin-for-csi:v0.6.0 \
+--plugins=<object storage plugin> \
 ...
 ```
 
@@ -194,7 +108,7 @@ Or if you want to use a customized data mover:
 velero backup create NAME --snapshot-move-data --data-mover DATA-MOVER-NAME OPTIONS...
 ```
 
-When the backup starts, you will see the `VolumeSnapshot` and `VolumeSnapshotContent` objects created, but after the backup finishes, the objects will disppear.  
+When the backup starts, you will see the `VolumeSnapshot` and `VolumeSnapshotContent` objects created, but after the backup finishes, the objects will disappear.  
 After snapshots are created, you will see one or more `DataUpload` CRs created.  
 You may also see some intermediate objects (i.e., pods, PVCs, PVs) created in Velero namespace or the cluster scope, they are to help data movers to move data. And they will be removed after the backup completes.  
 The phase of a `DataUpload` CR changes several times during the backup process and finally goes to one of the terminal status, `Completed`, `Failed` or `Cancelled`. You can see the phase changes as well as the data upload progress by watching the `DataUpload` CRs:  
@@ -241,14 +155,11 @@ kubectl -n velero get datadownloads -l velero.io/restore-name=YOUR_RESTORE_NAME 
 
 ## Limitations
 
-- CSI and CSI snapshot support both file system volume mode and block volume mode. At present, Velero built-in data mover doesn't support 
-block mode volume or volume snapshot. 
+- CSI and CSI snapshot support both file system volume mode and block volume mode. At present, block mode is only supported for non-Windows platforms, because the block mode code invokes some system calls that are not present in the Windows platform.  
 - [Velero built-in data mover] At present, Velero uses a static, common encryption key for all backup repositories it creates. **This means 
 that anyone who has access to your backup storage can decrypt your backup data**. Make sure that you limit access 
 to the backup storage appropriately. 
-- [Velero built-in data mover] Even though the backup data could be incrementally preserved, for a single file data, Velero built-in data mover leverages on deduplication to find the difference to be saved. This means that large files (such as ones storing a database) will take a long time to scan for data  deduplication, even if the actual difference is small.
-- [Velero built-in data mover] You may need to [customize the resource limits][11] to make sure backups complete successfully for massive small files or large backup size cases, for more details refer to [Velero file system level backup performance guide][12]. 
-- The block mode is supported by the Kopia uploader, but it only supports non-Windows platforms, because the block mode code invokes some system calls that are not present in the Windows platform.
+- [Velero built-in data mover] Even though the backup data could be incrementally preserved, for a single file data, Velero built-in data mover leverages on deduplication to find the difference to be saved. This means that large files (such as ones storing a database) will take a long time to scan for data  deduplication, even if the actual difference is small.  
 
 ## Troubleshooting
 
@@ -301,17 +212,17 @@ If you are using a customized data mover, follow the data mover's instruction fo
 ## How backup and restore work
 
 CSI snapshot data movement is a combination of CSI snapshot and data movement, which is jointly executed by Velero server, CSI plugin and the data mover. 
-This section lists some general concept of how CSI snapshot data movement backup and restore work. For the detailed mechanisms and workflows, you can check the [Volume Snapshot Data Movement design][1].  
+This section lists some general concept of how CSI snapshot data movement backup and restore work. For the detailed mechanisms and workflows, you can check the [Volume Snapshot Data Movement design][1] and [VGDP Micro Service For Volume Snapshot Data Movement design][18].  
 
 ### Custom resource and controllers
 
 Velero has three custom resource definitions and associated controllers:
 
 - `DataUpload` - represents a data upload of a volume snapshot. The CSI plugin creates one `DataUpload` per CSI snapshot. Data movers need to handle these CRs to finish the data upload process.  
-Velero built-in data mover runs a controller for this resource on each node (in node-agent daemonset). Controllers from different nodes may handle one CR in different phases, but finally the data transfer is done by one single controller which will call uploaders from the backend.  
+Velero built-in data mover runs a controller for this resource on each node (in node-agent daemonset). Controllers from different nodes may handle one CR in different phases, but finally the data transfer is done by a data mover pod in one node.  
 
 - `DataDownload` - represents a data download of a volume snapshot.  The CSI plugin creates one `DataDownload` per volume to be restored. Data movers need to handle these CRs to finish the data upload process.  
-Velero built-in data mover runs a controller for this resource on each node (in node-agent daemonset). Controllers from different nodes may handle one CR in different phases, but finally the data transfer is done by one single controller which will call uploaders from the backend. 
+Velero built-in data mover runs a controller for this resource on each node (in node-agent daemonset). Controllers from different nodes may handle one CR in different phases, but finally the data transfer is done by a data mover pod in one node. 
 
 - `BackupRepository` - represents/manages the lifecycle of Velero's backup repositories. Velero creates a backup repository per namespace when the first CSI snapshot backup/restore for a namespace is requested. You can see information about your Velero's backup repositories by running `velero repo get`.  
 This CR is used by Velero built-in data movers, customized data movers may or may not use it.  
@@ -334,8 +245,10 @@ Velero backs up resources for CSI snapshot data movement backup in the same way 
 
 - Velero built-in data mover creates a volume from the CSI snapshot and transfer the data to the backup storage according to the backup storage location defined by users.  
 - After the volume is created from the CSI snapshot, Velero built-in data mover waits for Kubernetes to provision the volume, this may take some time varying from storage providers, but if the provision cannot be finished in a given time, Velero built-in data mover will cancel this `DataUpload` CR. The timeout is configurable through a node-agent's parameter `data-mover-prepare-timeout`, the default value is 30 minutes.  
+- Velero built-in data mover launches a data mover pod to transfer the data from the provisioned volume to the backup storage.  
 - When the data transfer completes or any error happens, Velero built-in data mover sets the `DataUpload` CR to the terminal state, either `Completed` or `Failed`.  
 - Velero built-in data mover also monitors the cancellation request to the `DataUpload` CR, once that happens, it cancels its ongoing activities, cleans up the intermediate resources and set the `DataUpload` CR to `Cancelled`.  
+- Throughout the data transfer, Velero built-in data mover monitors the status of the data mover pod and deletes it after `DataUpload` CR is set to the terminal state.    
 
 ### Restore
 
@@ -352,9 +265,21 @@ Velero restores resources for CSI snapshot data movement restore in the same way
 
 - Velero built-in data mover creates a volume with the same specification of the source volume.  
 - Velero built-in data mover waits for Kubernetes to provision the volume, this may take some time varying from storage providers, but if the provision cannot be finished in a given time, Velero built-in data mover will cancel this `DataDownload` CR. The timeout is configurable through the same node-agent's parameter `data-mover-prepare-timeout`.  
-- After the volume is provisioned, Velero built-in data mover starts to transfer the data from the backup storage according to the backup storage location defined by users.  
+- After the volume is provisioned, Velero built-in data mover starts a data mover pod to transfer the data from the backup storage according to the backup storage location defined by users.  
 - When the data transfer completes or any error happens, Velero built-in data mover sets the `DataDownload` CR to the terminal state, either `Completed` or `Failed`.  
 - Velero built-in data mover also monitors the cancellation request to the `DataDownload` CR, once that happens, it cancels its ongoing activities, cleans up the intermediate resources and set the `DataDownload` CR to `Cancelled`.  
+- Throughout the data transfer, Velero built-in data mover monitors the status of the data mover pod and deletes it after `DataDownload` CR is set to the terminal state.  
+
+### Backup Deletion
+When a backup is created, a snapshot is saved into the repository for the volume data. The snapshot is a reference to the volume data saved in the repository.  
+When deleting a backup, Velero calls the repository to delete the repository snapshot. So the repository snapshot disappears immediately after the backup is deleted. Then the volume data backed up in the repository turns to orphan, but it is not deleted by this time. The repository relies on the maintenance functionalitiy to delete the orphan data.  
+As a result, after you delete a backup, you don't see the backup storage size reduces until some full maintenance jobs completes successfully. And for the same reason, you should check and make sure that the periodical repository maintenance job runs and completes successfully.  
+
+Even after deleting all the backups and their backup data (by repository maintenance), the backup storage is still not empty, some repository metadata are there to keep the instance of the backup repository.  
+Furthermore, Velero never deletes these repository metadata, if you are sure you'll never usage the backup repository, you can empty the backup storage manually.  
+
+For Velero built-in data mover, Kopia uploader may keep some internal snapshots which is not managed by Velero. In normal cases, the internal snapshots are deleted along with running of backups.  
+However, if you run a backup which aborts halfway(some internal snapshots are thereby generated) and never run new backups again, some internal snapshots may be left there. In this case, since you stop using the backup repository, you can delete the entire repository metadata from the backup storage manually.  
 
 
 ### Parallelism
@@ -363,8 +288,8 @@ Velero calls the CSI plugin concurrently for the volume, so `DataUpload`/`DataDo
 In which manner the `DataUpload`/`DataDownload` CRs are processed is totally decided by the data mover you select for the backup/restore.  
 
 For Velero built-in data mover, it uses Kubernetes' scheduler to mount a snapshot volume/restore volume associated to a `DataUpload`/`DataDownload` CR into a specific node, and then the `DataUpload`/`DataDownload` controller (in node-agent daemonset) in that node will handle the `DataUpload`/`DataDownload`.  
-At present, a `DataUpload`/`DataDownload` controller in one node handles one request at a time.  
-That is to say, the snapshot volumes/restore volumes may spread in different nodes, then their associated `DataUpload`/`DataDownload` CRs will be processed in parallel; while for the snapshot volumes/restore volumes in the same node, their associated `DataUpload`/`DataDownload` CRs are processed sequentially.  
+By default, a `DataUpload`/`DataDownload` controller in one node handles one request at a time. You can configure more parallelism per node by [node-agent Concurrency Configuration][14].  
+That is to say, the snapshot volumes/restore volumes may spread in different nodes, then their associated `DataUpload`/`DataDownload` CRs will be processed in parallel; while for the snapshot volumes/restore volumes in the same node, by default, their associated `DataUpload`/`DataDownload` CRs are processed sequentially and can be processed concurrently according to your [node-agent Concurrency Configuration][14].    
 
 You can check in which node the `DataUpload`/`DataDownload` CRs are processed and their parallelism by watching the `DataUpload`/`DataDownload` CRs:
 
@@ -376,16 +301,90 @@ kubectl -n velero get datauploads -l velero.io/backup-name=YOUR_BACKUP_NAME -w
 kubectl -n velero get datadownloads -l velero.io/restore-name=YOUR_RESTORE_NAME -w
 ```
 
+### Restart and resume
+When Velero server is restarted, if the resource backup/restore has completed, so the backup/restore has excceded `InProgress` status and is waiting for the completion of the data movements, Velero will recapture the status of the running data movements and resume the execution.  
+When node-agent is restarted, if the `DataUpload`/`DataDownload` is in `InProgress` status, Velero recaptures the status of the running data mover pod and resume the execution.  
+When node-agent is restarted, if the `DataUpload`/`DataDownload` is in `New` or `Prepared` status, the data mover pod has not started, Velero processes it as normal cases, or the restart doesn't affect the execution.  
+
 ### Cancellation
 
 At present, Velero backup and restore doesn't support end to end cancellation that is launched by users.  
 However, Velero cancels the `DataUpload`/`DataDownload` in below scenarios automatically:
-- When Velero server is restarted
-- When node-agent is restarted  
+- When Velero server is restarted and the backup/restore is in `InProgress` status
+- When node-agent is restarted and the `DataUpload`/`DataDownload` is in `Accepted` status
+- When node-agent is restarted and the resume of an existing `DataUpload`/`DataDownload` that is in `InProgress` status fails  
 - When an ongoing backup/restore is deleted
 - When a backup/restore does not finish before the item operation timeout (default value is `4 hours`)
 
 Customized data movers that support cancellation could cancel their ongoing tasks and clean up any intermediate resources. If you are using Velero built-in data mover, the cancellation is supported.  
+
+### Support ReadOnlyRootFilesystem setting
+When the Velero server pod's SecurityContext sets the `ReadOnlyRootFileSystem` parameter to true, the Velero server pod's filesystem is running in read-only mode. Then the backup deletion may fail, because the repository needs to write some cache and configuration data into the pod's root filesystem.
+
+```
+Errors: /error to connect repo with storage: error to connect to repository: unable to write config file: unable to create config directory: mkdir /home/cnb/udmrepo: read-only file system
+```
+
+The workaround is making those directories as ephemeral k8s volumes, then those directories are not counted as pod's root filesystem.
+The `user-name` is the Velero pod's running user name. The default value is `cnb`.
+
+``` yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: velero
+  namespace: velero
+spec:
+  template:
+    spec:
+      containers:
+      - name: velero
+        ......
+        volumeMounts:
+          ......
+          - mountPath: /home/<user-name>/udmrepo
+            name: udmrepo
+          - mountPath: /home/<user-name>/.cache
+            name: cache
+          ......
+      volumes:
+        ......
+        - emptyDir: {}
+          name: udmrepo
+        - emptyDir: {}
+          name: cache
+        ......
+```
+
+At present, Velero doesn't allow to set `ReadOnlyRootFileSystem` parameter to data mover pods, so the root filesystem for the data mover pods are always writable.  
+
+### Resource Consumption
+
+Both the uploader and repository consume remarkable CPU/memory during the backup/restore, especially for massive small files or large backup size cases.  
+
+For Velero built-in data mover, Velero uses [BestEffort as the QoS][13] for data mover pods (so no CPU/memory request/limit is set), so that backups/restores wouldn't fail due to resource throttling in any cases.  
+If you want to constraint the CPU/memory usage, you need to [Customize Data Mover Pod Resource Limits][11]. The CPU/memory consumption is always related to the scale of data to be backed up/restored, refer to [Performance Guidance][12] for more details, so it is highly recommended that you perform your own testing to find the best resource limits for your data.   
+
+During the restore, the repository may also cache data/metadata so as to reduce the network footprint and speed up the restore. The repository uses its own policy to store and clean up the cache.  
+For Kopia repository, the cache is stored in the data mover pod's root file system. Velero allows you to configure a limit of the cache size so that the data mover pod won't be evicted due to running out of the ephemeral storage. For more details, check [Backup Repository Configuration][17]. 
+
+### Node Selection
+
+The node where a data movement backup/restore runs is decided by the data mover.  
+
+For Velero built-in data mover, it uses Kubernetes' scheduler to mount a snapshot volume/restore volume associated to a `DataUpload`/`DataDownload` CR into a specific node, and then the data movement backup/restore will happen in that node.  
+For the backup, you can intervene this scheduling process through [Data Movement Backup Node Selection][15], so that you can decide which node(s) should/should not run the data movement backup for various purposes.  
+For the restore, this is not supported because sometimes the data movement restore must run in the same node where the restored workload pod is scheduled.  
+
+### BackupPVC Configuration
+
+The `BackupPVC` serves as an intermediate Persistent Volume Claim (PVC) utilized during data movement backup operations, providing efficient access to data.
+In complex storage environments, optimizing `BackupPVC` configurations can significantly enhance the performance of backup operations. [This document][16] outlines advanced configuration options for `BackupPVC`, allowing users to fine-tune access modes and storage class settings based on their storage provider's capabilities.  
+
+### RestorePVC Configuration
+
+The `RestorePVC` serves as an intermediate Persistent Volume Claim (PVC) utilized during data movement restore operations, providing efficient access to data.  
+Sometimes, `RestorePVC` needs to be configured to increase the performance of restore operations. [This document][19] outlines advanced configuration options for `RestorePVC`, allowing users to fine-tune access modes and storage class settings based on their storage provider's capabilities.  
 
 
 [1]: https://github.com/vmware-tanzu/velero/pull/5968
@@ -393,10 +392,17 @@ Customized data movers that support cancellation could cancel their ongoing task
 [3]: file-system-backup.md
 [4]: https://kubernetes.io/blog/2020/12/10/kubernetes-1.20-volume-snapshot-moves-to-ga/
 [5]: https://kubernetes.io/docs/concepts/storage/volumes/#mount-propagation
-[6]: https://docs.openshift.com/container-platform/3.11/admin_guide/manage_scc.html
 [7]: https://docs.microsoft.com/en-us/azure/aks/azure-files-dynamic-pv
 [8]: api-types/backupstoragelocation.md
 [9]: supported-providers.md
 [10]: restore-reference.md#changing-pv/pvc-Storage-Classes
-[11]: customize-installation.md#customize-resource-requests-and-limits
+[11]: data-movement-pod-resource-configuration.md
 [12]: performance-guidance.md
+[13]: https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/
+[14]: node-agent-concurrency.md
+[15]: data-movement-node-selection.md
+[16]: data-movement-backup-pvc-configuration.md
+[17]: backup-repository-configuration.md
+[18]: https://github.com/vmware-tanzu/velero/pull/7576
+[19]: data-movement-restore-pvc-configuration.md
+

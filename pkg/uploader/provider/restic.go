@@ -24,12 +24,13 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/restic"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	uploaderutil "github.com/vmware-tanzu/velero/pkg/uploader/util"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 )
 
@@ -56,7 +57,7 @@ func NewResticUploaderProvider(
 	repoIdentifier string,
 	bsl *velerov1api.BackupStorageLocation,
 	credGetter *credentials.CredentialGetter,
-	repoKeySelector *v1.SecretKeySelector,
+	repoKeySelector *corev1api.SecretKeySelector,
 	log logrus.FieldLogger,
 ) (Provider, error) {
 	provider := resticProvider{
@@ -122,27 +123,38 @@ func (rp *resticProvider) RunBackup(
 	forceFull bool,
 	parentSnapshot string,
 	volMode uploader.PersistentVolumeMode,
-	updater uploader.ProgressUpdater) (string, bool, error) {
+	uploaderCfg map[string]string,
+	updater uploader.ProgressUpdater) (string, bool, int64, error) {
 	if updater == nil {
-		return "", false, errors.New("Need to initial backup progress updater first")
+		return "", false, 0, errors.New("Need to initial backup progress updater first")
 	}
 
 	if path == "" {
-		return "", false, errors.New("path is empty")
+		return "", false, 0, errors.New("path is empty")
 	}
 
 	if realSource != "" {
-		return "", false, errors.New("real source is not empty, this is not supported by restic uploader")
+		return "", false, 0, errors.New("real source is not empty, this is not supported by restic uploader")
 	}
 
 	if volMode == uploader.PersistentVolumeBlock {
-		return "", false, errors.New("unable to support block mode")
+		return "", false, 0, errors.New("unable to support block mode")
 	}
 
 	log := rp.log.WithFields(logrus.Fields{
 		"path":           path,
 		"parentSnapshot": parentSnapshot,
 	})
+
+	if len(uploaderCfg) > 0 {
+		parallelFilesUpload, err := uploaderutil.GetParallelFilesUpload(uploaderCfg)
+		if err != nil {
+			return "", false, 0, errors.Wrap(err, "failed to get uploader config")
+		}
+		if parallelFilesUpload > 0 {
+			log.Warnf("ParallelFilesUpload is set to %d, but restic does not support parallel file uploads. Ignoring.", parallelFilesUpload)
+		}
+	}
 
 	backupCmd := resticBackupCMDFunc(rp.repoIdentifier, rp.credentialsFile, path, tags)
 	backupCmd.Env = rp.cmdEnv
@@ -159,9 +171,9 @@ func (rp *resticProvider) RunBackup(
 	if err != nil {
 		if strings.Contains(stderrBuf, "snapshot is empty") {
 			log.Debugf("Restic backup got empty dir with %s path", path)
-			return "", true, nil
+			return "", true, 0, nil
 		}
-		return "", false, errors.WithStack(fmt.Errorf("error running restic backup command %s with error: %v stderr: %v", backupCmd.String(), err, stderrBuf))
+		return "", false, 0, errors.WithStack(fmt.Errorf("error running restic backup command %s with error: %v stderr: %v", backupCmd.String(), err, stderrBuf))
 	}
 	// GetSnapshotID
 	snapshotIDCmd := resticGetSnapshotFunc(rp.repoIdentifier, rp.credentialsFile, tags)
@@ -172,10 +184,10 @@ func (rp *resticProvider) RunBackup(
 	}
 	snapshotID, err := resticGetSnapshotIDFunc(snapshotIDCmd)
 	if err != nil {
-		return "", false, errors.WithStack(fmt.Errorf("error getting snapshot id with error: %v", err))
+		return "", false, 0, errors.WithStack(fmt.Errorf("error getting snapshot id with error: %v", err))
 	}
 	log.Infof("Run command=%s, stdout=%s, stderr=%s", backupCmd.String(), summary, stderrBuf)
-	return snapshotID, false, nil
+	return snapshotID, false, 0, nil
 }
 
 // RunRestore runs a `restore` command and monitors the volume size to
@@ -185,9 +197,10 @@ func (rp *resticProvider) RunRestore(
 	snapshotID string,
 	volumePath string,
 	volMode uploader.PersistentVolumeMode,
-	updater uploader.ProgressUpdater) error {
+	uploaderCfg map[string]string,
+	updater uploader.ProgressUpdater) (int64, error) {
 	if updater == nil {
-		return errors.New("Need to initial backup progress updater first")
+		return 0, errors.New("Need to initial backup progress updater first")
 	}
 	log := rp.log.WithFields(logrus.Fields{
 		"snapshotID": snapshotID,
@@ -195,7 +208,7 @@ func (rp *resticProvider) RunRestore(
 	})
 
 	if volMode == uploader.PersistentVolumeBlock {
-		return errors.New("unable to support block mode")
+		return 0, errors.New("unable to support block mode")
 	}
 
 	restoreCmd := resticRestoreCMDFunc(rp.repoIdentifier, rp.credentialsFile, snapshotID, volumePath)
@@ -204,8 +217,38 @@ func (rp *resticProvider) RunRestore(
 	if len(rp.extraFlags) != 0 {
 		restoreCmd.ExtraFlags = append(restoreCmd.ExtraFlags, rp.extraFlags...)
 	}
+
+	extraFlags, err := rp.parseRestoreExtraFlags(uploaderCfg)
+	if err != nil {
+		return 0, errors.Wrap(err, "failed to parse uploader config")
+	} else if len(extraFlags) != 0 {
+		restoreCmd.ExtraFlags = append(restoreCmd.ExtraFlags, extraFlags...)
+	}
+
 	stdout, stderr, err := restic.RunRestore(restoreCmd, log, updater)
 
-	log.Infof("Run command=%s, stdout=%s, stderr=%s", restoreCmd.Command, stdout, stderr)
-	return err
+	log.Infof("Run command=%v, stdout=%s, stderr=%s", restoreCmd, stdout, stderr)
+	return 0, err
+}
+
+func (rp *resticProvider) parseRestoreExtraFlags(uploaderCfg map[string]string) ([]string, error) {
+	extraFlags := []string{}
+	if len(uploaderCfg) == 0 {
+		return extraFlags, nil
+	}
+
+	writeSparseFiles, err := uploaderutil.GetWriteSparseFiles(uploaderCfg)
+	if err != nil {
+		return extraFlags, errors.Wrap(err, "failed to get uploader config")
+	}
+
+	if writeSparseFiles {
+		extraFlags = append(extraFlags, "--sparse")
+	}
+
+	if restoreConcurrency, err := uploaderutil.GetRestoreConcurrency(uploaderCfg); err == nil && restoreConcurrency > 0 {
+		return extraFlags, errors.New("restic does not support parallel restore")
+	}
+
+	return extraFlags, nil
 }

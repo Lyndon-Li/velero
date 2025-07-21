@@ -21,21 +21,24 @@ import (
 	"sync"
 	"time"
 
+	"github.com/vmware-tanzu/velero/internal/volume"
+
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/cache"
+	ctrlcache "sigs.k8s.io/controller-runtime/pkg/cache"
+	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	veleroclient "github.com/vmware-tanzu/velero/pkg/client"
-	clientset "github.com/vmware-tanzu/velero/pkg/generated/clientset/versioned"
 	"github.com/vmware-tanzu/velero/pkg/label"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	"github.com/vmware-tanzu/velero/pkg/repository"
+	uploaderutil "github.com/vmware-tanzu/velero/pkg/uploader/util"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -50,17 +53,15 @@ type RestoreData struct {
 // Restorer can execute pod volume restores of volumes in a pod.
 type Restorer interface {
 	// RestorePodVolumes restores all annotated volumes in a pod.
-	RestorePodVolumes(RestoreData) []error
+	RestorePodVolumes(RestoreData, *volume.RestoreVolumeInfoTracker) []error
 }
 
 type restorer struct {
-	ctx          context.Context
-	repoLocker   *repository.RepoLocker
-	repoEnsurer  *repository.Ensurer
-	veleroClient clientset.Interface
-	pvcClient    corev1client.PersistentVolumeClaimsGetter
-	podClient    corev1client.PodsGetter
-	kubeClient   kubernetes.Interface
+	ctx         context.Context
+	repoLocker  *repository.RepoLocker
+	repoEnsurer *repository.Ensurer
+	kubeClient  kubernetes.Interface
+	crClient    ctrlclient.Client
 
 	resultsLock    sync.Mutex
 	results        map[string]chan *velerov1api.PodVolumeRestore
@@ -72,32 +73,32 @@ func newRestorer(
 	ctx context.Context,
 	repoLocker *repository.RepoLocker,
 	repoEnsurer *repository.Ensurer,
-	podVolumeRestoreInformer cache.SharedIndexInformer,
-	veleroClient clientset.Interface,
-	pvcClient corev1client.PersistentVolumeClaimsGetter,
-	podClient corev1client.PodsGetter,
+	pvrInformer ctrlcache.Informer,
 	kubeClient kubernetes.Interface,
+	crClient ctrlclient.Client,
+	restore *velerov1api.Restore,
 	log logrus.FieldLogger,
 ) *restorer {
 	r := &restorer{
-		ctx:          ctx,
-		repoLocker:   repoLocker,
-		repoEnsurer:  repoEnsurer,
-		veleroClient: veleroClient,
-		pvcClient:    pvcClient,
-		podClient:    podClient,
-		kubeClient:   kubeClient,
+		ctx:         ctx,
+		repoLocker:  repoLocker,
+		repoEnsurer: repoEnsurer,
+		kubeClient:  kubeClient,
+		crClient:    crClient,
 
 		results: make(map[string]chan *velerov1api.PodVolumeRestore),
 		log:     log,
 	}
 
-	podVolumeRestoreInformer.AddEventHandler(
+	_, _ = pvrInformer.AddEventHandler(
 		cache.ResourceEventHandlerFuncs{
-			UpdateFunc: func(_, obj interface{}) {
+			UpdateFunc: func(_, obj any) {
 				pvr := obj.(*velerov1api.PodVolumeRestore)
+				if pvr.GetLabels()[velerov1api.RestoreUIDLabel] != string(restore.UID) {
+					return
+				}
 
-				if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseCompleted || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseFailed {
+				if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseCompleted || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseFailed || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseCanceled {
 					r.resultsLock.Lock()
 					defer r.resultsLock.Unlock()
 
@@ -115,13 +116,13 @@ func newRestorer(
 	return r
 }
 
-func (r *restorer) RestorePodVolumes(data RestoreData) []error {
+func (r *restorer) RestorePodVolumes(data RestoreData, tracker *volume.RestoreVolumeInfoTracker) []error {
 	volumesToRestore := getVolumeBackupInfoForPod(data.PodVolumeBackups, data.Pod, data.SourceNamespace)
 	if len(volumesToRestore) == 0 {
 		return nil
 	}
 
-	if err := nodeagent.IsRunning(r.ctx, r.kubeClient, data.Restore.Namespace); err != nil {
+	if err := nodeagent.IsRunningOnLinux(r.ctx, r.kubeClient, data.Restore.Namespace); err != nil {
 		return []error{errors.Wrapf(err, "error to check node agent status")}
 	}
 
@@ -169,7 +170,8 @@ func (r *restorer) RestorePodVolumes(data RestoreData) []error {
 		var pvc *corev1api.PersistentVolumeClaim
 		if ok {
 			if volumeObj.PersistentVolumeClaim != nil {
-				pvc, err = r.pvcClient.PersistentVolumeClaims(data.Pod.Namespace).Get(context.TODO(), volumeObj.PersistentVolumeClaim.ClaimName, metav1.GetOptions{})
+				pvc = new(corev1api.PersistentVolumeClaim)
+				err := r.crClient.Get(context.TODO(), ctrlclient.ObjectKey{Namespace: data.Pod.Namespace, Name: volumeObj.PersistentVolumeClaim.ClaimName}, pvc)
 				if err != nil {
 					errs = append(errs, errors.Wrap(err, "error getting persistent volume claim for volume"))
 					continue
@@ -178,11 +180,7 @@ func (r *restorer) RestorePodVolumes(data RestoreData) []error {
 		}
 
 		volumeRestore := newPodVolumeRestore(data.Restore, data.Pod, data.BackupLocation, volume, backupInfo.snapshotID, repoIdentifier, backupInfo.uploaderType, data.SourceNamespace, pvc)
-
-		// TODO: once restorer is refactored to use controller-runtime, just pass client instead of anonymous func
-		if err := veleroclient.CreateRetryGenerateNameWithFunc(volumeRestore, func() error {
-			return errorOnly(r.veleroClient.VeleroV1().PodVolumeRestores(volumeRestore.Namespace).Create(context.TODO(), volumeRestore, metav1.CreateOptions{}))
-		}); err != nil {
+		if err := veleroclient.CreateRetryGenerateName(r.crClient, r.ctx, volumeRestore); err != nil {
 			errs = append(errs, errors.WithStack(err))
 			continue
 		}
@@ -203,18 +201,19 @@ func (r *restorer) RestorePodVolumes(data RestoreData) []error {
 
 			err = kube.IsPodScheduled(newObj)
 			if err != nil {
+				r.log.WithField("error", err).Debugf("Pod %s/%s is not scheduled yet", newObj.GetNamespace(), newObj.GetName())
 				return false, nil
 			}
 			return true, nil
 		}
 
-		err := wait.PollWithContext(checkCtx, time.Millisecond*500, time.Minute*10, checkFunc)
-		if err == wait.ErrWaitTimeout {
+		err := wait.PollUntilContextTimeout(checkCtx, time.Millisecond*500, time.Minute*10, true, checkFunc)
+		if wait.Interrupted(err) {
 			r.log.WithError(err).Error("Restoring pod is not scheduled until timeout or cancel, disengage")
 		} else if err != nil {
 			r.log.WithError(err).Error("Failed to check node-agent pod status, disengage")
 		} else {
-			err = nodeagent.IsRunningInNode(checkCtx, data.Restore.Namespace, nodeName, r.podClient)
+			err = nodeagent.IsRunningInNode(checkCtx, data.Restore.Namespace, nodeName, r.crClient)
 			if err != nil {
 				r.log.WithField("node", nodeName).WithError(err).Error("node-agent pod is not running in node, abort the restore")
 				r.nodeAgentCheck <- errors.Wrapf(err, "node-agent pod is not running in node %s", nodeName)
@@ -231,7 +230,10 @@ ForEachVolume:
 		case res := <-resultsChan:
 			if res.Status.Phase == velerov1api.PodVolumeRestorePhaseFailed {
 				errs = append(errs, errors.Errorf("pod volume restore failed: %s", res.Status.Message))
+			} else if res.Status.Phase == velerov1api.PodVolumeRestorePhaseCanceled {
+				errs = append(errs, errors.Errorf("pod volume restore canceled: %s", res.Status.Message))
 			}
+			tracker.TrackPodVolume(res)
 		case err := <-r.nodeAgentCheck:
 			errs = append(errs, err)
 			break ForEachVolume
@@ -289,6 +291,11 @@ func newPodVolumeRestore(restore *velerov1api.Restore, pod *corev1api.Pod, backu
 		// this label is not used by velero, but useful for debugging.
 		pvr.Labels[velerov1api.PVCUIDLabel] = string(pvc.UID)
 	}
+
+	if restore.Spec.UploaderConfig != nil {
+		pvr.Spec.UploaderSettings = uploaderutil.StoreRestoreConfig(restore.Spec.UploaderConfig)
+	}
+
 	return pvr
 }
 

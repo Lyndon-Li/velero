@@ -28,6 +28,7 @@ import (
 	"github.com/kopia/kopia/repo/object"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"github.com/stretchr/testify/require"
 
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/mocks"
@@ -64,10 +65,6 @@ func TestShimRepo(t *testing.T) {
 
 	backupRepo.On("Flush", mock.Anything).Return(nil)
 	NewShimRepo(backupRepo).Flush(ctx)
-
-	var objID object.ID
-	backupRepo.On("ConcatenateObjects", mock.Anything, mock.Anything).Return(objID)
-	NewShimRepo(backupRepo).ConcatenateObjects(ctx, []object.ID{})
 
 	backupRepo.On("NewObjectWriter", mock.Anything, mock.Anything).Return(nil)
 	NewShimRepo(backupRepo).NewObjectWriter(ctx, object.WriterOptions{})
@@ -113,12 +110,12 @@ func TestOpenObject(t *testing.T) {
 			ctx := context.Background()
 			reader, err := NewShimRepo(tc.backupRepo).OpenObject(ctx, object.ID{})
 			if tc.isOpenObjectError {
-				assert.Contains(t, err.Error(), "failed to open object")
+				require.ErrorContains(t, err, "failed to open object")
 			} else if tc.isReaderNil {
 				assert.Nil(t, reader)
 			} else {
 				assert.NotNil(t, reader)
-				assert.Nil(t, err)
+				assert.NoError(t, err)
 			}
 		})
 	}
@@ -155,9 +152,9 @@ func TestFindManifests(t *testing.T) {
 			ctx := context.Background()
 			_, err := NewShimRepo(tc.backupRepo).FindManifests(ctx, map[string]string{})
 			if tc.isGetManifestError {
-				assert.Contains(t, err.Error(), "failed")
+				require.ErrorContains(t, err, "failed")
 			} else {
-				assert.Nil(t, err)
+				assert.NoError(t, err)
 			}
 		})
 	}
@@ -281,12 +278,73 @@ func TestReplaceManifests(t *testing.T) {
 			id, err := NewShimRepo(tc.backupRepo).ReplaceManifests(ctx, map[string]string{}, nil)
 
 			if tc.expectedError != "" {
+				require.EqualError(t, err, tc.expectedError)
+			} else {
+				require.NoError(t, err)
+			}
+
+			assert.Equal(t, tc.expectedID, id)
+		})
+	}
+}
+
+func TestConcatenateObjects(t *testing.T) {
+	tests := []struct {
+		name          string
+		backupRepo    *mocks.BackupRepo
+		objectIDs     []object.ID
+		expectedError string
+	}{
+		{
+			name:          "empty object list",
+			expectedError: "object list is empty",
+		},
+		{
+			name: "concatenate error",
+			backupRepo: func() *mocks.BackupRepo {
+				backupRepo := &mocks.BackupRepo{}
+				backupRepo.On("ConcatenateObjects", mock.Anything, mock.Anything).Return(udmrepo.ID(""), errors.New("fake-concatenate-error"))
+				return backupRepo
+			}(),
+			objectIDs: []object.ID{
+				{},
+			},
+			expectedError: "fake-concatenate-error",
+		},
+		{
+			name: "parse error",
+			backupRepo: func() *mocks.BackupRepo {
+				backupRepo := &mocks.BackupRepo{}
+				backupRepo.On("ConcatenateObjects", mock.Anything, mock.Anything).Return(udmrepo.ID("fake-id"), nil)
+				return backupRepo
+			}(),
+			objectIDs: []object.ID{
+				{},
+			},
+			expectedError: "malformed content ID: \"fake-id\": invalid content prefix",
+		},
+		{
+			name: "success",
+			backupRepo: func() *mocks.BackupRepo {
+				backupRepo := &mocks.BackupRepo{}
+				backupRepo.On("ConcatenateObjects", mock.Anything, mock.Anything).Return(udmrepo.ID("I123456"), nil)
+				return backupRepo
+			}(),
+			objectIDs: []object.ID{
+				{},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			_, err := NewShimRepo(tc.backupRepo).ConcatenateObjects(ctx, tc.objectIDs, repo.ConcatenateOptions{})
+
+			if tc.expectedError != "" {
 				assert.EqualError(t, err, tc.expectedError)
 			} else {
 				assert.NoError(t, err)
 			}
-
-			assert.Equal(t, tc.expectedID, id)
 		})
 	}
 }

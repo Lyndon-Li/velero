@@ -24,6 +24,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"k8s.io/client-go/rest"
 	controllerclient "sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -39,7 +40,7 @@ func TestNewDescribeCommand(t *testing.T) {
 	// create a factory
 	f := &factorymocks.Factory{}
 	backupName := "bk-describe-1"
-	testBackup := builder.ForBackup(cmdtest.VeleroNameSpace, backupName).Result()
+	testBackup := builder.ForBackup(cmdtest.VeleroNameSpace, backupName).SnapshotVolumes(false).Result()
 
 	clientConfig := rest.Config{}
 	kbClient := test.NewFakeControllerRuntimeClient(t)
@@ -58,7 +59,7 @@ func TestNewDescribeCommand(t *testing.T) {
 
 	c.SetArgs([]string{backupName})
 	e := c.Execute()
-	assert.NoError(t, e)
+	require.NoError(t, e)
 
 	if os.Getenv(cmdtest.CaptureFlag) == "1" {
 		return
@@ -68,7 +69,7 @@ func TestNewDescribeCommand(t *testing.T) {
 	stdout, _, err := veleroexec.RunCommand(cmd)
 
 	if err == nil {
-		assert.Contains(t, stdout, "Velero-Native Snapshots: <none included>")
+		assert.Contains(t, stdout, "Backup Volumes:")
 		assert.Contains(t, stdout, "Or label selector:  <none>")
 		assert.Contains(t, stdout, fmt.Sprintf("Name:         %s", backupName))
 		return

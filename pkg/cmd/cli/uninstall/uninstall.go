@@ -28,7 +28,7 @@ import (
 	"github.com/spf13/pflag"
 
 	appsv1api "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
+	corev1api "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextv1beta1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,7 +45,7 @@ import (
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
 	"github.com/vmware-tanzu/velero/pkg/client"
 	"github.com/vmware-tanzu/velero/pkg/cmd"
-	"github.com/vmware-tanzu/velero/pkg/cmd/cli"
+	"github.com/vmware-tanzu/velero/pkg/cmd/util/confirm"
 	"github.com/vmware-tanzu/velero/pkg/controller"
 	"github.com/vmware-tanzu/velero/pkg/install"
 	kubeutil "github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -88,7 +88,7 @@ Use '--force' to skip the prompt confirming if you want to uninstall Velero.
 			// Confirm if not asked to force-skip confirmation
 			if !o.force {
 				fmt.Println("You are about to uninstall Velero.")
-				if !cli.GetConfirmation() {
+				if !confirm.GetConfirmation() {
 					// Don't do anything unless we get confirmation
 					return
 				}
@@ -173,7 +173,7 @@ func Run(ctx context.Context, kbClient kbclient.Client, namespace string) error 
 
 func deleteNamespace(ctx context.Context, kbClient kbclient.Client, namespace string) error {
 	// First check if it's already been deleted
-	ns := &corev1.Namespace{}
+	ns := &corev1api.Namespace{}
 	key := kbclient.ObjectKey{Name: namespace}
 	if err := kbClient.Get(ctx, key, ns); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -273,11 +273,11 @@ func deleteResources(ctx context.Context, kbClient kbclient.Client, namespace st
 	// First attempt to gracefully delete all the resources within a specified time frame, If the process exceeds the timeout limit,
 	// it is likely that there may be errors during the finalization of restores. In such cases, we should proceed with forcefully deleting the restores.
 	err = gracefullyDeleteResources(ctx, kbClient, namespace)
-	if err != nil && err != wait.ErrWaitTimeout {
+	if err != nil && !wait.Interrupted(err) {
 		return errors.Wrap(err, "Error deleting resources")
 	}
 
-	if err == wait.ErrWaitTimeout {
+	if wait.Interrupted(err) {
 		err = forcedlyDeleteResources(ctx, kbClient, namespace)
 		if err != nil {
 			return errors.Wrap(err, "Error deleting resources forcedly")
@@ -351,7 +351,7 @@ func gracefullyDeleteResource(ctx context.Context, kbClient kbclient.Client, nam
 
 func waitDeletingResources(ctx context.Context, kbClient kbclient.Client, namespace string) error {
 	// Wait for the deletion of all the restores within a specified time frame
-	err := wait.PollImmediate(time.Second, gracefulDeletionMaximumDuration, func() (bool, error) {
+	err := wait.PollUntilContextTimeout(ctx, time.Second, gracefulDeletionMaximumDuration, true, func(ctx context.Context) (bool, error) {
 		itemsCount := 0
 		for i := range resToDelete {
 			if errList := kbClient.List(ctx, resToDelete[i], &kbclient.ListOptions{Namespace: namespace}); errList != nil {

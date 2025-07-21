@@ -19,10 +19,8 @@ package test
 import (
 	"strings"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/language"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	discoveryfake "k8s.io/client-go/discovery/fake"
 )
@@ -76,10 +74,18 @@ func (c *DiscoveryClient) WithAPIResource(resource *APIResource) *DiscoveryClien
 		Namespaced:   resource.Namespaced,
 		Group:        resource.Group,
 		Version:      resource.Version,
-		Kind:         cases.Title(language.Und).String(strings.TrimSuffix(resource.Name, "s")),
+		Kind:         resource.Kind,
 		Verbs:        metav1.Verbs([]string{"list", "create", "get", "delete"}),
 		ShortNames:   []string{resource.ShortName},
 	})
 
 	return c
+}
+
+func (c *DiscoveryClient) GroupsAndMaybeResources() (*metav1.APIGroupList, map[schema.GroupVersion]*metav1.APIResourceList, map[schema.GroupVersion]error, error) {
+	apiGroupList, err := c.ServerGroups()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return apiGroupList, nil, nil, nil
 }

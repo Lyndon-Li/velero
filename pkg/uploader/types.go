@@ -39,12 +39,13 @@ const (
 
 // ValidateUploaderType validates if the input param is a valid uploader type.
 // It will return an error if it's invalid.
-func ValidateUploaderType(t string) error {
+func ValidateUploaderType(t string) (string, error) {
 	t = strings.TrimSpace(t)
-	if t != ResticType && t != KopiaType {
-		return fmt.Errorf("invalid uploader type '%s', valid upload types are: '%s', '%s'", t, ResticType, KopiaType)
+	if t != KopiaType {
+		return "", fmt.Errorf("invalid uploader type '%s', valid type: '%s'", t, KopiaType)
 	}
-	return nil
+
+	return "", nil
 }
 
 type SnapshotInfo struct {
