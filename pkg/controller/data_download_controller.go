@@ -49,6 +49,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -67,6 +68,7 @@ type DataDownloadReconciler struct {
 	vgdpCounter           *exposer.VgdpCounter
 	loadAffinity          []*kube.LoadAffinity
 	restorePVCConfig      nodeagent.RestorePVC
+	backupRepoConfigs     *corev1api.ConfigMap
 	podResources          corev1api.ResourceRequirements
 	preparingTimeout      time.Duration
 	metrics               *metrics.ServerMetrics
@@ -81,6 +83,7 @@ func NewDataDownloadReconciler(
 	counter *exposer.VgdpCounter,
 	loadAffinity []*kube.LoadAffinity,
 	restorePVCConfig nodeagent.RestorePVC,
+	backupRepoConfigs *corev1api.ConfigMap,
 	podResources corev1api.ResourceRequirements,
 	nodeName string,
 	preparingTimeout time.Duration,
@@ -96,6 +99,7 @@ func NewDataDownloadReconciler(
 		nodeName:              nodeName,
 		restoreExposer:        exposer.NewGenericRestoreExposer(kubeClient, logger),
 		restorePVCConfig:      restorePVCConfig,
+		backupRepoConfigs:     backupRepoConfigs,
 		dataPathMgr:           dataPathMgr,
 		vgdpCounter:           counter,
 		loadAffinity:          loadAffinity,
@@ -880,6 +884,15 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 
 	affinity := kube.GetLoadAffinityByStorageClass(r.loadAffinity, dd.Spec.BackupStorageLocation, log)
 
+	var cacheVolume *exposer.CacheVolumeInfo
+	if c := udmrepo.ParseCacheConfigs(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log); c != nil {
+		cacheVolume = &exposer.CacheVolumeInfo{
+			StorageClass:  c.StorageClass,
+			Limit:         c.Limit,
+			SizeThreshold: c.ResidentThreshold,
+		}
+	}
+
 	return exposer.GenericRestoreExposeParam{
 		TargetPVCName:         dd.Spec.TargetVolume.PVC,
 		TargetNamespace:       dd.Spec.TargetVolume.Namespace,
@@ -892,6 +905,8 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 		NodeOS:                nodeOS,
 		RestorePVCConfig:      r.restorePVCConfig,
 		LoadAffinity:          affinity,
+		RestoreSize:           dd.Spec.SnapshotSize,
+		CacheVolume:           cacheVolume,
 	}, nil
 }
 

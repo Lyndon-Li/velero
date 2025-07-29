@@ -69,6 +69,12 @@ type GenericRestoreExposeParam struct {
 
 	// LoadAffinity specifies the node affinity of the backup pod
 	LoadAffinity *kube.LoadAffinity
+
+	// RestoreSize specifies the data size for the volume to be restored
+	RestoreSize int64
+
+	// CacheVolume specifies the info for cache volumes
+	CacheVolume *CacheVolumeInfo
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
@@ -136,6 +142,13 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", param.TargetNamespace, param.TargetPVCName)
 	}
 
+	cacheVolumeSize := getCacheVolumeSize(param.RestoreSize, param.CacheVolume)
+	if cacheVolumeSize > 0 {
+		curLog.Infof("Need to cache PVC with size %v", cacheVolumeSize)
+	} else {
+		curLog.Infof("Don't need to create cache volume, restore size %v, cache info %v", param.RestoreSize, param.CacheVolume)
+	}
+
 	restorePod, err := e.createRestorePod(
 		ctx,
 		ownerObject,
@@ -148,6 +161,7 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		param.Resources,
 		param.NodeOS,
 		param.LoadAffinity,
+		cacheVolumeSize > 0,
 	)
 	if err != nil {
 		return errors.Wrapf(err, "error to create restore pod")
@@ -173,6 +187,21 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 			kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVC.Name, restorePVC.Namespace, 0, curLog)
 		}
 	}()
+
+	if cacheVolumeSize > 0 {
+		curLog.Infof("Creating cache PVC with size %v", cacheVolumeSize)
+
+		pvc, err := createCachePVC(ctx, e.kubeClient.CoreV1(), ownerObject, param.CacheVolume.StorageClass, cacheVolumeSize)
+		if err != nil {
+			return errors.Wrap(err, "error to create cache pvc")
+		}
+
+		defer func() {
+			if err != nil {
+				kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), pvc.Name, pvc.Namespace, 0, curLog)
+			}
+		}()
+	}
 
 	return nil
 }
@@ -304,9 +333,11 @@ func (e *genericRestoreExposer) DiagnoseExpose(ctx context.Context, ownerObject 
 func (e *genericRestoreExposer) CleanUp(ctx context.Context, ownerObject corev1api.ObjectReference) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
+	cachePVCName := getCachePVCName(ownerObject)
 
 	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePodName, ownerObject.Namespace, e.log)
 	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVCName, ownerObject.Namespace, 0, e.log)
+	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), cachePVCName, ownerObject.Namespace, 0, e.log)
 }
 
 func (e *genericRestoreExposer) RebindVolume(ctx context.Context, ownerObject corev1api.ObjectReference, targetPVCName string, targetNamespace string, timeout time.Duration) error {
@@ -414,12 +445,15 @@ func (e *genericRestoreExposer) createRestorePod(
 	resources corev1api.ResourceRequirements,
 	nodeOS string,
 	affinity *kube.LoadAffinity,
+	cacheVolume bool,
 ) (*corev1api.Pod, error) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
+	cachePVCName := getCachePVCName(ownerObject)
 
 	containerName := string(ownerObject.UID)
 	volumeName := string(ownerObject.UID)
+	cacheVolumeName := "cachedir"
 
 	var podAffinity *corev1api.Affinity
 	if selectedNode == "" {
@@ -436,17 +470,17 @@ func (e *genericRestoreExposer) createRestorePod(
 	}
 
 	var gracePeriod int64
-	volumeMounts, volumeDevices, volumePath := kube.MakePodPVCAttachment(volumeName, targetPVC.Spec.VolumeMode, false)
-	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
+	volumeMounts, volumeDevices, volumes, volumePath := kube.MakePodPVCAttachment(volumeName, restorePVCName, targetPVC.Spec.VolumeMode, false)
 
-	volumes := []corev1api.Volume{{
-		Name: volumeName,
-		VolumeSource: corev1api.VolumeSource{
-			PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
-				ClaimName: restorePVCName,
-			},
-		},
-	}}
+	cacheVolumePath := ""
+	if cacheVolume {
+		mnt, _, vol, path := kube.MakePodPVCAttachment(cacheVolumeName, cachePVCName, nil, false)
+		volumeMounts = append(volumeMounts, mnt...)
+		volumes = append(volumes, vol...)
+		cacheVolumePath = path
+	}
+
+	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 	volumes = append(volumes, podInfo.volumes...)
 
 	if label == nil {
@@ -464,6 +498,7 @@ func (e *genericRestoreExposer) createRestorePod(
 		fmt.Sprintf("--volume-mode=%s", volumeMode),
 		fmt.Sprintf("--data-download=%s", ownerObject.Name),
 		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
+		fmt.Sprintf("--cache-volume-path=%s", cacheVolumePath),
 	}
 
 	args = append(args, podInfo.logFormatArgs...)

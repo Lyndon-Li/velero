@@ -17,6 +17,7 @@ limitations under the License.
 package udmrepo
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,6 +66,7 @@ const (
 	StoreOptionGenReadOnly        = "readOnly"
 
 	StoreOptionCacheLimit = "cacheLimitMB"
+	StoreOptionCacheDir   = "cacheDir"
 
 	ThrottleOptionReadOps       = "readOPS"
 	ThrottleOptionWriteOps      = "writeOPS"
@@ -80,6 +82,9 @@ const (
 	EagerGCInterval                       time.Duration                  = 6 * time.Hour
 	NormalGC                              FullMaintenanceIntervalOptions = "normalGC"
 	NormalGCInterval                      time.Duration                  = 24 * time.Hour
+
+	CacheProvisionOptionResidentThreshold = "residentCacheThresholdMB"
+	CacheProvisionOptionStorageClass      = "cacheStorageClass"
 )
 
 type FullMaintenanceIntervalOptions string
@@ -184,9 +189,7 @@ func WithStoreOptions(getter StoreOptionsGetter, param any) func(*RepoOptions) e
 
 		options.StorageType = storeType
 
-		for k, v := range storeOptions {
-			options.StorageOptions[k] = v
-		}
+		maps.Copy(options.StorageOptions, storeOptions)
 
 		return nil
 	}
