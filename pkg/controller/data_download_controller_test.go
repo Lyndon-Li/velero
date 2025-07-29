@@ -138,6 +138,7 @@ func initDataDownloadReconcilerWithError(t *testing.T, objects []any, needError 
 		nil,
 		nil,
 		nodeagent.RestorePVC{},
+		nil,
 		corev1api.ResourceRequirements{},
 		"test-node",
 		time.Minute*5,

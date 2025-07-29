@@ -1510,14 +1510,17 @@ func TestMakePodPVCAttachment(t *testing.T) {
 		name                 string
 		volumeName           string
 		volumeMode           corev1api.PersistentVolumeMode
+		pvcName              string
 		readOnly             bool
 		expectedVolumeMount  []corev1api.VolumeMount
 		expectedVolumeDevice []corev1api.VolumeDevice
 		expectedVolumePath   string
+		expectedVolume       []corev1api.Volume
 	}{
 		{
 			name:       "no volume mode specified",
 			volumeName: "volume-1",
+			pvcName:    "fake-pvc-1",
 			readOnly:   true,
 			expectedVolumeMount: []corev1api.VolumeMount{
 				{
@@ -1526,12 +1529,23 @@ func TestMakePodPVCAttachment(t *testing.T) {
 					ReadOnly:  true,
 				},
 			},
+			expectedVolume: []corev1api.Volume{
+				{
+					Name: "volume-1",
+					VolumeSource: corev1api.VolumeSource{
+						PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+							ClaimName: "fake-pvc-1",
+						},
+					},
+				},
+			},
 			expectedVolumePath: "/volume-1",
 		},
 		{
 			name:       "fs mode specified",
 			volumeName: "volume-2",
 			volumeMode: corev1api.PersistentVolumeFilesystem,
+			pvcName:    "fake-pvc-2",
 			readOnly:   true,
 			expectedVolumeMount: []corev1api.VolumeMount{
 				{
@@ -1540,16 +1554,37 @@ func TestMakePodPVCAttachment(t *testing.T) {
 					ReadOnly:  true,
 				},
 			},
+			expectedVolume: []corev1api.Volume{
+				{
+					Name: "volume-2",
+					VolumeSource: corev1api.VolumeSource{
+						PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+							ClaimName: "fake-pvc-2",
+						},
+					},
+				},
+			},
 			expectedVolumePath: "/volume-2",
 		},
 		{
 			name:       "block volume mode specified",
 			volumeName: "volume-3",
 			volumeMode: corev1api.PersistentVolumeBlock,
+			pvcName:    "fake-pvc-3",
 			expectedVolumeDevice: []corev1api.VolumeDevice{
 				{
 					Name:       "volume-3",
 					DevicePath: "/volume-3",
+				},
+			},
+			expectedVolume: []corev1api.Volume{
+				{
+					Name: "volume-3",
+					VolumeSource: corev1api.VolumeSource{
+						PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+							ClaimName: "fake-pvc-3",
+						},
+					},
 				},
 			},
 			expectedVolumePath: "/volume-3",
@@ -1558,12 +1593,23 @@ func TestMakePodPVCAttachment(t *testing.T) {
 			name:       "fs mode specified with readOnly as false",
 			volumeName: "volume-4",
 			readOnly:   false,
+			pvcName:    "fake-pvc-4",
 			volumeMode: corev1api.PersistentVolumeFilesystem,
 			expectedVolumeMount: []corev1api.VolumeMount{
 				{
 					Name:      "volume-4",
 					MountPath: "/volume-4",
 					ReadOnly:  false,
+				},
+			},
+			expectedVolume: []corev1api.Volume{
+				{
+					Name: "volume-4",
+					VolumeSource: corev1api.VolumeSource{
+						PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+							ClaimName: "fake-pvc-4",
+						},
+					},
 				},
 			},
 			expectedVolumePath: "/volume-4",
@@ -1577,10 +1623,11 @@ func TestMakePodPVCAttachment(t *testing.T) {
 				volMode = &tc.volumeMode
 			}
 
-			mount, device, path := MakePodPVCAttachment(tc.volumeName, volMode, tc.readOnly)
+			mount, device, volume, path := MakePodPVCAttachment(tc.volumeName, tc.pvcName, volMode, tc.readOnly)
 
 			assert.Equal(t, tc.expectedVolumeMount, mount)
 			assert.Equal(t, tc.expectedVolumeDevice, device)
+			assert.Equal(t, tc.expectedVolume, volume)
 			assert.Equal(t, tc.expectedVolumePath, path)
 			if tc.expectedVolumeMount != nil {
 				assert.Equal(t, tc.expectedVolumeMount[0].ReadOnly, tc.readOnly)

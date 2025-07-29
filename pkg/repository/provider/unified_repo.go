@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"strconv"
@@ -416,12 +417,11 @@ func (urp *unifiedRepoProvider) GetStoreOptions(param any) (map[string]string, e
 	}
 
 	storeOptions := make(map[string]string)
-	for k, v := range storeVar {
-		storeOptions[k] = v
-	}
+	maps.Copy(storeOptions, storeVar)
+	maps.Copy(storeOptions, storeCred)
 
-	for k, v := range storeCred {
-		storeOptions[k] = v
+	if repoParam.CacheDir != "" {
+		storeOptions[udmrepo.StoreOptionCacheDir] = repoParam.CacheDir
 	}
 
 	return storeOptions, nil

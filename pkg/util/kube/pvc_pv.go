@@ -396,7 +396,7 @@ func IsPVCBound(pvc *corev1api.PersistentVolumeClaim) bool {
 }
 
 // MakePodPVCAttachment returns the volume mounts and devices for a pod needed to attach a PVC
-func MakePodPVCAttachment(volumeName string, volumeMode *corev1api.PersistentVolumeMode, readOnly bool) ([]corev1api.VolumeMount, []corev1api.VolumeDevice, string) {
+func MakePodPVCAttachment(volumeName string, pvcName string, volumeMode *corev1api.PersistentVolumeMode, readOnly bool) ([]corev1api.VolumeMount, []corev1api.VolumeDevice, []corev1api.Volume, string) {
 	var volumeMounts []corev1api.VolumeMount
 	var volumeDevices []corev1api.VolumeDevice
 	volumePath := "/" + volumeName
@@ -414,7 +414,16 @@ func MakePodPVCAttachment(volumeName string, volumeMode *corev1api.PersistentVol
 		}}
 	}
 
-	return volumeMounts, volumeDevices, volumePath
+	volumes := []corev1api.Volume{{
+		Name: volumeName,
+		VolumeSource: corev1api.VolumeSource{
+			PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+				ClaimName: pvcName,
+			},
+		},
+	}}
+
+	return volumeMounts, volumeDevices, volumes, volumePath
 }
 
 func GetPVForPVC(

@@ -550,17 +550,8 @@ func (e *csiSnapshotExposer) createBackupPod(
 	}
 
 	var gracePeriod int64
-	volumeMounts, volumeDevices, volumePath := kube.MakePodPVCAttachment(volumeName, backupPVC.Spec.VolumeMode, backupPVCReadOnly)
+	volumeMounts, volumeDevices, volumes, volumePath := kube.MakePodPVCAttachment(volumeName, backupPVC.Name, backupPVC.Spec.VolumeMode, backupPVCReadOnly)
 	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
-
-	volumes := []corev1api.Volume{{
-		Name: volumeName,
-		VolumeSource: corev1api.VolumeSource{
-			PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
-				ClaimName: backupPVC.Name,
-			},
-		},
-	}}
 
 	if backupPVCReadOnly {
 		volumes[0].VolumeSource.PersistentVolumeClaim.ReadOnly = true

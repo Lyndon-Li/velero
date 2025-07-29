@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -70,6 +71,12 @@ type PodVolumeExposeParam struct {
 
 	// Type specifies the type of the expose, either backup or erstore
 	Type string
+
+	// RestoreSize specifies the data size for the volume to be restored, for restore only
+	RestoreSize int64
+
+	// CacheVolume specifies the info for cache volumes, for restore only
+	CacheVolume *repocache.CacheConfigs
 }
 
 // PodVolumeExposer is the interfaces for a pod volume exposer
@@ -150,7 +157,29 @@ func (e *podVolumeExposer) Expose(ctx context.Context, ownerObject corev1api.Obj
 
 	curLog.WithField("path", path).Infof("Host path is retrieved for pod %s, volume %s", param.ClientPodName, param.ClientPodVolume)
 
-	hostingPod, err := e.createHostingPod(ctx, ownerObject, param.Type, path.ByPath, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, param.HostingPodTolerations, pod.Spec.NodeName, param.Resources, nodeOS)
+	var cachePVC *corev1api.PersistentVolumeClaim
+	if param.CacheVolume != nil {
+		cacheVolumeSize := getCacheVolumeSize(param.RestoreSize, param.CacheVolume)
+		if cacheVolumeSize > 0 {
+			curLog.Infof("Creating cache PVC with size %v", cacheVolumeSize)
+
+			if pvc, err := createCachePVC(ctx, e.kubeClient.CoreV1(), ownerObject, param.CacheVolume.StorageClass, cacheVolumeSize, pod.Spec.NodeName); err != nil {
+				return errors.Wrap(err, "error to create cache pvc")
+			} else {
+				cachePVC = pvc
+			}
+
+			defer func() {
+				if err != nil {
+					kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), cachePVC.Name, cachePVC.Namespace, 0, curLog)
+				}
+			}()
+		} else {
+			curLog.Infof("Don't need to create cache volume, restore size %v, cache info %v", param.RestoreSize, param.CacheVolume)
+		}
+	}
+
+	hostingPod, err := e.createHostingPod(ctx, ownerObject, param.Type, path.ByPath, param.OperationTimeout, param.HostingPodLabels, param.HostingPodAnnotations, param.HostingPodTolerations, pod.Spec.NodeName, param.Resources, nodeOS, cachePVC)
 	if err != nil {
 		return errors.Wrapf(err, "error to create hosting pod")
 	}
@@ -262,11 +291,14 @@ func (e *podVolumeExposer) DiagnoseExpose(ctx context.Context, ownerObject corev
 
 func (e *podVolumeExposer) CleanUp(ctx context.Context, ownerObject corev1api.ObjectReference) {
 	restorePodName := ownerObject.Name
+	cachePVCName := getCachePVCName(ownerObject)
+
 	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePodName, ownerObject.Namespace, e.log)
+	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), cachePVCName, ownerObject.Namespace, 0, e.log)
 }
 
 func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject corev1api.ObjectReference, exposeType string, hostPath string,
-	operationTimeout time.Duration, label map[string]string, annotation map[string]string, toleration []corev1api.Toleration, selectedNode string, resources corev1api.ResourceRequirements, nodeOS string) (*corev1api.Pod, error) {
+	operationTimeout time.Duration, label map[string]string, annotation map[string]string, toleration []corev1api.Toleration, selectedNode string, resources corev1api.ResourceRequirements, nodeOS string, cachePVC *corev1api.PersistentVolumeClaim) (*corev1api.Pod, error) {
 	hostingPodName := ownerObject.Name
 
 	containerName := string(ownerObject.UID)
@@ -285,7 +317,6 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 		MountPath:        clientVolumePath,
 		MountPropagation: &mountPropagation,
 	}}
-	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 
 	volumes := []corev1api.Volume{{
 		Name: clientVolumeName,
@@ -295,6 +326,16 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 			},
 		},
 	}}
+
+	cacheVolumePath := ""
+	if cachePVC != nil {
+		mnt, _, vol, path := kube.MakePodPVCAttachment(cacheVolumeName, cachePVC.Name, nil, false)
+		volumeMounts = append(volumeMounts, mnt...)
+		volumes = append(volumes, vol...)
+		cacheVolumePath = path
+	}
+
+	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 	volumes = append(volumes, podInfo.volumes...)
 
 	args := []string{
@@ -312,6 +353,7 @@ func (e *podVolumeExposer) createHostingPod(ctx context.Context, ownerObject cor
 		command = append(command, "backup")
 	} else {
 		args = append(args, fmt.Sprintf("--pod-volume-restore=%s", ownerObject.Name))
+		args = append(args, fmt.Sprintf("--cache-volume-path=%s", cacheVolumePath))
 		command = append(command, "restore")
 	}
 

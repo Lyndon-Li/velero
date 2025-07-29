@@ -85,6 +85,7 @@ type nodeAgentServerConfig struct {
 	resourceTimeout         time.Duration
 	dataMoverPrepareTimeout time.Duration
 	nodeAgentConfig         string
+	backupRepoConfig        string
 }
 
 func NewServerCommand(f client.Factory) *cobra.Command {
@@ -122,6 +123,7 @@ func NewServerCommand(f client.Factory) *cobra.Command {
 	command.Flags().DurationVar(&config.dataMoverPrepareTimeout, "data-mover-prepare-timeout", config.dataMoverPrepareTimeout, "How long to wait for preparing a DataUpload/DataDownload. Default is 30 minutes.")
 	command.Flags().StringVar(&config.metricsAddress, "metrics-address", config.metricsAddress, "The address to expose prometheus metrics")
 	command.Flags().StringVar(&config.nodeAgentConfig, "node-agent-configmap", config.nodeAgentConfig, "The name of ConfigMap containing node-agent configurations.")
+	command.Flags().StringVar(&config.backupRepoConfig, "backup-repository-configmap", config.backupRepoConfig, "The name of ConfigMap containing backup repository configurations.")
 
 	return command
 }
@@ -141,6 +143,7 @@ type nodeAgentServer struct {
 	csiSnapshotClient *snapshotv1client.Clientset
 	dataPathMgr       *datapath.Manager
 	dataPathConfigs   *nodeagent.Configs
+	backupRepoConfigs *corev1api.ConfigMap
 	vgdpCounter       *exposer.VgdpCounter
 }
 
@@ -253,6 +256,7 @@ func newNodeAgentServer(logger logrus.FieldLogger, factory client.Factory, confi
 	}
 
 	s.getDataPathConfigs()
+	s.getBackupRepoConfigs()
 	s.dataPathMgr = datapath.NewManager(s.getDataPathConcurrentNum(defaultDataPathConcurrentNum))
 
 	return s, nil
@@ -316,7 +320,7 @@ func (s *nodeAgentServer) run() {
 		s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerPodVolumeBackup)
 	}
 
-	pvrReconciler := controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.vgdpCounter, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.resourceTimeout, podResources, s.logger)
+	pvrReconciler := controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.vgdpCounter, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.resourceTimeout, s.backupRepoConfigs, podResources, s.logger)
 	if err := pvrReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
@@ -359,6 +363,7 @@ func (s *nodeAgentServer) run() {
 		s.vgdpCounter,
 		loadAffinity,
 		restorePVCConfig,
+		s.backupRepoConfigs,
 		podResources,
 		s.nodeName,
 		s.config.dataMoverPrepareTimeout,
@@ -542,6 +547,21 @@ func (s *nodeAgentServer) getDataPathConfigs() {
 	}
 
 	s.dataPathConfigs = configs
+}
+
+func (s *nodeAgentServer) getBackupRepoConfigs() {
+	if s.config.backupRepoConfig == "" {
+		s.logger.Info("No backup repo configMap is specified")
+		return
+	}
+
+	loc, err := s.kubeClient.CoreV1().ConfigMaps(s.namespace).Get(s.ctx, s.config.backupRepoConfig, metav1.GetOptions{})
+	if err != nil {
+		s.logger.WithError(err).Warnf("Failed to get backup repo configMap %s, ignore it", s.config.backupRepoConfig)
+		return
+	}
+
+	s.backupRepoConfigs = loc
 }
 
 func (s *nodeAgentServer) getDataPathConcurrentNum(defaultNum int) int {

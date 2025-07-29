@@ -48,6 +48,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/restorehelper"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
@@ -55,39 +56,41 @@ import (
 )
 
 func NewPodVolumeRestoreReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	counter *exposer.VgdpCounter, nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, podResources corev1api.ResourceRequirements,
-	logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
+	counter *exposer.VgdpCounter, nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, backupRepoConfigs *corev1api.ConfigMap,
+	podResources corev1api.ResourceRequirements, logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
 	return &PodVolumeRestoreReconciler{
-		client:           client,
-		mgr:              mgr,
-		kubeClient:       kubeClient,
-		logger:           logger.WithField("controller", "PodVolumeRestore"),
-		nodeName:         nodeName,
-		clock:            &clocks.RealClock{},
-		podResources:     podResources,
-		dataPathMgr:      dataPathMgr,
-		vgdpCounter:      counter,
-		preparingTimeout: preparingTimeout,
-		resourceTimeout:  resourceTimeout,
-		exposer:          exposer.NewPodVolumeExposer(kubeClient, logger),
-		cancelledPVR:     make(map[string]time.Time),
+		client:            client,
+		mgr:               mgr,
+		kubeClient:        kubeClient,
+		logger:            logger.WithField("controller", "PodVolumeRestore"),
+		nodeName:          nodeName,
+		clock:             &clocks.RealClock{},
+		podResources:      podResources,
+		backupRepoConfigs: backupRepoConfigs,
+		dataPathMgr:       dataPathMgr,
+		vgdpCounter:       counter,
+		preparingTimeout:  preparingTimeout,
+		resourceTimeout:   resourceTimeout,
+		exposer:           exposer.NewPodVolumeExposer(kubeClient, logger),
+		cancelledPVR:      make(map[string]time.Time),
 	}
 }
 
 type PodVolumeRestoreReconciler struct {
-	client           client.Client
-	mgr              manager.Manager
-	kubeClient       kubernetes.Interface
-	logger           logrus.FieldLogger
-	nodeName         string
-	clock            clocks.WithTickerAndDelayedExecution
-	podResources     corev1api.ResourceRequirements
-	exposer          exposer.PodVolumeExposer
-	dataPathMgr      *datapath.Manager
-	vgdpCounter      *exposer.VgdpCounter
-	preparingTimeout time.Duration
-	resourceTimeout  time.Duration
-	cancelledPVR     map[string]time.Time
+	client            client.Client
+	mgr               manager.Manager
+	kubeClient        kubernetes.Interface
+	logger            logrus.FieldLogger
+	nodeName          string
+	clock             clocks.WithTickerAndDelayedExecution
+	backupRepoConfigs *corev1api.ConfigMap
+	podResources      corev1api.ResourceRequirements
+	exposer           exposer.PodVolumeExposer
+	dataPathMgr       *datapath.Manager
+	vgdpCounter       *exposer.VgdpCounter
+	preparingTimeout  time.Duration
+	resourceTimeout   time.Duration
+	cancelledPVR      map[string]time.Time
 }
 
 // +kubebuilder:rbac:groups=velero.io,resources=podvolumerestores,verbs=get;list;watch;create;update;patch;delete
@@ -882,6 +885,8 @@ func (r *PodVolumeRestoreReconciler) setupExposeParam(pvr *velerov1api.PodVolume
 		}
 	}
 
+	cacheVolume := repocache.ParseCacheConfigs(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
+
 	return exposer.PodVolumeExposeParam{
 		Type:                  exposer.PodVolumeExposeTypeRestore,
 		ClientNamespace:       pvr.Spec.Pod.Namespace,
@@ -892,6 +897,8 @@ func (r *PodVolumeRestoreReconciler) setupExposeParam(pvr *velerov1api.PodVolume
 		HostingPodTolerations: hostingPodTolerations,
 		OperationTimeout:      r.resourceTimeout,
 		Resources:             r.podResources,
+		RestoreSize:           pvr.Spec.SnapshotSize,
+		CacheVolume:           cacheVolume,
 	}
 }
 
