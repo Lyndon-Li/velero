@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -75,7 +74,7 @@ type GenericRestoreExposeParam struct {
 	RestoreSize int64
 
 	// CacheVolume specifies the info for cache volumes
-	CacheVolume *repocache.CacheConfigs
+	CacheVolume *CacheConfigs
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
@@ -304,6 +303,22 @@ func (e *genericRestoreExposer) DiagnoseExpose(ctx context.Context, ownerObject 
 		diag += fmt.Sprintf("error getting restore pvc %s, err: %v\n", restorePVCName, err)
 	}
 
+	var cachePVC *corev1api.PersistentVolumeClaim
+	if pod.Spec.Volumes != nil {
+		for _, v := range pod.Spec.Volumes {
+			if v.Name == cacheVolumeName {
+				cachePVC, err = e.kubeClient.CoreV1().PersistentVolumeClaims(ownerObject.Namespace).Get(ctx, getCachePVCName(ownerObject), metav1.GetOptions{})
+				if err != nil {
+					cachePVC = nil
+					diag += fmt.Sprintf("error getting cache pvc %s, err: %v\n", getCachePVCName(ownerObject), err)
+				}
+
+				break
+			}
+
+		}
+	}
+
 	if pod != nil {
 		diag += kube.DiagnosePod(pod)
 
@@ -320,6 +335,18 @@ func (e *genericRestoreExposer) DiagnoseExpose(ctx context.Context, ownerObject 
 		if pvc.Spec.VolumeName != "" {
 			if pv, err := e.kubeClient.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{}); err != nil {
 				diag += fmt.Sprintf("error getting restore pv %s, err: %v\n", pvc.Spec.VolumeName, err)
+			} else {
+				diag += kube.DiagnosePV(pv)
+			}
+		}
+	}
+
+	if cachePVC != nil {
+		diag += kube.DiagnosePVC(cachePVC)
+
+		if cachePVC.Spec.VolumeName != "" {
+			if pv, err := e.kubeClient.CoreV1().PersistentVolumes().Get(ctx, cachePVC.Spec.VolumeName, metav1.GetOptions{}); err != nil {
+				diag += fmt.Sprintf("error getting cache pv %s, err: %v\n", cachePVC.Spec.VolumeName, err)
 			} else {
 				diag += kube.DiagnosePV(pv)
 			}

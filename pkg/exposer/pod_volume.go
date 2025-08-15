@@ -32,7 +32,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -76,7 +75,7 @@ type PodVolumeExposeParam struct {
 	RestoreSize int64
 
 	// CacheVolume specifies the info for cache volumes, for restore only
-	CacheVolume *repocache.CacheConfigs
+	CacheVolume *CacheConfigs
 }
 
 // PodVolumeExposer is the interfaces for a pod volume exposer
@@ -274,12 +273,40 @@ func (e *podVolumeExposer) DiagnoseExpose(ctx context.Context, ownerObject corev
 		diag += fmt.Sprintf("error getting hosting pod %s, err: %v\n", hostingPodName, err)
 	}
 
+	var cachePVC *corev1api.PersistentVolumeClaim
+	if pod.Spec.Volumes != nil {
+		for _, v := range pod.Spec.Volumes {
+			if v.Name == cacheVolumeName {
+				cachePVC, err = e.kubeClient.CoreV1().PersistentVolumeClaims(ownerObject.Namespace).Get(ctx, getCachePVCName(ownerObject), metav1.GetOptions{})
+				if err != nil {
+					cachePVC = nil
+					diag += fmt.Sprintf("error getting cache pvc %s, err: %v\n", getCachePVCName(ownerObject), err)
+				}
+
+				break
+			}
+
+		}
+	}
+
 	if pod != nil {
 		diag += kube.DiagnosePod(pod)
 
 		if pod.Spec.NodeName != "" {
 			if err := nodeagent.KbClientIsRunningInNode(ctx, ownerObject.Namespace, pod.Spec.NodeName, e.kubeClient); err != nil {
 				diag += fmt.Sprintf("node-agent is not running in node %s, err: %v\n", pod.Spec.NodeName, err)
+			}
+		}
+	}
+
+	if cachePVC != nil {
+		diag += kube.DiagnosePVC(cachePVC)
+
+		if cachePVC.Spec.VolumeName != "" {
+			if pv, err := e.kubeClient.CoreV1().PersistentVolumes().Get(ctx, cachePVC.Spec.VolumeName, metav1.GetOptions{}); err != nil {
+				diag += fmt.Sprintf("error getting cache pv %s, err: %v\n", cachePVC.Spec.VolumeName, err)
+			} else {
+				diag += kube.DiagnosePV(pv)
 			}
 		}
 	}
