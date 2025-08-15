@@ -32,7 +32,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -76,7 +75,7 @@ type PodVolumeExposeParam struct {
 	RestoreSize int64
 
 	// CacheVolume specifies the info for cache volumes, for restore only
-	CacheVolume *repocache.CacheConfigs
+	CacheVolume *CacheConfigs
 }
 
 // PodVolumeExposer is the interfaces for a pod volume exposer

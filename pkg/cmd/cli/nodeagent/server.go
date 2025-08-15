@@ -315,12 +315,16 @@ func (s *nodeAgentServer) run() {
 		}
 	}
 
+	if s.dataPathConfigs.CachePVCConfig != nil {
+		s.logger.Infof("Using cache volume configs %v", s.dataPathConfigs.CachePVCConfig)
+	}
+
 	pvbReconciler := controller.NewPodVolumeBackupReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.vgdpCounter, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.resourceTimeout, podResources, s.metrics, s.logger)
 	if err := pvbReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerPodVolumeBackup)
 	}
 
-	pvrReconciler := controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.vgdpCounter, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.resourceTimeout, s.backupRepoConfigs, podResources, s.logger)
+	pvrReconciler := controller.NewPodVolumeRestoreReconciler(s.mgr.GetClient(), s.mgr, s.kubeClient, s.dataPathMgr, s.vgdpCounter, s.nodeName, s.config.dataMoverPrepareTimeout, s.config.resourceTimeout, s.backupRepoConfigs, s.dataPathConfigs.CachePVCConfig, podResources, s.logger)
 	if err := pvrReconciler.SetupWithManager(s.mgr); err != nil {
 		s.logger.WithError(err).Fatal("Unable to create the pod volume restore controller")
 	}
@@ -364,6 +368,7 @@ func (s *nodeAgentServer) run() {
 		loadAffinity,
 		restorePVCConfig,
 		s.backupRepoConfigs,
+		s.dataPathConfigs.CachePVCConfig,
 		podResources,
 		s.nodeName,
 		s.config.dataMoverPrepareTimeout,

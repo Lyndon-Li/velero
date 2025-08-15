@@ -97,6 +97,14 @@ type RestorePVC struct {
 	IgnoreDelayBinding bool `json:"ignoreDelayBinding,omitempty"`
 }
 
+type CachePVC struct {
+	// StorageClass specifies the storage class for cache PVC
+	StorageClass string
+
+	// ResidentThreshold specifies the minimum size of the cache data to create cache PVC
+	ResidentThreshold int64
+}
+
 type Configs struct {
 	// LoadConcurrency is the config for data path load concurrency per node.
 	LoadConcurrency *LoadConcurrency `json:"loadConcurrency,omitempty"`
@@ -112,6 +120,9 @@ type Configs struct {
 
 	// PodResources is the resource config for various types of pods launched by node-agent, i.e., data mover pods.
 	PodResources *kube.PodResources `json:"podResources,omitempty"`
+
+	// CachePVCConfig is the config for cachePVC
+	CachePVCConfig *CachePVC `json:"cachePVC,omitempty"`
 }
 
 func IsRunningOnLinux(ctx context.Context, kubeClient kubernetes.Interface, namespace string) error {

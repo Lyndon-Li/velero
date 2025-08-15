@@ -31,7 +31,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -75,7 +74,7 @@ type GenericRestoreExposeParam struct {
 	RestoreSize int64
 
 	// CacheVolume specifies the info for cache volumes
-	CacheVolume *repocache.CacheConfigs
+	CacheVolume *CacheConfigs
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer

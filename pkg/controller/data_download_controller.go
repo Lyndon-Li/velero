@@ -70,6 +70,7 @@ type DataDownloadReconciler struct {
 	loadAffinity          []*kube.LoadAffinity
 	restorePVCConfig      nodeagent.RestorePVC
 	backupRepoConfigs     *corev1api.ConfigMap
+	cacheVolumeConfigs    *nodeagent.CachePVC
 	podResources          corev1api.ResourceRequirements
 	preparingTimeout      time.Duration
 	metrics               *metrics.ServerMetrics
@@ -85,6 +86,7 @@ func NewDataDownloadReconciler(
 	loadAffinity []*kube.LoadAffinity,
 	restorePVCConfig nodeagent.RestorePVC,
 	backupRepoConfigs *corev1api.ConfigMap,
+	cacheVolumeConfigs *nodeagent.CachePVC,
 	podResources corev1api.ResourceRequirements,
 	nodeName string,
 	preparingTimeout time.Duration,
@@ -101,6 +103,7 @@ func NewDataDownloadReconciler(
 		restoreExposer:        exposer.NewGenericRestoreExposer(kubeClient, logger),
 		restorePVCConfig:      restorePVCConfig,
 		backupRepoConfigs:     backupRepoConfigs,
+		cacheVolumeConfigs:    cacheVolumeConfigs,
 		dataPathMgr:           dataPathMgr,
 		vgdpCounter:           counter,
 		loadAffinity:          loadAffinity,
@@ -885,7 +888,16 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 
 	affinity := kube.GetLoadAffinityByStorageClass(r.loadAffinity, dd.Spec.BackupStorageLocation, log)
 
-	cacheVolume := repocache.ParseCacheConfigs(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
+	var cacheVolume *exposer.CacheConfigs
+	if r.cacheVolumeConfigs != nil {
+		repoCache := repocache.ParseCacheConfigs(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
+
+		cacheVolume = &exposer.CacheConfigs{
+			Limit:             repoCache.Limit,
+			StorageClass:      r.cacheVolumeConfigs.StorageClass,
+			ResidentThreshold: r.cacheVolumeConfigs.ResidentThreshold,
+		}
+	}
 
 	return exposer.GenericRestoreExposeParam{
 		TargetPVCName:         dd.Spec.TargetVolume.PVC,

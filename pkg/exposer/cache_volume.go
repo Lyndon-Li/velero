@@ -26,9 +26,13 @@ import (
 
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
-
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 )
+
+type CacheConfigs struct {
+	Limit             int64
+	StorageClass      string
+	ResidentThreshold int64
+}
 
 const (
 	cacheVolumeName      = "cachedir"
@@ -79,23 +83,17 @@ func getCachePVCName(ownerObject corev1api.ObjectReference) string {
 	return ownerObject.Name + cacheVolumeDirSuffix
 }
 
-func getCacheVolumeSize(restoreSize int64, info *repocache.CacheConfigs) int64 {
+func getCacheVolumeSize(dataSize int64, info *CacheConfigs) int64 {
 	if info == nil {
 		return 0
 	}
 
-	if restoreSize == 0 {
+	if dataSize != 0 && dataSize < info.ResidentThreshold {
 		return 0
 	}
-
-	if restoreSize < info.ResidentThreshold {
-		return 0
-	}
-
-	volumeSize := min(restoreSize, info.Limit)
 
 	// 20% inflate and round up to GB
-	volumeSize = (volumeSize*12/10 + (1 << 30) - 1) / (1 << 30) * (1 << 30)
+	volumeSize := (info.Limit*12/10 + (1 << 30) - 1) / (1 << 30) * (1 << 30)
 
 	return volumeSize
 }
