@@ -29,11 +29,11 @@ import (
 	"github.com/kopia/kopia/repo/hashing"
 	"github.com/kopia/kopia/repo/splitter"
 
-	"github.com/vmware-tanzu/velero/pkg/repository/cache"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 )
 
 const (
+	DefaultCacheLimitMB    = 5000
 	maxCacheDurationSecond = 30
 )
 
@@ -66,7 +66,7 @@ func SetupNewRepositoryOptions(ctx context.Context, flags map[string]string) rep
 
 // SetupConnectOptions setups the options when connecting to an existing Kopia repository
 func SetupConnectOptions(ctx context.Context, repoOptions udmrepo.RepoOptions) repo.ConnectOptions {
-	cacheLimit := optionalHaveIntWithDefault(ctx, udmrepo.StoreOptionCacheLimit, repoOptions.StorageOptions, cache.DefaultCacheLimitMB) << 20
+	cacheLimit := optionalHaveIntWithDefault(ctx, udmrepo.StoreOptionCacheLimit, repoOptions.StorageOptions, DefaultCacheLimitMB) << 20
 	cacheDir := optionalHaveString(udmrepo.StoreOptionCacheDir, repoOptions.StorageOptions)
 
 	// 80% for data cache and 20% for metadata cache and align to KB

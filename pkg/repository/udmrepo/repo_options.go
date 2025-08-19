@@ -82,9 +82,6 @@ const (
 	EagerGCInterval                       time.Duration                  = 6 * time.Hour
 	NormalGC                              FullMaintenanceIntervalOptions = "normalGC"
 	NormalGCInterval                      time.Duration                  = 24 * time.Hour
-
-	CacheProvisionOptionResidentThreshold = "residentCacheThresholdMB"
-	CacheProvisionOptionStorageClass      = "cacheStorageClass"
 )
 
 type FullMaintenanceIntervalOptions string

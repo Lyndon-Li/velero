@@ -49,11 +49,10 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	"github.com/vmware-tanzu/velero/pkg/repository/provider"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
-
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
 )
 
 // DataDownloadReconciler reconciles a DataDownload object
@@ -69,7 +68,7 @@ type DataDownloadReconciler struct {
 	vgdpCounter           *exposer.VgdpCounter
 	loadAffinity          []*kube.LoadAffinity
 	restorePVCConfig      nodeagent.RestorePVC
-	backupRepoConfigs     *corev1api.ConfigMap
+	backupRepoConfigs     map[string]string
 	cacheVolumeConfigs    *nodeagent.CachePVC
 	podResources          corev1api.ResourceRequirements
 	preparingTimeout      time.Duration
@@ -85,7 +84,7 @@ func NewDataDownloadReconciler(
 	counter *exposer.VgdpCounter,
 	loadAffinity []*kube.LoadAffinity,
 	restorePVCConfig nodeagent.RestorePVC,
-	backupRepoConfigs *corev1api.ConfigMap,
+	backupRepoConfigs map[string]string,
 	cacheVolumeConfigs *nodeagent.CachePVC,
 	podResources corev1api.ResourceRequirements,
 	nodeName string,
@@ -890,10 +889,10 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 
 	var cacheVolume *exposer.CacheConfigs
 	if r.cacheVolumeConfigs != nil {
-		repoCache := repocache.ParseCacheConfigs(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
+		limit := provider.GetUnifiedRepoClientSideCacheLimit(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
 
 		cacheVolume = &exposer.CacheConfigs{
-			Limit:             repoCache.Limit,
+			Limit:             limit,
 			StorageClass:      r.cacheVolumeConfigs.StorageClass,
 			ResidentThreshold: r.cacheVolumeConfigs.ResidentThreshold,
 		}

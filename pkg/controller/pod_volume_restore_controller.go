@@ -48,7 +48,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/datapath"
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-	repocache "github.com/vmware-tanzu/velero/pkg/repository/cache"
+	"github.com/vmware-tanzu/velero/pkg/repository/provider"
 	"github.com/vmware-tanzu/velero/pkg/restorehelper"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
@@ -56,7 +56,7 @@ import (
 )
 
 func NewPodVolumeRestoreReconciler(client client.Client, mgr manager.Manager, kubeClient kubernetes.Interface, dataPathMgr *datapath.Manager,
-	counter *exposer.VgdpCounter, nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, backupRepoConfigs *corev1api.ConfigMap,
+	counter *exposer.VgdpCounter, nodeName string, preparingTimeout time.Duration, resourceTimeout time.Duration, backupRepoConfigs map[string]string,
 	cacheVolumeConfigs *nodeagent.CachePVC, podResources corev1api.ResourceRequirements, logger logrus.FieldLogger) *PodVolumeRestoreReconciler {
 	return &PodVolumeRestoreReconciler{
 		client:             client,
@@ -84,7 +84,7 @@ type PodVolumeRestoreReconciler struct {
 	logger             logrus.FieldLogger
 	nodeName           string
 	clock              clocks.WithTickerAndDelayedExecution
-	backupRepoConfigs  *corev1api.ConfigMap
+	backupRepoConfigs  map[string]string
 	cacheVolumeConfigs *nodeagent.CachePVC
 	podResources       corev1api.ResourceRequirements
 	exposer            exposer.PodVolumeExposer
@@ -889,10 +889,10 @@ func (r *PodVolumeRestoreReconciler) setupExposeParam(pvr *velerov1api.PodVolume
 
 	var cacheVolume *exposer.CacheConfigs
 	if r.cacheVolumeConfigs != nil {
-		repoCache := repocache.ParseCacheConfigs(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
+		limit := provider.GetUnifiedRepoClientSideCacheLimit(r.backupRepoConfigs, velerov1api.BackupRepositoryTypeKopia, log)
 
 		cacheVolume = &exposer.CacheConfigs{
-			Limit:             repoCache.Limit,
+			Limit:             limit,
 			StorageClass:      r.cacheVolumeConfigs.StorageClass,
 			ResidentThreshold: r.cacheVolumeConfigs.ResidentThreshold,
 		}

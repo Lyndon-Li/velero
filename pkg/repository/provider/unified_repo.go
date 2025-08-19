@@ -82,9 +82,14 @@ func NewUnifiedRepoProvider(
 		log:              log,
 	}
 
-	repo.repoService = createRepoService(log)
+	repo.repoService = createRepoService(repoBackend, log)
 
 	return &repo
+}
+
+func GetUnifiedRepoClientSideCacheLimit(repoOption map[string]string, repoBackend string, log logrus.FieldLogger) int64 {
+	repoService := createRepoService(repoBackend, log)
+	return repoService.ClientSideCacheLimit(repoOption)
 }
 
 func (urp *unifiedRepoProvider) InitRepo(ctx context.Context, param RepoParam) error {
@@ -597,6 +602,6 @@ func getStorageVariables(backupLocation *velerov1api.BackupStorageLocation, repo
 	return result, nil
 }
 
-func createRepoService(log logrus.FieldLogger) udmrepo.BackupRepoService {
-	return reposervice.Create(log)
+func createRepoService(repoBackend string, log logrus.FieldLogger) udmrepo.BackupRepoService {
+	return reposervice.Create(repoBackend, log)
 }

@@ -143,7 +143,7 @@ type nodeAgentServer struct {
 	csiSnapshotClient *snapshotv1client.Clientset
 	dataPathMgr       *datapath.Manager
 	dataPathConfigs   *nodeagent.Configs
-	backupRepoConfigs *corev1api.ConfigMap
+	backupRepoConfigs map[string]string
 	vgdpCounter       *exposer.VgdpCounter
 }
 
@@ -560,13 +560,13 @@ func (s *nodeAgentServer) getBackupRepoConfigs() {
 		return
 	}
 
-	loc, err := s.kubeClient.CoreV1().ConfigMaps(s.namespace).Get(s.ctx, s.config.backupRepoConfig, metav1.GetOptions{})
+	cm, err := s.kubeClient.CoreV1().ConfigMaps(s.namespace).Get(s.ctx, s.config.backupRepoConfig, metav1.GetOptions{})
 	if err != nil {
 		s.logger.WithError(err).Warnf("Failed to get backup repo configMap %s, ignore it", s.config.backupRepoConfig)
 		return
 	}
 
-	s.backupRepoConfigs = loc
+	s.backupRepoConfigs = cm.Data
 }
 
 func (s *nodeAgentServer) getDataPathConcurrentNum(defaultNum int) int {
