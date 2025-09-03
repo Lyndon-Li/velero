@@ -20,10 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
-	"sort"
 	"strings"
-	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
@@ -33,7 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
@@ -54,22 +51,23 @@ const (
 	DefaultMaintenanceJobCPULimit    = "0"
 	DefaultMaintenanceJobMemRequest  = "0"
 	DefaultMaintenanceJobMemLimit    = "0"
+
+	podGroupLabel = "velero.io/repo-maintenance-pod-group"
+)
+
+var (
+	ErrRepoMaintenanceInProgress  = errors.New("repo maintenenace job is in progress")
+	ErrConflictRepoMaintenance    = errors.New("more than one repo maintenenace jobs are in progress")
+	ErrNoMoreParallelJobIsAllowed = errors.New("no more parallel maintenance job is allowed")
 )
 
 func GenerateJobName(repo string) string {
-	millisecond := time.Now().UTC().UnixMilli() // millisecond
-
-	jobName := fmt.Sprintf("%s-maintain-job-%d", repo, millisecond)
-	if len(jobName) > 63 { // k8s job name length limit
-		jobName = fmt.Sprintf("repo-maintain-job-%d", millisecond)
-	}
-
-	return jobName
+	return repo
 }
 
-// DeleteOldJobs deletes old maintenance jobs and keeps the latest N jobs
-func DeleteOldJobs(cli client.Client, repo string, keep int, logger logrus.FieldLogger) error {
-	logger.Infof("Start to delete old maintenance jobs. %d jobs will be kept.", keep)
+// DeleteOldJobs deletes old maintenance jobs
+func DeleteOldJobs(cli client.Client, repo string, logger logrus.FieldLogger) error {
+	logger.Infof("Start to delete old maintenance jobs.")
 	// Get the maintenance job list by label
 	jobList := &batchv1api.JobList{}
 	err := cli.List(context.TODO(), jobList, client.MatchingLabels(map[string]string{RepositoryNameLabel: repo}))
@@ -77,65 +75,14 @@ func DeleteOldJobs(cli client.Client, repo string, keep int, logger logrus.Field
 		return err
 	}
 
-	// Delete old maintenance jobs
-	if len(jobList.Items) > keep {
-		sort.Slice(jobList.Items, func(i, j int) bool {
-			return jobList.Items[i].CreationTimestamp.Before(&jobList.Items[j].CreationTimestamp)
-		})
-		for i := 0; i < len(jobList.Items)-keep; i++ {
-			err = cli.Delete(context.TODO(), &jobList.Items[i], client.PropagationPolicy(metav1.DeletePropagationBackground))
-			if err != nil {
-				return err
-			}
+	for i := 0; i < len(jobList.Items); i++ {
+		err = cli.Delete(context.TODO(), &jobList.Items[i], client.PropagationPolicy(metav1.DeletePropagationBackground))
+		if err != nil {
+			return err
 		}
 	}
 
 	return nil
-}
-
-var waitCompletionBackOff = wait.Backoff{
-	Duration: time.Minute * 20,
-	Steps:    math.MaxInt,
-	Factor:   2,
-	Cap:      time.Hour * 12,
-}
-
-// waitForJobComplete wait for completion of the specified job and update the latest job object
-func waitForJobComplete(ctx context.Context, client client.Client, ns string, job string, logger logrus.FieldLogger) (*batchv1api.Job, error) {
-	var ret *batchv1api.Job
-
-	backOff := waitCompletionBackOff
-
-	startTime := time.Now()
-	nextCheckpoint := startTime.Add(backOff.Step())
-
-	err := wait.PollUntilContextCancel(ctx, time.Second, true, func(ctx context.Context) (bool, error) {
-		updated := &batchv1api.Job{}
-		err := client.Get(ctx, types.NamespacedName{Namespace: ns, Name: job}, updated)
-		if err != nil && !apierrors.IsNotFound(err) {
-			return false, err
-		}
-
-		ret = updated
-
-		if updated.Status.Succeeded > 0 {
-			return true, nil
-		}
-
-		if updated.Status.Failed > 0 {
-			return true, nil
-		}
-
-		now := time.Now()
-		if now.After(nextCheckpoint) {
-			logger.Warnf("Repo maintenance job %s has lasted %v minutes", job, now.Sub(startTime).Minutes())
-			nextCheckpoint = now.Add(backOff.Step())
-		}
-
-		return false, nil
-	})
-
-	return ret, err
 }
 
 func getResultFromJob(cli client.Client, job *batchv1api.Job) (string, error) {
@@ -277,6 +224,8 @@ func getJobConfig(
 		if globalResult.PriorityClassName != "" {
 			result.PriorityClassName = globalResult.PriorityClassName
 		}
+
+		result.Concurrency = globalResult.Concurrency
 	}
 
 	logger.Debugf("Didn't find content for repository %s in cm %s", repo.Name, repoMaintenanceJobConfig)
@@ -311,33 +260,8 @@ func GetKeepLatestMaintenanceJobs(
 	return DefaultKeepLatestMaintenanceJobs, nil
 }
 
-// WaitJobComplete waits the completion of the specified maintenance job and return the BackupRepositoryMaintenanceStatus
-func WaitJobComplete(cli client.Client, ctx context.Context, jobName, ns string, logger logrus.FieldLogger) (velerov1api.BackupRepositoryMaintenanceStatus, error) {
-	log := logger.WithField("job name", jobName)
-
-	maintenanceJob, err := waitForJobComplete(ctx, cli, ns, jobName, logger)
-	if err != nil {
-		return velerov1api.BackupRepositoryMaintenanceStatus{}, errors.Wrap(err, "error to wait for maintenance job complete")
-	}
-
-	log.Infof("Maintenance repo complete, succeeded %v, failed %v", maintenanceJob.Status.Succeeded, maintenanceJob.Status.Failed)
-
-	result := ""
-	if maintenanceJob.Status.Failed > 0 {
-		if r, err := getResultFromJob(cli, maintenanceJob); err != nil {
-			log.WithError(err).Warn("Failed to get maintenance job result")
-			result = "Repo maintenance failed but result is not retrieveable"
-		} else {
-			result = r
-		}
-	}
-
-	return composeStatusFromJob(maintenanceJob, result), nil
-}
-
-// WaitAllJobsComplete checks all the incomplete maintenance jobs of the specified repo and wait for them to complete,
-// and then return the maintenance jobs' status in the range of limit
-func WaitAllJobsComplete(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, limit int, log logrus.FieldLogger) ([]velerov1api.BackupRepositoryMaintenanceStatus, error) {
+// CheckJobCompletion checks if the maintenance jobs complete, and then return the latest maintenance jobs' status
+func CheckJobCompletion(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, log logrus.FieldLogger) (*velerov1api.BackupRepositoryMaintenanceStatus, error) {
 	jobList := &batchv1api.JobList{}
 	err := cli.List(context.TODO(), jobList, &client.ListOptions{
 		Namespace: repo.Namespace,
@@ -353,45 +277,75 @@ func WaitAllJobsComplete(ctx context.Context, cli client.Client, repo *velerov1a
 		return nil, nil
 	}
 
-	sort.Slice(jobList.Items, func(i, j int) bool {
-		return jobList.Items[i].CreationTimestamp.Time.Before(jobList.Items[j].CreationTimestamp.Time)
-	})
-
-	history := []velerov1api.BackupRepositoryMaintenanceStatus{}
-
-	startPos := len(jobList.Items) - limit
-	if startPos < 0 {
-		startPos = 0
-	}
-
-	for i := startPos; i < len(jobList.Items); i++ {
-		job := &jobList.Items[i]
-
+	var incompleted bool
+	var latest *batchv1api.Job
+	for i, job := range jobList.Items {
 		if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
-			log.Infof("Waiting for maintenance job %s to complete", job.Name)
-
-			updated, err := waitForJobComplete(ctx, cli, job.Namespace, job.Name, log)
-			if err != nil {
-				return nil, errors.Wrapf(err, "error waiting maintenance job[%s] complete", job.Name)
-			}
-
-			job = updated
-		}
-
-		message := ""
-		if job.Status.Failed > 0 {
-			if msg, err := getResultFromJob(cli, job); err != nil {
-				log.WithError(err).Warnf("Failed to get result of maintenance job %s", job.Name)
-				message = fmt.Sprintf("Repo maintenance failed but result is not retrieveable, err: %v", err)
+			if incompleted {
+				return nil, ErrConflictRepoMaintenance
 			} else {
-				message = msg
+				incompleted = true
 			}
 		}
 
-		history = append(history, composeStatusFromJob(job, message))
+		if latest == nil || latest.CreationTimestamp.Time.Before(job.CreationTimestamp.Time) {
+			latest = &jobList.Items[i]
+		}
 	}
 
-	return history, nil
+	if incompleted {
+		return nil, ErrRepoMaintenanceInProgress
+	}
+
+	message := ""
+	if latest.Status.Failed > 0 {
+		if msg, err := getResultFromJob(cli, latest); err != nil {
+			log.WithError(err).Warnf("Failed to get result of maintenance job %s", latest.Name)
+			message = fmt.Sprintf("Repo maintenance failed but result is not retrieveable, err: %v", err)
+		} else {
+			message = msg
+		}
+	}
+
+	history := composeStatusFromJob(latest, message)
+
+	return &history, nil
+}
+
+// ShouldRunParallelJob checks if a node is avaiable for the maintenance job, according to the node-selection
+func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, repoMaintenanceJobConfig string, log logrus.FieldLogger) error {
+	config, err := getJobConfig(ctx, cli, log, repo.Namespace, repoMaintenanceJobConfig, repo)
+	if err != nil {
+		return errors.Wrap(err, "error getting max parallel jobs from config")
+	}
+
+	nodes, err := kube.GetNodesByAffinity(ctx, cli, config.LoadAffinities)
+	if err != nil {
+		return errors.Wrapf(err, "error getting available nodes for repo %s", repo.Name)
+	}
+
+	occupied := sets.Set[string]{}
+
+	podList := &corev1api.PodList{}
+	if err := cli.List(ctx, podList, &client.ListOptions{
+		Namespace: repo.Namespace,
+	},
+		client.MatchingLabels(map[string]string{podGroupLabel: "true"}),
+	); err != nil {
+		return errors.Wrap(err, "error listing active maintenance pods")
+	}
+
+	for _, p := range podList.Items {
+		occupied.Insert(p.Spec.NodeName)
+	}
+
+	for _, n := range nodes {
+		if !occupied.Has(n.Name) {
+			return nil
+		}
+	}
+
+	return ErrNoMoreParallelJobIsAllowed
 }
 
 // StartNewJob creates a new maintenance job
@@ -530,6 +484,7 @@ func buildJob(
 
 	podLabels := map[string]string{
 		RepositoryNameLabel: repo.Name,
+		podGroupLabel:       "true",
 	}
 
 	for _, k := range util.ThirdPartyLabels {
@@ -566,11 +521,23 @@ func buildJob(
 			BackoffLimit: new(int32), // Never retry
 			Template: corev1api.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:        "velero-repo-maintenance-pod",
+					Name:        GenerateJobName(repo.Name),
 					Labels:      podLabels,
 					Annotations: podAnnotations,
 				},
 				Spec: corev1api.PodSpec{
+					TopologySpreadConstraints: []corev1api.TopologySpreadConstraint{
+						{
+							MaxSkew:           1,
+							TopologyKey:       "kubernetes.io/hostname",
+							WhenUnsatisfiable: corev1api.DoNotSchedule,
+							LabelSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									podGroupLabel: "true",
+								},
+							},
+						},
+					},
 					Containers: []corev1api.Container{
 						{
 							Name:  "velero-repo-maintenance-container",

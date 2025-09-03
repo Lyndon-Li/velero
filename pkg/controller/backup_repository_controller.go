@@ -22,10 +22,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
-	"slices"
 	"time"
 
-	"github.com/petar/GoLLRB/llrb"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
@@ -261,22 +259,14 @@ func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 
-		if err := r.recallMaintenance(ctx, backupRepo, log); err != nil {
+		if err := r.recallMaintenance(ctx, backupRepo, log); err == maintenance.ErrRepoMaintenanceInProgress {
+			return ctrl.Result{}, nil
+		} else if err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "error handling incomplete repo maintenance jobs")
 		}
 
 		if err := r.runMaintenanceIfDue(ctx, backupRepo, log); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "error check and run repo maintenance jobs")
-		}
-
-		// Get the configured number of maintenance jobs to keep from ConfigMap
-		keepJobs, err := maintenance.GetKeepLatestMaintenanceJobs(ctx, r.Client, log, r.namespace, r.repoMaintenanceConfig, backupRepo)
-		if err != nil {
-			log.WithError(err).Warn("Failed to get keepLatestMaintenanceJobs from ConfigMap, using CLI parameter value")
-		}
-
-		if err := maintenance.DeleteOldJobs(r.Client, req.Name, keepJobs, log); err != nil {
-			log.WithError(err).Warn("Failed to delete old maintenance jobs")
 		}
 	}
 
@@ -382,21 +372,21 @@ func ensureRepo(repo *velerov1api.BackupRepository, repoManager repomanager.Mana
 }
 
 func (r *BackupRepoReconciler) recallMaintenance(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
-	history, err := maintenance.WaitAllJobsComplete(ctx, r.Client, req, defaultMaintenanceStatusQueueLength, log)
+	history, err := maintenance.CheckJobCompletion(ctx, r.Client, req, log)
 	if err != nil {
-		return errors.Wrapf(err, "error waiting incomplete repo maintenance job for repo %s", req.Name)
+		return err
 	}
 
-	consolidated := consolidateHistory(history, req.Status.RecentMaintenance)
-	if consolidated == nil {
+	if history == nil {
 		return nil
 	}
 
-	lastMaintenanceTime := getLastMaintenanceTimeFromHistory(consolidated)
+	consolidated := consolidateHistory(history, req.Status.RecentMaintenance)
+	lastMaintenanceTime := history.CompleteTimestamp
 
 	log.Warn("Updating backup repository because of unrecorded histories")
 
-	return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
+	if err := r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
 		if lastMaintenanceTime != nil && (rr.Status.LastMaintenanceTime == nil || lastMaintenanceTime.After(rr.Status.LastMaintenanceTime.Time)) {
 			if rr.Status.LastMaintenanceTime != nil {
 				log.Warnf("Updating backup repository last maintenance time (%v) from history (%v)", rr.Status.LastMaintenanceTime.Time, lastMaintenanceTime.Time)
@@ -406,77 +396,43 @@ func (r *BackupRepoReconciler) recallMaintenance(ctx context.Context, req *veler
 			rr.Status.LastMaintenanceTime = lastMaintenanceTime
 		}
 
-		rr.Status.RecentMaintenance = consolidated
-	})
+		if consolidated != nil {
+			rr.Status.RecentMaintenance = consolidated
+		}
+	}); err != nil {
+		return errors.Wrapf(err, "error patching backup repository %s", req.Name)
+	}
+
+	if err := maintenance.DeleteOldJobs(r.Client, req.Name, log); err != nil {
+		log.WithError(err).Warn("Failed to delete old maintenance jobs")
+	}
+
+	return nil
 }
 
-type maintenanceStatusWrapper struct {
-	status *velerov1api.BackupRepositoryMaintenanceStatus
-}
-
-func (w maintenanceStatusWrapper) Less(other llrb.Item) bool {
-	return w.status.StartTimestamp.Before(other.(maintenanceStatusWrapper).status.StartTimestamp)
-}
-
-func consolidateHistory(coming, cur []velerov1api.BackupRepositoryMaintenanceStatus) []velerov1api.BackupRepositoryMaintenanceStatus {
-	if len(coming) == 0 {
+func consolidateHistory(coming *velerov1api.BackupRepositoryMaintenanceStatus, cur []velerov1api.BackupRepositoryMaintenanceStatus) []velerov1api.BackupRepositoryMaintenanceStatus {
+	if coming == nil {
 		return nil
 	}
 
-	if slices.EqualFunc(cur, coming, func(a, b velerov1api.BackupRepositoryMaintenanceStatus) bool {
-		return a.StartTimestamp.Equal(b.StartTimestamp)
-	}) {
-		return nil
-	}
-
-	consolidator := llrb.New()
 	for i := range cur {
-		consolidator.ReplaceOrInsert(maintenanceStatusWrapper{&cur[i]})
+		if !cur[i].StartTimestamp.Before(coming.StartTimestamp) {
+			return nil
+		}
 	}
 
-	for i := range coming {
-		consolidator.ReplaceOrInsert(maintenanceStatusWrapper{&coming[i]})
-	}
+	cur = append(cur, *coming)
 
 	truncated := []velerov1api.BackupRepositoryMaintenanceStatus{}
-	for consolidator.Len() > 0 {
-		if len(truncated) == defaultMaintenanceStatusQueueLength {
-			break
-		}
-
-		item := consolidator.DeleteMax()
-		truncated = append(truncated, *item.(maintenanceStatusWrapper).status)
-	}
-
-	slices.Reverse(truncated)
-
-	if slices.EqualFunc(cur, truncated, func(a, b velerov1api.BackupRepositoryMaintenanceStatus) bool {
-		return a.StartTimestamp.Equal(b.StartTimestamp)
-	}) {
-		return nil
+	for i := max(0, len(cur)-defaultMaintenanceStatusQueueLength); i < len(cur); i++ {
+		truncated = append(truncated, cur[i])
 	}
 
 	return truncated
 }
 
-func getLastMaintenanceTimeFromHistory(history []velerov1api.BackupRepositoryMaintenanceStatus) *metav1.Time {
-	time := history[0].CompleteTimestamp
-
-	for i := range history {
-		if history[i].CompleteTimestamp == nil {
-			continue
-		}
-
-		if time == nil || time.Before(history[i].CompleteTimestamp) {
-			time = history[i].CompleteTimestamp
-		}
-	}
-
-	return time
-}
-
 var funcStartMaintenanceJob = maintenance.StartNewJob
-var funcWaitMaintenanceJobComplete = maintenance.WaitJobComplete
+var funcShouldRunParallelJob = maintenance.ShouldRunParallelJob
 
 func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
 	startTime := r.clock.Now()
@@ -486,9 +442,15 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		return nil
 	}
 
+	if err := funcShouldRunParallelJob(ctx, r, req, r.repoMaintenanceConfig, log); err == maintenance.ErrNoMoreParallelJobIsAllowed {
+		return nil
+	} else if err != nil {
+		return errors.Wrapf(err, "error check parallel maintenance job")
+	}
+
 	log.Info("Running maintenance on backup repository")
 
-	job, err := funcStartMaintenanceJob(r.Client, ctx, req, r.repoMaintenanceConfig, r.logLevel, r.logFormat, log)
+	_, err := funcStartMaintenanceJob(r.Client, ctx, req, r.repoMaintenanceConfig, r.logLevel, r.logFormat, log)
 	if err != nil {
 		log.WithError(err).Warn("Starting repo maintenance failed")
 		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
@@ -496,24 +458,7 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		})
 	}
 
-	// when WaitMaintenanceJobComplete fails, the maintenance result will be left aside temporarily
-	// If the maintenenance still completes later, recallMaintenance recalls the left once and update LastMaintenanceTime and history
-	status, err := funcWaitMaintenanceJobComplete(r.Client, ctx, job, r.namespace, log)
-	if err != nil {
-		return errors.Wrapf(err, "error waiting repo maintenance completion status")
-	}
-
-	if status.Result == velerov1api.BackupRepositoryMaintenanceFailed {
-		log.WithError(err).Warn("Pruning repository failed")
-		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
-			updateRepoMaintenanceHistory(rr, velerov1api.BackupRepositoryMaintenanceFailed, status.StartTimestamp, status.CompleteTimestamp, status.Message)
-		})
-	}
-
-	return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
-		rr.Status.LastMaintenanceTime = &metav1.Time{Time: status.CompleteTimestamp.Time}
-		updateRepoMaintenanceHistory(rr, velerov1api.BackupRepositoryMaintenanceSucceeded, status.StartTimestamp, status.CompleteTimestamp, status.Message)
-	})
+	return nil
 }
 
 func updateRepoMaintenanceHistory(repo *velerov1api.BackupRepository, result velerov1api.BackupRepositoryMaintenanceResult, startTime, completionTime *metav1.Time, message string) {

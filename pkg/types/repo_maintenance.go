@@ -31,4 +31,8 @@ type JobConfigs struct {
 	// PriorityClassName is the priority class name for the maintenance job pod
 	// Note: This is only read from the global configuration, not per-repository
 	PriorityClassName string `json:"priorityClassName,omitempty"`
+
+	// Concurrency defines the max number of maintenance jobs in the cluster
+	// Note: This is only read from the global configuration, not per-repository
+	Concurrency int `json:"concurrency,omitempty"`
 }

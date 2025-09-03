@@ -428,7 +428,6 @@ func TestRunMaintenanceIfDue(t *testing.T) {
 			require.NoError(t, err)
 
 			funcStartMaintenanceJob = test.startJobFunc
-			funcWaitMaintenanceJobComplete = test.waitJobFunc
 
 			err = reconciler.runMaintenanceIfDue(t.Context(), test.repo, velerotest.NewLogger())
 			if test.expectedErr == "" {
@@ -1137,7 +1136,7 @@ func TestConsolidateHistory(t *testing.T) {
 	tests := []struct {
 		name     string
 		cur      []velerov1api.BackupRepositoryMaintenanceStatus
-		coming   []velerov1api.BackupRepositoryMaintenanceStatus
+		coming   *velerov1api.BackupRepositoryMaintenanceStatus
 		expected []velerov1api.BackupRepositoryMaintenanceStatus
 	}{
 		{
@@ -1162,16 +1161,14 @@ func TestConsolidateHistory(t *testing.T) {
 					Message:           "fake-maintenance-message",
 				},
 			},
-			coming: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-				},
+			coming: &velerov1api.BackupRepositoryMaintenanceStatus{
+				StartTimestamp:    &metav1.Time{Time: now},
+				CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
 			},
 			expected: nil,
 		},
 		{
-			name: "less than limit",
+			name: "coming is earlier",
 			cur: []velerov1api.BackupRepositoryMaintenanceStatus{
 				{
 					StartTimestamp:    &metav1.Time{Time: now},
@@ -1179,185 +1176,104 @@ func TestConsolidateHistory(t *testing.T) {
 					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
 					Message:           "fake-maintenance-message",
 				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
 			},
-			coming: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-			},
-			expected: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-			},
-		},
-		{
-			name: "more than limit",
-			cur: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-			},
-			coming: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-4",
-				},
-			},
-			expected: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-4",
-				},
-			},
-		},
-		{
-			name: "more than limit 2",
-			cur: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-			},
-			coming: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-4",
-				},
-			},
-			expected: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-4",
-				},
-			},
-		},
-		{
-			name: "coming is not used",
-			cur: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-4",
-				},
-			},
-			coming: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-				},
+			coming: &velerov1api.BackupRepositoryMaintenanceStatus{
+				StartTimestamp:    &metav1.Time{Time: now.Add(-time.Hour)},
+				CompleteTimestamp: &metav1.Time{Time: now},
 			},
 			expected: nil,
+		},
+		{
+			name: "not full",
+			cur: []velerov1api.BackupRepositoryMaintenanceStatus{
+				{
+					StartTimestamp:    &metav1.Time{Time: now},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-2",
+				},
+			},
+			coming: &velerov1api.BackupRepositoryMaintenanceStatus{
+				StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
+				CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
+				Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+				Message:           "fake-maintenance-message-3",
+			},
+			expected: []velerov1api.BackupRepositoryMaintenanceStatus{
+				{
+					StartTimestamp:    &metav1.Time{Time: now},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-2",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-3",
+				},
+			},
+		},
+		{
+			name: "full",
+			cur: []velerov1api.BackupRepositoryMaintenanceStatus{
+				{
+					StartTimestamp:    &metav1.Time{Time: now},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-2",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-3",
+				},
+			},
+			coming: &velerov1api.BackupRepositoryMaintenanceStatus{
+				StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
+				CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
+				Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+				Message:           "fake-maintenance-message-4",
+			},
+			expected: []velerov1api.BackupRepositoryMaintenanceStatus{
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-2",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-3",
+				},
+				{
+					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
+					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
+					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
+					Message:           "fake-maintenance-message-4",
+				},
+			},
 		},
 	}
 
@@ -1377,93 +1293,6 @@ func TestConsolidateHistory(t *testing.T) {
 
 				assert.Nil(t, consolidateHistory(test.coming, consolidated))
 			}
-		})
-	}
-}
-
-func TestGetLastMaintenanceTimeFromHistory(t *testing.T) {
-	now := time.Now()
-
-	tests := []struct {
-		name     string
-		history  []velerov1api.BackupRepositoryMaintenanceStatus
-		expected time.Time
-	}{
-		{
-			name: "first one is nil",
-			history: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp: &metav1.Time{Time: now},
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					Message:        "fake-maintenance-message",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-			},
-			expected: now.Add(time.Hour * 3),
-		},
-		{
-			name: "another one is nil",
-			history: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message",
-				},
-				{
-					StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					Message:        "fake-maintenance-message-2",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-			},
-			expected: now.Add(time.Hour * 3),
-		},
-		{
-			name: "disordered",
-			history: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message-3",
-				},
-				{
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					Message:           "fake-maintenance-message",
-				},
-				{
-					StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					Message:        "fake-maintenance-message-2",
-				},
-			},
-			expected: now.Add(time.Hour * 3),
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			time := getLastMaintenanceTimeFromHistory(test.history)
-			assert.Equal(t, test.expected, time.Time)
 		})
 	}
 }

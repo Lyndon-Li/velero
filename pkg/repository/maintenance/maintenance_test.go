@@ -19,7 +19,6 @@ package maintenance
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 	"testing"
 	"time"
@@ -34,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -83,7 +81,6 @@ func TestGenerateJobName1(t *testing.T) {
 func TestDeleteOldJobs(t *testing.T) {
 	// Set up test repo and keep value
 	repo := "test-repo"
-	keep := 2
 
 	// Create some maintenance jobs for testing
 	var objs []client.Object
@@ -118,7 +115,7 @@ func TestDeleteOldJobs(t *testing.T) {
 	cli := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
 
 	// Call the function
-	err := DeleteOldJobs(cli, repo, keep, velerotest.NewLogger())
+	err := DeleteOldJobs(cli, repo, velerotest.NewLogger())
 	require.NoError(t, err)
 
 	// Get the remaining jobs
@@ -126,145 +123,7 @@ func TestDeleteOldJobs(t *testing.T) {
 	err = cli.List(t.Context(), jobList, client.MatchingLabels(map[string]string{RepositoryNameLabel: repo}))
 	require.NoError(t, err)
 
-	// We expect the number of jobs to be equal to 'keep'
-	assert.Len(t, jobList.Items, keep)
-
-	// We expect that the oldest jobs were deleted
-	// Job3 should not be present in the remaining list
-	assert.NotContains(t, jobList.Items, objs[2])
-
-	// Job2 should also not be present in the remaining list
-	assert.NotContains(t, jobList.Items, objs[1])
-}
-
-func TestWaitForJobComplete(t *testing.T) {
-	// Set up test job
-	job := &batchv1api.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-job",
-			Namespace: "default",
-		},
-		Status: batchv1api.JobStatus{},
-	}
-
-	schemeFail := runtime.NewScheme()
-
-	scheme := runtime.NewScheme()
-	batchv1api.AddToScheme(scheme)
-
-	waitCompletionBackOff1 := wait.Backoff{
-		Duration: time.Second,
-		Steps:    math.MaxInt,
-		Factor:   2,
-		Cap:      time.Second * 12,
-	}
-
-	waitCompletionBackOff2 := wait.Backoff{
-		Duration: time.Second,
-		Steps:    math.MaxInt,
-		Factor:   2,
-		Cap:      time.Second * 2,
-	}
-
-	// Define test cases
-	tests := []struct {
-		description   string // Test case description
-		kubeClientObj []runtime.Object
-		runtimeScheme *runtime.Scheme
-		jobStatus     batchv1api.JobStatus // Job status to set for the test
-		logBackOff    wait.Backoff
-		updateAfter   time.Duration
-		expectedLogs  int
-		expectError   bool // Whether an error is expected
-	}{
-		{
-			description:   "wait error",
-			runtimeScheme: schemeFail,
-			expectError:   true,
-		},
-		{
-			description:   "Job Succeeded",
-			runtimeScheme: scheme,
-			kubeClientObj: []runtime.Object{
-				job,
-			},
-			jobStatus: batchv1api.JobStatus{
-				Succeeded: 1,
-			},
-			expectError: false,
-		},
-		{
-			description:   "Job Failed",
-			runtimeScheme: scheme,
-			kubeClientObj: []runtime.Object{
-				job,
-			},
-			jobStatus: batchv1api.JobStatus{
-				Failed: 1,
-			},
-			expectError: false,
-		},
-		{
-			description:   "Log backoff not to cap",
-			runtimeScheme: scheme,
-			kubeClientObj: []runtime.Object{
-				job,
-			},
-			logBackOff:   waitCompletionBackOff1,
-			updateAfter:  time.Second * 8,
-			expectedLogs: 3,
-		},
-		{
-			description:   "Log backoff to cap",
-			runtimeScheme: scheme,
-			kubeClientObj: []runtime.Object{
-				job,
-			},
-			logBackOff:   waitCompletionBackOff2,
-			updateAfter:  time.Second * 6,
-			expectedLogs: 3,
-		},
-	}
-
-	// Run tests
-	for _, tc := range tests {
-		t.Run(tc.description, func(t *testing.T) {
-			// Set the job status
-			job.Status = tc.jobStatus
-			// Create a fake Kubernetes client
-			fakeClientBuilder := fake.NewClientBuilder()
-			fakeClientBuilder = fakeClientBuilder.WithScheme(tc.runtimeScheme)
-			fakeClient := fakeClientBuilder.WithRuntimeObjects(tc.kubeClientObj...).Build()
-
-			buffer := []string{}
-			logger := velerotest.NewMultipleLogger(&buffer)
-
-			waitCompletionBackOff = tc.logBackOff
-
-			if tc.updateAfter != 0 {
-				go func() {
-					time.Sleep(tc.updateAfter)
-
-					original := job.DeepCopy()
-					job.Status.Succeeded = 1
-					err := fakeClient.Status().Patch(t.Context(), job, client.MergeFrom(original))
-					require.NoError(t, err)
-				}()
-			}
-
-			// Call the function
-			_, err := waitForJobComplete(t.Context(), fakeClient, job.Namespace, job.Name, logger)
-
-			// Check if the error matches the expectation
-			if tc.expectError {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-
-			assert.LessOrEqual(t, len(buffer), tc.expectedLogs)
-		})
-	}
+	assert.Empty(t, jobList.Items)
 }
 
 func TestGetResultFromJob(t *testing.T) {
@@ -564,7 +423,7 @@ func TestGetJobConfig(t *testing.T) {
 	}
 }
 
-func TestWaitAllJobsComplete(t *testing.T) {
+func TestCheckJobCompletion(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second*2)
 
 	veleroNamespace := "velero"
@@ -591,49 +450,55 @@ func TestWaitAllJobsComplete(t *testing.T) {
 		},
 	}
 
-	jobIncomplete := &batchv1api.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "job1",
-			Namespace:         veleroNamespace,
-			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
-			CreationTimestamp: metav1.Time{Time: now},
-		},
-	}
-
-	jobSucceeded1 := &batchv1api.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "job1",
-			Namespace:         veleroNamespace,
-			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
-			CreationTimestamp: metav1.Time{Time: now},
-		},
-		Status: batchv1api.JobStatus{
-			StartTime:      &metav1.Time{Time: now},
-			CompletionTime: &metav1.Time{Time: now.Add(time.Hour)},
-			Succeeded:      1,
-		},
-	}
-
-	jobPodSucceeded1 := builder.ForPod(veleroNamespace, "job1").Labels(map[string]string{"job-name": "job1"}).ContainerStatuses(&corev1api.ContainerStatus{
-		State: corev1api.ContainerState{
-			Terminated: &corev1api.ContainerStateTerminated{},
-		},
-	}).Result()
-
-	jobFailed1 := &batchv1api.Job{
+	jobIncomplete1 := &batchv1api.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "job2",
+			Namespace:         veleroNamespace,
+			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
+			CreationTimestamp: metav1.Time{Time: now},
+		},
+	}
+
+	jobIncomplete2 := &batchv1api.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "job3",
+			Namespace:         veleroNamespace,
+			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
+			CreationTimestamp: metav1.Time{Time: now},
+		},
+	}
+
+	jobComplete1 := &batchv1api.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "job-complete-1",
 			Namespace:         veleroNamespace,
 			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
 			CreationTimestamp: metav1.Time{Time: now.Add(time.Hour)},
 		},
 		Status: batchv1api.JobStatus{
-			StartTime: &metav1.Time{Time: now.Add(time.Hour)},
-			Failed:    1,
+			Succeeded: 1,
 		},
 	}
 
-	jobPodFailed1 := builder.ForPod(veleroNamespace, "job2").Labels(map[string]string{"job-name": "job2"}).ContainerStatuses(&corev1api.ContainerStatus{
+	jobPodComplete1 := builder.ForPod(veleroNamespace, "job-complete-1").Labels(map[string]string{"job-name": "job-complete-1"}).ContainerStatuses(&corev1api.ContainerStatus{
+		State: corev1api.ContainerState{
+			Terminated: &corev1api.ContainerStateTerminated{},
+		},
+	}).Result()
+
+	jobComplete2 := &batchv1api.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "job-complete-2",
+			Namespace:         veleroNamespace,
+			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
+			CreationTimestamp: metav1.Time{Time: now.Add(time.Hour * 2)},
+		},
+		Status: batchv1api.JobStatus{
+			Failed: 1,
+		},
+	}
+
+	jobPodComplete2 := builder.ForPod(veleroNamespace, "job-complete-2").Labels(map[string]string{"job-name": "job-complete-2"}).ContainerStatuses(&corev1api.ContainerStatus{
 		State: corev1api.ContainerState{
 			Terminated: &corev1api.ContainerStateTerminated{
 				Message: "Repo maintenance error: fake-message-2",
@@ -641,41 +506,19 @@ func TestWaitAllJobsComplete(t *testing.T) {
 		},
 	}).Result()
 
-	jobSucceeded2 := &batchv1api.Job{
+	jobComplete3 := &batchv1api.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              "job3",
-			Namespace:         veleroNamespace,
-			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
-			CreationTimestamp: metav1.Time{Time: now.Add(time.Hour * 2)},
-		},
-		Status: batchv1api.JobStatus{
-			StartTime:      &metav1.Time{Time: now.Add(time.Hour * 2)},
-			CompletionTime: &metav1.Time{Time: now.Add(time.Hour * 3)},
-			Succeeded:      1,
-		},
-	}
-
-	jobPodSucceeded2 := builder.ForPod(veleroNamespace, "job3").Labels(map[string]string{"job-name": "job3"}).ContainerStatuses(&corev1api.ContainerStatus{
-		State: corev1api.ContainerState{
-			Terminated: &corev1api.ContainerStateTerminated{},
-		},
-	}).Result()
-
-	jobSucceeded3 := &batchv1api.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              "job4",
+			Name:              "job-complete-3",
 			Namespace:         veleroNamespace,
 			Labels:            map[string]string{RepositoryNameLabel: "fake-repo"},
 			CreationTimestamp: metav1.Time{Time: now.Add(time.Hour * 3)},
 		},
 		Status: batchv1api.JobStatus{
-			StartTime:      &metav1.Time{Time: now.Add(time.Hour * 3)},
-			CompletionTime: &metav1.Time{Time: now.Add(time.Hour * 4)},
-			Succeeded:      1,
+			Succeeded: 1,
 		},
 	}
 
-	jobPodSucceeded3 := builder.ForPod(veleroNamespace, "job4").Labels(map[string]string{"job-name": "job4"}).ContainerStatuses(&corev1api.ContainerStatus{
+	jobPodComplete3 := builder.ForPod(veleroNamespace, "job-complete-3").Labels(map[string]string{"job-name": "job-complete-3"}).ContainerStatuses(&corev1api.ContainerStatus{
 		State: corev1api.ContainerState{
 			Terminated: &corev1api.ContainerStateTerminated{},
 		},
@@ -692,7 +535,7 @@ func TestWaitAllJobsComplete(t *testing.T) {
 		ctx            context.Context
 		kubeClientObj  []runtime.Object
 		runtimeScheme  *runtime.Scheme
-		expectedStatus []velerov1api.BackupRepositoryMaintenanceStatus
+		expectedStatus *velerov1api.BackupRepositoryMaintenanceStatus
 		expectedError  string
 	}{
 		{
@@ -712,27 +555,38 @@ func TestWaitAllJobsComplete(t *testing.T) {
 			},
 		},
 		{
-			name:          "wait complete error",
+			name:          "multiple incomplete jobs",
 			ctx:           ctx,
 			runtimeScheme: scheme,
 			kubeClientObj: []runtime.Object{
-				jobIncomplete,
+				jobIncomplete1,
+				jobIncomplete2,
+				jobComplete1,
 			},
-			expectedError: "error waiting maintenance job[job1] complete: context deadline exceeded",
+			expectedError: "more than one repo maintenenaces are in progress",
+		},
+		{
+			name:          "one incomplete jobs",
+			ctx:           ctx,
+			runtimeScheme: scheme,
+			kubeClientObj: []runtime.Object{
+				jobIncomplete1,
+				jobComplete1,
+				jobPodComplete1,
+			},
+			expectedError: "repo maintenenace is in progress",
 		},
 		{
 			name:          "get result error on succeeded job",
 			ctx:           t.Context(),
 			runtimeScheme: scheme,
 			kubeClientObj: []runtime.Object{
-				jobSucceeded1,
+				jobComplete1,
+				jobPodComplete1,
 			},
-			expectedStatus: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-				},
+			expectedStatus: &velerov1api.BackupRepositoryMaintenanceStatus{
+				Result:         velerov1api.BackupRepositoryMaintenanceSucceeded,
+				StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
 			},
 		},
 		{
@@ -740,99 +594,43 @@ func TestWaitAllJobsComplete(t *testing.T) {
 			ctx:           t.Context(),
 			runtimeScheme: scheme,
 			kubeClientObj: []runtime.Object{
-				jobFailed1,
+				jobComplete2,
 			},
-			expectedStatus: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Message:        "Repo maintenance failed but result is not retrieveable, err: no pod found for job job2",
-				},
+			expectedStatus: &velerov1api.BackupRepositoryMaintenanceStatus{
+				Result:         velerov1api.BackupRepositoryMaintenanceFailed,
+				StartTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
+				Message:        "Repo maintenance failed but result is not retrieveable, err: no pod found for job job-complete-2",
 			},
 		},
 		{
-			name:          "less than limit",
+			name:          "multiple completed jobs 1",
 			ctx:           t.Context(),
 			runtimeScheme: scheme,
 			kubeClientObj: []runtime.Object{
-				jobFailed1,
-				jobSucceeded1,
-				jobPodSucceeded1,
-				jobPodFailed1,
+				jobComplete2,
+				jobComplete1,
+				jobPodComplete2,
+				jobPodComplete1,
 			},
-			expectedStatus: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-				},
-				{
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Message:        "fake-message-2",
-				},
+			expectedStatus: &velerov1api.BackupRepositoryMaintenanceStatus{
+				Result:         velerov1api.BackupRepositoryMaintenanceFailed,
+				StartTimestamp: &metav1.Time{Time: now.Add(time.Hour * 2)},
+				Message:        "fake-message-2",
 			},
 		},
 		{
-			name:          "equal to limit",
+			name:          "multiple completed jobs 2",
 			ctx:           t.Context(),
 			runtimeScheme: scheme,
 			kubeClientObj: []runtime.Object{
-				jobSucceeded2,
-				jobFailed1,
-				jobSucceeded1,
-				jobPodSucceeded1,
-				jobPodFailed1,
-				jobPodSucceeded2,
+				jobComplete2,
+				jobComplete3,
+				jobPodComplete2,
+				jobPodComplete3,
 			},
-			expectedStatus: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					StartTimestamp:    &metav1.Time{Time: now},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-				},
-				{
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Message:        "fake-message-2",
-				},
-				{
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-				},
-			},
-		},
-		{
-			name:          "more than limit",
-			ctx:           t.Context(),
-			runtimeScheme: scheme,
-			kubeClientObj: []runtime.Object{
-				jobSucceeded3,
-				jobSucceeded2,
-				jobFailed1,
-				jobSucceeded1,
-				jobPodSucceeded1,
-				jobPodFailed1,
-				jobPodSucceeded2,
-				jobPodSucceeded3,
-			},
-			expectedStatus: []velerov1api.BackupRepositoryMaintenanceStatus{
-				{
-					Result:         velerov1api.BackupRepositoryMaintenanceFailed,
-					StartTimestamp: &metav1.Time{Time: now.Add(time.Hour)},
-					Message:        "fake-message-2",
-				},
-				{
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 2)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
-				},
-				{
-					Result:            velerov1api.BackupRepositoryMaintenanceSucceeded,
-					StartTimestamp:    &metav1.Time{Time: now.Add(time.Hour * 3)},
-					CompleteTimestamp: &metav1.Time{Time: now.Add(time.Hour * 4)},
-				},
+			expectedStatus: &velerov1api.BackupRepositoryMaintenanceStatus{
+				Result:         velerov1api.BackupRepositoryMaintenanceSucceeded,
+				StartTimestamp: &metav1.Time{Time: now.Add(time.Hour * 3)},
 			},
 		},
 	}
@@ -844,7 +642,7 @@ func TestWaitAllJobsComplete(t *testing.T) {
 
 			fakeClient := fakeClientBuilder.WithRuntimeObjects(test.kubeClientObj...).Build()
 
-			history, err := WaitAllJobsComplete(test.ctx, fakeClient, repo, 3, velerotest.NewLogger())
+			history, err := CheckJobCompletion(test.ctx, fakeClient, repo, velerotest.NewLogger())
 
 			if test.expectedError != "" {
 				require.EqualError(t, err, test.expectedError)
@@ -852,17 +650,12 @@ func TestWaitAllJobsComplete(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			assert.Len(t, history, len(test.expectedStatus))
-			for i := 0; i < len(test.expectedStatus); i++ {
-				assert.Equal(t, test.expectedStatus[i].Result, history[i].Result)
-				assert.Equal(t, test.expectedStatus[i].Message, history[i].Message)
-				assert.Equal(t, test.expectedStatus[i].StartTimestamp.Time, history[i].StartTimestamp.Time)
-
-				if test.expectedStatus[i].CompleteTimestamp == nil {
-					assert.Nil(t, history[i].CompleteTimestamp)
-				} else {
-					assert.Equal(t, test.expectedStatus[i].CompleteTimestamp.Time, history[i].CompleteTimestamp.Time)
-				}
+			if test.expectedStatus == nil {
+				assert.Nil(t, history)
+			} else {
+				assert.Equal(t, test.expectedStatus.Result, history.Result)
+				assert.Equal(t, test.expectedStatus.Message, history.Message)
+				assert.Equal(t, test.expectedStatus.StartTimestamp.Time, history.StartTimestamp.Time)
 			}
 		})
 	}
