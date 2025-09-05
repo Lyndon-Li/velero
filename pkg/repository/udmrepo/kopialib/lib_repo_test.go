@@ -253,7 +253,7 @@ func TestMaintain(t *testing.T) {
 				tc.returnRepoWriter.On("ClientOptions").Return(repo.ClientOptions{})
 			}
 
-			err := service.Maintain(ctx, tc.repoOptions)
+			_, err := service.Maintain(ctx, tc.repoOptions)
 
 			if tc.expectedErr == "" {
 				assert.NoError(t, err)
@@ -1342,6 +1342,196 @@ func TestMaintainProgress(t *testing.T) {
 			} else {
 				assert.Empty(t, logMessage)
 			}
+		})
+	}
+}
+
+func TestLogFilter(t *testing.T) {
+	testCases := []struct {
+		name        string
+		filter      *maintenanceLogFilter
+		message     string
+		expectMatch bool
+		expected    string
+	}{
+		{
+			name:    "maintenance type, doesn't match 1",
+			filter:  newTypeFilter(),
+			message: "abcd",
+		},
+		{
+			name:    "maintenance type, doesn't match 2",
+			filter:  newTypeFilter(),
+			message: "Running maintenance...",
+		},
+		{
+			name:        "maintenance type, match",
+			filter:      newTypeFilter(),
+			message:     "Running quick maintenance...",
+			expectMatch: true,
+			expected:    "quick",
+		},
+		{
+			name:    "rewritten, doesn't match 1",
+			filter:  newRewrittenFilter(),
+			message: "Total bytes rewritten",
+		},
+		{
+			name:    "rewritten, doesn't match 2",
+			filter:  newRewrittenFilter(),
+			message: "Total bytes rewritten ",
+		},
+		{
+			name:        "rewritten, match",
+			filter:      newRewrittenFilter(),
+			message:     "Total bytes rewritten 1234",
+			expectMatch: true,
+			expected:    "1234",
+		},
+		{
+			name:    "deleted size, doesn't match",
+			filter:  newDeletedSizeFilter(),
+			message: "Deleted total unreferenced blobs",
+		},
+		{
+			name:        "deleted size, match",
+			filter:      newDeletedSizeFilter(),
+			message:     "Deleted total 1234 unreferenced blobs",
+			expectMatch: true,
+			expected:    "1234",
+		},
+		{
+			name:    "to delete size, doesn't match 1",
+			filter:  newToDeleteFilter(),
+			message: "Found blobs to delete (1234)",
+		},
+		{
+			name:    "to delete size, doesn't match 2",
+			filter:  newToDeleteFilter(),
+			message: "Found 1111 blobs to delete 1234",
+		},
+		{
+			name:    "to delete size, doesn't match 3",
+			filter:  newToDeleteFilter(),
+			message: "Found 1111 blobs to delete ()",
+		},
+		{
+			name:        "to delete size, match",
+			filter:      newToDeleteFilter(),
+			message:     "Found 12 blobs to delete (1234)",
+			expectMatch: true,
+			expected:    "1234",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := tc.filter.MatchAndRecord(tc.message)
+			assert.Equal(t, tc.expectMatch, m)
+
+			if m {
+				r := tc.filter.Parse()
+				assert.Equal(t, tc.expected, r)
+			}
+		})
+	}
+}
+
+func TestRetrieveResultFromLog(t *testing.T) {
+	testCases := []struct {
+		name     string
+		message  []string
+		expected string
+	}{
+		{
+			name: "no message",
+			message: []string{
+				"aaaa",
+				"bbbb",
+				"cccc",
+			},
+		},
+		{
+			name: "no maintenance type",
+			message: []string{
+				"aaaa",
+				"bbbb",
+				"cccc",
+				"Total bytes rewritten 1111",
+				"Deleted total 2222 unreferenced blobs",
+				"Found 12 blobs to delete (3333)",
+			},
+			expected: "Rewritten 1111 bytes for defragment. Deleted 2222 bytes. 3333 bytes are pending deletion.",
+		},
+		{
+			name: "no rewritten size",
+			message: []string{
+				"aaaa",
+				"bbbb",
+				"cccc",
+				"Running full maintenance...",
+				"Deleted total 1111 unreferenced blobs",
+				"Found 12 blobs to delete (2222)",
+			},
+			expected: "Completed full maintenance. Deleted 1111 bytes. 2222 bytes are pending deletion.",
+		},
+		{
+			name: "no deleted size",
+			message: []string{
+				"aaaa",
+				"bbbb",
+				"cccc",
+				"Running full maintenance...",
+				"Total bytes rewritten 1111",
+				"Found 12 blobs to delete (2222)",
+			},
+			expected: "Completed full maintenance. Rewritten 1111 bytes for defragment. 2222 bytes are pending deletion.",
+		},
+		{
+			name: "no to delete size",
+			message: []string{
+				"aaaa",
+				"bbbb",
+				"cccc",
+				"Running full maintenance...",
+				"Total bytes rewritten 1111",
+				"Deleted total 2222 unreferenced blobs",
+			},
+			expected: "Completed full maintenance. Rewritten 1111 bytes for defragment. Deleted 2222 bytes.",
+		},
+		{
+			name: "with all",
+			message: []string{
+				"aaaa",
+				"bbbb",
+				"cccc",
+				"Running full maintenance...",
+				"Total bytes rewritten 1111",
+				"Deleted total 2222 unreferenced blobs",
+				"Found 12 blobs to delete (3333)",
+			},
+			expected: "Completed full maintenance. Rewritten 1111 bytes for defragment. Deleted 2222 bytes. 3333 bytes are pending deletion.",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			var (
+				typeFilter         = newTypeFilter()
+				rewrittenFilter    = newRewrittenFilter()
+				deletedSizeFilter  = newDeletedSizeFilter()
+				toDeleteSizeFilter = newToDeleteFilter()
+			)
+
+			for _, msg := range tc.message {
+				typeFilter.MatchAndRecord(msg)
+				rewrittenFilter.MatchAndRecord(msg)
+				deletedSizeFilter.MatchAndRecord(msg)
+				toDeleteSizeFilter.MatchAndRecord(msg)
+			}
+
+			result := retrieveResultFromLog(typeFilter, rewrittenFilter, deletedSizeFilter, toDeleteSizeFilter)
+			assert.Equal(t, tc.expected, result)
 		})
 	}
 }

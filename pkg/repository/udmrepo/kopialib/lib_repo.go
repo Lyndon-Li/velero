@@ -18,7 +18,9 @@ package kopialib
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -148,23 +150,74 @@ func (ks *kopiaRepoService) Open(ctx context.Context, repoOption udmrepo.RepoOpt
 	return &kr, nil
 }
 
-func (ks *kopiaRepoService) Maintain(ctx context.Context, repoOption udmrepo.RepoOptions) error {
+type maintenanceLogFilter struct {
+	match   string
+	message string
+}
+
+func (t *maintenanceLogFilter) MatchAndRecord(msg string) bool {
+	m, _ := regexp.MatchString(t.match, msg)
+	if m {
+		t.message = msg
+	}
+
+	return m
+}
+
+func (t *maintenanceLogFilter) Parse() string {
+	if t.message == "" {
+		return ""
+	}
+
+	re := regexp.MustCompile(t.match)
+	splitted := re.FindStringSubmatch(t.message)
+	if len(splitted) <= 1 {
+		return ""
+	}
+
+	return splitted[1]
+}
+
+func newTypeFilter() *maintenanceLogFilter {
+	return &maintenanceLogFilter{match: "Running (.+) maintenance..."}
+}
+
+func newRewrittenFilter() *maintenanceLogFilter {
+	return &maintenanceLogFilter{match: "Total bytes rewritten (.+)"}
+}
+
+func newDeletedSizeFilter() *maintenanceLogFilter {
+	return &maintenanceLogFilter{match: "Deleted total (.+) unreferenced blobs"}
+}
+
+func newToDeleteFilter() *maintenanceLogFilter {
+	return &maintenanceLogFilter{match: "Found .* blobs to delete \\((.+)\\)"}
+}
+
+func (ks *kopiaRepoService) Maintain(ctx context.Context, repoOption udmrepo.RepoOptions) (string, error) {
 	repoConfig := repoOption.ConfigFilePath
 	if repoConfig == "" {
-		return errors.New("invalid config file path")
+		return "", errors.New("invalid config file path")
 	}
 
 	if _, err := os.Stat(repoConfig); os.IsNotExist(err) {
-		return errors.Wrapf(err, "repo config %s doesn't exist", repoConfig)
+		return "", errors.Wrapf(err, "repo config %s doesn't exist", repoConfig)
 	}
 
-	repoCtx := kopia.SetupKopiaLog(ctx, ks.logger)
+	var (
+		typeFilter         = newTypeFilter()
+		rewrittenFilter    = newRewrittenFilter()
+		deletedSizeFilter  = newDeletedSizeFilter()
+		toDeleteSizeFilter = newToDeleteFilter()
+	)
+
+	repoCtx := kopia.SetupKopiaLogWithFilter(ctx, ks.logger, typeFilter, rewrittenFilter, deletedSizeFilter, toDeleteSizeFilter)
 
 	ks.logger.Info("Start to open repo for maintenance, allow index write on load")
 
 	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	ks.logger.Info("Succeeded to open repo for maintenance")
@@ -201,14 +254,37 @@ func (ks *kopiaRepoService) Maintain(ctx context.Context, repoOption udmrepo.Rep
 	})
 
 	if err != nil {
-		return errors.Wrap(err, "error to maintain repo")
+		return "", errors.Wrap(err, "error to maintain repo")
 	}
 
-	return nil
+	return retrieveResultFromLog(typeFilter, rewrittenFilter, deletedSizeFilter, toDeleteSizeFilter), nil
 }
 
 func (ks *kopiaRepoService) DefaultMaintenanceFrequency() time.Duration {
 	return defaultMaintainCheckPeriod
+}
+
+func retrieveResultFromLog(typeFilter, rewrittenFilter, deletedSizeFilter, toDeleteSizeFilter *maintenanceLogFilter) string {
+	result := ""
+	if t := typeFilter.Parse(); t != "" {
+		result += fmt.Sprintf("Completed %s maintenance. ", t)
+	}
+
+	if t := rewrittenFilter.Parse(); t != "" {
+		result += fmt.Sprintf("Rewritten %s bytes for defragment. ", t)
+	}
+
+	if t := deletedSizeFilter.Parse(); t != "" {
+		result += fmt.Sprintf("Deleted %s bytes. ", t)
+	}
+
+	if t := toDeleteSizeFilter.Parse(); t != "" {
+		result += fmt.Sprintf("%s bytes are pending deletion.", t)
+	}
+
+	result, _ = strings.CutSuffix(result, " ")
+
+	return result
 }
 
 func (km *kopiaMaintenance) runMaintenance(ctx context.Context, rep repo.DirectRepositoryWriter) error {

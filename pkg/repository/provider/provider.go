@@ -49,7 +49,7 @@ type Provider interface {
 	BoostRepoConnect(ctx context.Context, param RepoParam) error
 
 	// PruneRepo does a full prune/maintenance of the repository
-	PruneRepo(ctx context.Context, param RepoParam) error
+	PruneRepo(ctx context.Context, param RepoParam) (string, error)
 
 	// EnsureUnlockRepo esures to remove any stale file locks in the storage
 	EnsureUnlockRepo(ctx context.Context, param RepoParam) error

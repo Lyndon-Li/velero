@@ -88,7 +88,7 @@ type BackupRepoService interface {
 
 	// Maintain is periodically called to maintain the backup repository to eliminate redundant data.
 	// repoOption: options to maintain the backup repository.
-	Maintain(ctx context.Context, repoOption RepoOptions) error
+	Maintain(ctx context.Context, repoOption RepoOptions) (string, error)
 
 	// DefaultMaintenanceFrequency returns the defgault frequency of maintenance, callers refer this
 	// frequency to maintain the backup repository to get the best maintenance performance

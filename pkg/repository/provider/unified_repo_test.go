@@ -1506,7 +1506,7 @@ func TestPruneRepo(t *testing.T) {
 				tc.repoService.On("Maintain", mock.Anything, mock.Anything).Return(tc.retFuncMaintain)
 			}
 
-			err := urp.PruneRepo(t.Context(), RepoParam{
+			_, err := urp.PruneRepo(t.Context(), RepoParam{
 				BackupLocation: &velerov1api.BackupStorageLocation{},
 				BackupRepo:     &velerov1api.BackupRepository{},
 			})

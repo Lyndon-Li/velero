@@ -46,7 +46,7 @@ type Manager interface {
 	PrepareRepo(repo *velerov1api.BackupRepository) error
 
 	// PruneRepo deletes unused data from a repo.
-	PruneRepo(repo *velerov1api.BackupRepository) error
+	PruneRepo(repo *velerov1api.BackupRepository) (string, error)
 
 	// UnlockRepo removes stale locks from a repo.
 	UnlockRepo(repo *velerov1api.BackupRepository) error
@@ -146,21 +146,21 @@ func (m *manager) PrepareRepo(repo *velerov1api.BackupRepository) error {
 	return prd.PrepareRepo(context.Background(), param)
 }
 
-func (m *manager) PruneRepo(repo *velerov1api.BackupRepository) error {
+func (m *manager) PruneRepo(repo *velerov1api.BackupRepository) (string, error) {
 	m.repoLocker.LockExclusive(repo.Name)
 	defer m.repoLocker.UnlockExclusive(repo.Name)
 
 	prd, err := m.getRepositoryProvider(repo)
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 	param, err := m.assembleRepoParam(repo)
 	if err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	if err := prd.BoostRepoConnect(context.Background(), param); err != nil {
-		return errors.WithStack(err)
+		return "", errors.WithStack(err)
 	}
 
 	return prd.PruneRepo(context.Background(), param)

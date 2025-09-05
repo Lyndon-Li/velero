@@ -242,7 +242,7 @@ func (urp *unifiedRepoProvider) BoostRepoConnect(ctx context.Context, param Repo
 	return urp.ConnectToRepo(ctx, param)
 }
 
-func (urp *unifiedRepoProvider) PruneRepo(ctx context.Context, param RepoParam) error {
+func (urp *unifiedRepoProvider) PruneRepo(ctx context.Context, param RepoParam) (string, error) {
 	log := urp.log.WithFields(logrus.Fields{
 		"BSL name":  param.BackupLocation.Name,
 		"repo name": param.BackupRepo.Name,
@@ -258,17 +258,17 @@ func (urp *unifiedRepoProvider) PruneRepo(ctx context.Context, param RepoParam) 
 	)
 
 	if err != nil {
-		return errors.Wrap(err, "error to get repo options")
+		return "", errors.Wrap(err, "error to get repo options")
 	}
 
-	err = urp.repoService.Maintain(ctx, *repoOption)
+	result, err := urp.repoService.Maintain(ctx, *repoOption)
 	if err != nil {
-		return errors.Wrap(err, "error to prune backup repo")
+		return "", errors.Wrap(err, "error to prune backup repo")
 	}
 
 	log.Debug("Prune repo complete")
 
-	return nil
+	return result, nil
 }
 
 func (urp *unifiedRepoProvider) EnsureUnlockRepo(ctx context.Context, param RepoParam) error {

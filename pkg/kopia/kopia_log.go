@@ -28,13 +28,27 @@ import (
 type kopiaLog struct {
 	module string
 	logger logrus.FieldLogger
+	filter []KopiaLogFilter
+}
+
+type KopiaLogFilter interface {
+	MatchAndRecord(string) bool
 }
 
 // SetupKopiaLog sets the Kopia log handler to the specific context, Kopia modules
 // call the logger in the context to write logs
 func SetupKopiaLog(ctx context.Context, logger logrus.FieldLogger) context.Context {
 	return logging.WithLogger(ctx, func(module string) logging.Logger {
-		kpLog := &kopiaLog{module, logger}
+		kpLog := &kopiaLog{module, logger, nil}
+		return zap.New(kpLog).Sugar()
+	})
+}
+
+// SetupKopiaLogWithFilter sets the Kopia log handler to the specific context, with regexp as filters, Kopia modules
+// call the logger in the context to write logs
+func SetupKopiaLogWithFilter(ctx context.Context, logger logrus.FieldLogger, filter ...KopiaLogFilter) context.Context {
+	return logging.WithLogger(ctx, func(module string) logging.Logger {
+		kpLog := &kopiaLog{module, logger, filter}
 		return zap.New(kpLog).Sugar()
 	})
 }
@@ -105,6 +119,10 @@ func (kl *kopiaLog) Write(ent zapcore.Entry, fields []zapcore.Field) error {
 		logger.Panic(ent.Message)
 	case zapcore.FatalLevel:
 		logger.Fatal(ent.Message)
+	}
+
+	for _, k := range kl.filter {
+		_ = k.MatchAndRecord(ent.Message)
 	}
 
 	return nil

@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"math"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/pkg/errors"
@@ -164,20 +163,7 @@ func getResultFromJob(cli client.Client, job *batchv1api.Job) (string, error) {
 		return "", errors.Errorf("container for job %s is not terminated", job.Name)
 	}
 
-	if terminated.Message == "" {
-		return "", nil
-	}
-
-	idx := strings.Index(terminated.Message, TerminationLogIndicator)
-	if idx == -1 {
-		return "", errors.New("error to locate repo maintenance error indicator from termination message")
-	}
-
-	if idx+len(TerminationLogIndicator) >= len(terminated.Message) {
-		return "", errors.New("nothing after repo maintenance error indicator in termination message")
-	}
-
-	return terminated.Message[idx+len(TerminationLogIndicator):], nil
+	return terminated.Message, nil
 }
 
 // getJobConfig is called to get the Maintenance Job Config for the

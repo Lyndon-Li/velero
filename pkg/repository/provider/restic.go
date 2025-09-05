@@ -66,8 +66,8 @@ func (r *resticRepositoryProvider) BoostRepoConnect(ctx context.Context, param R
 	return nil
 }
 
-func (r *resticRepositoryProvider) PruneRepo(ctx context.Context, param RepoParam) error {
-	return r.svc.PruneRepo(param.BackupLocation, param.BackupRepo)
+func (r *resticRepositoryProvider) PruneRepo(ctx context.Context, param RepoParam) (string, error) {
+	return "", r.svc.PruneRepo(param.BackupLocation, param.BackupRepo)
 }
 
 func (r *resticRepositoryProvider) EnsureUnlockRepo(ctx context.Context, param RepoParam) error {

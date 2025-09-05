@@ -23,10 +23,10 @@ import (
 	velerocli "github.com/vmware-tanzu/velero/pkg/client"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
+	"github.com/vmware-tanzu/velero/pkg/util/kube"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
 
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
-	"github.com/vmware-tanzu/velero/pkg/repository/maintenance"
 	repomanager "github.com/vmware-tanzu/velero/pkg/repository/manager"
 )
 
@@ -65,21 +65,19 @@ func NewCommand(f velerocli.Factory) *cobra.Command {
 	return cmd
 }
 
+var funcExitWithMessage = kube.ExitPodWithMessage
+
 func (o *Options) Run(f velerocli.Factory) {
 	logger := logging.DefaultLogger(o.LogLevelFlag.Parse(), o.FormatFlag.Parse())
 	logger.SetOutput(os.Stdout)
 
 	ctrl.SetLogger(logrusr.New(logger))
 
-	pruneError := o.runRepoPrune(f, f.Namespace(), logger)
-	defer func() {
-		if pruneError != nil {
-			os.Exit(1)
-		}
-	}()
-
+	message, pruneError := o.runRepoPrune(f, f.Namespace(), logger)
 	if pruneError != nil {
-		os.Stdout.WriteString(fmt.Sprintf("%s%v", maintenance.TerminationLogIndicator, pruneError))
+		funcExitWithMessage(logger, false, pruneError.Error())
+	} else {
+		funcExitWithMessage(logger, true, message)
 	}
 }
 
@@ -143,15 +141,15 @@ func initRepoManager(namespace string, cli client.Client, kubeClient kubernetes.
 	), nil
 }
 
-func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger logrus.FieldLogger) error {
+func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger logrus.FieldLogger) (string, error) {
 	cli, err := o.initClient(f)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	kubeClient, err := f.KubeClient()
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	var repo *velerov1api.BackupRepository
@@ -178,18 +176,18 @@ func (o *Options) runRepoPrune(f velerocli.Factory, namespace string, logger log
 	}
 
 	if err != nil {
-		return errors.Wrap(err, "failed to get backup repository")
+		return "", errors.Wrap(err, "failed to get backup repository")
 	}
 
 	manager, err := initRepoManager(namespace, cli, kubeClient, logger)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	err = manager.PruneRepo(repo)
+	message, err := manager.PruneRepo(repo)
 	if err != nil {
-		return errors.Wrap(err, "failed to prune repo")
+		return "", errors.Wrap(err, "failed to prune repo")
 	}
 
-	return nil
+	return message, nil
 }
