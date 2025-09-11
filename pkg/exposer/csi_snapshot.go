@@ -621,7 +621,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 
 	var securityCtx *corev1api.PodSecurityContext
 	nodeSelector := map[string]string{}
-	podOS := corev1api.PodOS{}
+	var podOS *corev1api.PodOS
 	if nodeOS == kube.NodeOSWindows {
 		userID := "ContainerAdministrator"
 		securityCtx = &corev1api.PodSecurityContext{
@@ -631,7 +631,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 		}
 
 		nodeSelector[kube.NodeOSLabel] = kube.NodeOSWindows
-		podOS.Name = kube.NodeOSWindows
+		podOS = &corev1api.PodOS{Name: kube.NodeOSWindows}
 
 		toleration = append(toleration, []corev1api.Toleration{
 			{
@@ -647,7 +647,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 				Value:    "windows",
 			},
 		}...)
-	} else {
+	} else if nodeOS == kube.NodeOSLinux {
 		userID := int64(0)
 		securityCtx = &corev1api.PodSecurityContext{
 			RunAsUser: &userID,
@@ -660,7 +660,14 @@ func (e *csiSnapshotExposer) createBackupPod(
 		}
 
 		nodeSelector[kube.NodeOSLabel] = kube.NodeOSLinux
-		podOS.Name = kube.NodeOSLinux
+		podOS = &corev1api.PodOS{Name: kube.NodeOSLinux}
+	} else {
+		userID := int64(0)
+		securityCtx = &corev1api.PodSecurityContext{
+			RunAsUser: &userID,
+		}
+
+		nodeSelector[kube.NodeOSLabel] = nodeOS
 	}
 
 	var podAffinity *corev1api.Affinity
@@ -698,7 +705,7 @@ func (e *csiSnapshotExposer) createBackupPod(
 				},
 			},
 			NodeSelector: nodeSelector,
-			OS:           &podOS,
+			OS:           podOS,
 			Affinity:     podAffinity,
 			Containers: []corev1api.Container{
 				{

@@ -490,7 +490,7 @@ func (e *genericRestoreExposer) createRestorePod(
 
 	var securityCtx *corev1api.PodSecurityContext
 	nodeSelector := map[string]string{}
-	podOS := corev1api.PodOS{}
+	var podOS *corev1api.PodOS
 	if nodeOS == kube.NodeOSWindows {
 		userID := "ContainerAdministrator"
 		securityCtx = &corev1api.PodSecurityContext{
@@ -500,7 +500,7 @@ func (e *genericRestoreExposer) createRestorePod(
 		}
 
 		nodeSelector[kube.NodeOSLabel] = kube.NodeOSWindows
-		podOS.Name = kube.NodeOSWindows
+		podOS = &corev1api.PodOS{Name: kube.NodeOSWindows}
 
 		toleration = append(toleration, []corev1api.Toleration{
 			{
@@ -516,14 +516,21 @@ func (e *genericRestoreExposer) createRestorePod(
 				Value:    "windows",
 			},
 		}...)
-	} else {
+	} else if nodeOS == kube.NodeOSLinux {
 		userID := int64(0)
 		securityCtx = &corev1api.PodSecurityContext{
 			RunAsUser: &userID,
 		}
 
 		nodeSelector[kube.NodeOSLabel] = kube.NodeOSLinux
-		podOS.Name = kube.NodeOSLinux
+		podOS = &corev1api.PodOS{Name: kube.NodeOSLinux}
+	} else {
+		userID := int64(0)
+		securityCtx = &corev1api.PodSecurityContext{
+			RunAsUser: &userID,
+		}
+
+		nodeSelector[kube.NodeOSLabel] = nodeOS
 	}
 
 	pod := &corev1api.Pod{
@@ -556,7 +563,7 @@ func (e *genericRestoreExposer) createRestorePod(
 				},
 			},
 			NodeSelector: nodeSelector,
-			OS:           &podOS,
+			OS:           podOS,
 			Containers: []corev1api.Container{
 				{
 					Name:            containerName,

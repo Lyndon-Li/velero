@@ -249,6 +249,9 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			if time.Since(pvr.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
 				r.onPrepareTimeout(ctx, pvr)
 			}
+		} else if pvr.Spec.Cancel && pvr.Status.Node == r.nodeName {
+			log.Info("Accepted PVR is being canceled")
+			r.OnDataPathCancelled(ctx, pvr.GetNamespace(), pvr.GetName())
 		}
 
 		return ctrl.Result{}, nil

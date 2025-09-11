@@ -298,6 +298,9 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			if time.Since(du.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
 				r.onPrepareTimeout(ctx, du)
 			}
+		} else if du.Spec.Cancel && du.Status.AcceptedByNode == r.nodeName {
+			log.Info("Accepted data upload is being canceled")
+			r.OnDataUploadCancelled(ctx, du.GetNamespace(), du.GetName())
 		}
 
 		return ctrl.Result{}, nil

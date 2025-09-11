@@ -101,12 +101,13 @@ const (
 )
 
 // NodeOS represents OS of a node.
-// +kubebuilder:validation:Enum=auto;linux;windows
+// +kubebuilder:validation:Enum=auto;linux;windows;CRX
 type NodeOS string
 
 const (
 	NodeOSLinux   NodeOS = "linux"
 	NodeOSWindows NodeOS = "windows"
+	NodeOSCRX            = "CRX"
 	NodeOSAuto    NodeOS = "auto"
 )
 

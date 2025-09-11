@@ -185,6 +185,7 @@ spec:
                 - auto
                 - linux
                 - windows
+                - CRX
                 type: string
               path:
                 description: Path is the full path of the snapshot volume being backed

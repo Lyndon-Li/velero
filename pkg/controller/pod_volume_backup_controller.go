@@ -245,6 +245,9 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			if time.Since(pvb.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
 				r.onPrepareTimeout(ctx, pvb)
 			}
+		} else if pvb.Spec.Cancel && pvb.Spec.Node == r.nodeName {
+			log.Info("Accepted PVB is being canceled")
+			r.OnDataPathCancelled(ctx, pvb.GetNamespace(), pvb.GetName())
 		}
 
 		return ctrl.Result{}, nil

@@ -282,6 +282,9 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			if time.Since(dd.Status.AcceptedTimestamp.Time) >= r.preparingTimeout {
 				r.onPrepareTimeout(ctx, dd)
 			}
+		} else if dd.Spec.Cancel && dd.Status.AcceptedByNode == r.nodeName {
+			log.Info("Accepted data download is being canceled")
+			r.OnDataDownloadCancelled(ctx, dd.GetNamespace(), dd.GetName())
 		}
 
 		return ctrl.Result{}, nil

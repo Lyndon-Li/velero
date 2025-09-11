@@ -98,6 +98,7 @@ spec:
                 - auto
                 - linux
                 - windows
+                - CRX
                 type: string
               operationTimeout:
                 description: |-
