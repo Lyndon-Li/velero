@@ -364,7 +364,7 @@ func (r *BackupRepoReconciler) getRepositoryMaintenanceFrequency(req *velerov1ap
 		return r.maintenanceFrequency
 	}
 
-	frequency, err := r.repositoryManager.DefaultMaintenanceFrequency(req)
+	frequency, err := r.repositoryManager.DefaultMaintenanceFrequency(req.Spec.RepositoryType, req.Spec.RepositoryConfig)
 	if err != nil || frequency <= 0 {
 		r.logger.WithError(err).WithField("returned frequency", frequency).Warn("Failed to get maitanance frequency, use the default one")
 		frequency = defaultMaintainFrequency

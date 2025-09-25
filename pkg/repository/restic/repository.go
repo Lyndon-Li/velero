@@ -76,6 +76,10 @@ func (r *RepositoryService) DefaultMaintenanceFrequency() time.Duration {
 	return restic.DefaultMaintenanceFrequency
 }
 
+func (r *RepositoryService) ClientSideCacheLimit(repoConfig map[string]string) int64 {
+	return 0
+}
+
 func (r *RepositoryService) exec(cmd *restic.Command, bsl *velerov1api.BackupStorageLocation) error {
 	file, err := r.credentialsFileStore.Path(repokey.RepoKeySelector())
 	if err != nil {

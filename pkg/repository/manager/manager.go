@@ -34,6 +34,8 @@ import (
 
 // Manager manages backup repositories.
 type Manager interface {
+	ConfigManager
+
 	// InitRepo initializes a repo with the specified name and identifier.
 	InitRepo(repo *velerov1api.BackupRepository) error
 
@@ -58,9 +60,14 @@ type Manager interface {
 	// BatchForget removes a list of snapshots from the list of
 	// available snapshots in a repo.
 	BatchForget(context.Context, *velerov1api.BackupRepository, []string) []error
+}
 
+type ConfigManager interface {
 	// DefaultMaintenanceFrequency returns the default maintenance frequency from the specific repo
-	DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error)
+	DefaultMaintenanceFrequency(repoType string, repoConfig map[string]string) (time.Duration, error)
+
+	// ClientSideCacheLimit returns the max cache size required on client side
+	ClientSideCacheLimit(repoType string, repoConfig map[string]string) (int64, error)
 }
 
 type manager struct {
@@ -72,6 +79,12 @@ type manager struct {
 	repoLocker *repository.RepoLocker
 	fileSystem filesystem.Interface
 	log        logrus.FieldLogger
+}
+
+type configManager struct {
+	providers map[string]provider.ConfigProvider
+	configs   map[string]string
+	log       logrus.FieldLogger
 }
 
 // NewManager create a new repository manager.
@@ -101,11 +114,21 @@ func NewManager(
 	return mgr
 }
 
+func NewConfigManager(configs map[string]string, log logrus.FieldLogger) {
+	mgr := &configManager{
+		configs: configs,
+		log:     log,
+	}
+
+	mgr.providers[velerov1api.BackupRepositoryTypeRestic] = provider.NewResticRepositoryConfigProvider(mgr.log)
+	mgr.providers[velerov1api.BackupRepositoryTypeKopia] = provider.NewUnifiedRepoConfigProvider(velerov1api.BackupRepositoryTypeKopia, mgr.log)
+}
+
 func (m *manager) InitRepo(repo *velerov1api.BackupRepository) error {
 	m.repoLocker.LockExclusive(repo.Name)
 	defer m.repoLocker.UnlockExclusive(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -120,7 +143,7 @@ func (m *manager) ConnectToRepo(repo *velerov1api.BackupRepository) error {
 	m.repoLocker.Lock(repo.Name)
 	defer m.repoLocker.Unlock(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -135,7 +158,7 @@ func (m *manager) PrepareRepo(repo *velerov1api.BackupRepository) error {
 	m.repoLocker.Lock(repo.Name)
 	defer m.repoLocker.Unlock(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -150,7 +173,7 @@ func (m *manager) PruneRepo(repo *velerov1api.BackupRepository) error {
 	m.repoLocker.LockExclusive(repo.Name)
 	defer m.repoLocker.UnlockExclusive(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -170,7 +193,7 @@ func (m *manager) UnlockRepo(repo *velerov1api.BackupRepository) error {
 	m.repoLocker.Lock(repo.Name)
 	defer m.repoLocker.Unlock(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -185,7 +208,7 @@ func (m *manager) Forget(ctx context.Context, repo *velerov1api.BackupRepository
 	m.repoLocker.LockExclusive(repo.Name)
 	defer m.repoLocker.UnlockExclusive(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -205,7 +228,7 @@ func (m *manager) BatchForget(ctx context.Context, repo *velerov1api.BackupRepos
 	m.repoLocker.LockExclusive(repo.Name)
 	defer m.repoLocker.UnlockExclusive(repo.Name)
 
-	prd, err := m.getRepositoryProvider(repo)
+	prd, err := m.getRepositoryProvider(repo.Spec.RepositoryType)
 	if err != nil {
 		return []error{errors.WithStack(err)}
 	}
@@ -221,28 +244,32 @@ func (m *manager) BatchForget(ctx context.Context, repo *velerov1api.BackupRepos
 	return prd.BatchForget(context.Background(), snapshots, param)
 }
 
-func (m *manager) DefaultMaintenanceFrequency(repo *velerov1api.BackupRepository) (time.Duration, error) {
-	prd, err := m.getRepositoryProvider(repo)
+func (m *manager) DefaultMaintenanceFrequency(repoType string, repoConfig map[string]string) (time.Duration, error) {
+	prd, err := m.getRepositoryProvider(repoType)
 	if err != nil {
 		return 0, errors.WithStack(err)
 	}
 
-	param, err := m.assembleRepoParam(repo)
-	if err != nil {
-		return 0, errors.WithStack(err)
-	}
-
-	return prd.DefaultMaintenanceFrequency(context.Background(), param), nil
+	return prd.DefaultMaintenanceFrequency(repoConfig), nil
 }
 
-func (m *manager) getRepositoryProvider(repo *velerov1api.BackupRepository) (provider.Provider, error) {
-	switch repo.Spec.RepositoryType {
+func (m *manager) ClientSideCacheLimit(repoType string, repoConfig map[string]string) (int64, error) {
+	prd, err := m.getRepositoryProvider(repoType)
+	if err != nil {
+		return 0, errors.WithStack(err)
+	}
+
+	return prd.ClientSideCacheLimit(repoConfig), nil
+}
+
+func (m *manager) getRepositoryProvider(repoType string) (provider.Provider, error) {
+	switch repoType {
 	case "", velerov1api.BackupRepositoryTypeRestic:
 		return m.providers[velerov1api.BackupRepositoryTypeRestic], nil
 	case velerov1api.BackupRepositoryTypeKopia:
 		return m.providers[velerov1api.BackupRepositoryTypeKopia], nil
 	default:
-		return nil, fmt.Errorf("failed to get provider for repository %s", repo.Spec.RepositoryType)
+		return nil, fmt.Errorf("failed to get provider for repository %s", repoType)
 	}
 }
 

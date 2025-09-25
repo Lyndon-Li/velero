@@ -34,6 +34,12 @@ func NewResticRepositoryProvider(store credentials.FileStore, fs filesystem.Inte
 	}
 }
 
+func NewResticRepositoryConfigProvider(log logrus.FieldLogger) Provider {
+	return &resticRepositoryProvider{
+		svc: restic.NewRepositoryService(nil, nil, log),
+	}
+}
+
 type resticRepositoryProvider struct {
 	svc *restic.RepositoryService
 }
@@ -90,6 +96,10 @@ func (r *resticRepositoryProvider) BatchForget(ctx context.Context, snapshotIDs 
 	return errs
 }
 
-func (r *resticRepositoryProvider) DefaultMaintenanceFrequency(ctx context.Context, param RepoParam) time.Duration {
+func (r *resticRepositoryProvider) DefaultMaintenanceFrequency(repoConfig map[string]string) time.Duration {
 	return r.svc.DefaultMaintenanceFrequency()
+}
+
+func (r *resticRepositoryProvider) ClientSideCacheLimit(repoConfig map[string]string) int64 {
+	return r.svc.ClientSideCacheLimit(repoConfig)
 }

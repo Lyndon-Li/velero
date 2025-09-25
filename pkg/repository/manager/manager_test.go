@@ -32,18 +32,18 @@ func TestGetRepositoryProvider(t *testing.T) {
 	repo := &velerov1.BackupRepository{}
 
 	// empty repository type
-	provider, err := mgr.getRepositoryProvider(repo)
+	provider, err := mgr.getRepositoryProvider(repo.Spec.RepositoryType)
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
 
 	// valid repository type
 	repo.Spec.RepositoryType = velerov1.BackupRepositoryTypeRestic
-	provider, err = mgr.getRepositoryProvider(repo)
+	provider, err = mgr.getRepositoryProvider(repo.Spec.RepositoryType)
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
 
 	// invalid repository type
 	repo.Spec.RepositoryType = "unknown"
-	_, err = mgr.getRepositoryProvider(repo)
+	_, err = mgr.getRepositoryProvider(repo.Spec.RepositoryType)
 	require.Error(t, err)
 }

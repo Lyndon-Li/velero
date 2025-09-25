@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"strconv"
@@ -81,7 +82,22 @@ func NewUnifiedRepoProvider(
 		log:              log,
 	}
 
-	repo.repoService = createRepoService(log)
+	repo.repoService = createRepoService(repoBackend, log)
+
+	return &repo
+}
+
+// NewUnifiedRepoConfigProvider creates the service provider for Unified Repo configs
+func NewUnifiedRepoConfigProvider(
+	repoBackend string,
+	log logrus.FieldLogger,
+) Provider {
+	repo := unifiedRepoProvider{
+		repoBackend: repoBackend,
+		log:         log,
+	}
+
+	repo.repoService = createRepoService(repoBackend, log)
 
 	return &repo
 }
@@ -372,8 +388,12 @@ func (urp *unifiedRepoProvider) BatchForget(ctx context.Context, snapshotIDs []s
 	return errs
 }
 
-func (urp *unifiedRepoProvider) DefaultMaintenanceFrequency(ctx context.Context, param RepoParam) time.Duration {
+func (urp *unifiedRepoProvider) DefaultMaintenanceFrequency(repoConfig map[string]string) time.Duration {
 	return urp.repoService.DefaultMaintenanceFrequency()
+}
+
+func (urp *unifiedRepoProvider) ClientSideCacheLimit(repoConfig map[string]string) int64 {
+	return urp.repoService.ClientSideCacheLimit(repoConfig)
 }
 
 func (urp *unifiedRepoProvider) GetPassword(param any) (string, error) {
@@ -416,12 +436,11 @@ func (urp *unifiedRepoProvider) GetStoreOptions(param any) (map[string]string, e
 	}
 
 	storeOptions := make(map[string]string)
-	for k, v := range storeVar {
-		storeOptions[k] = v
-	}
+	maps.Copy(storeOptions, storeVar)
+	maps.Copy(storeOptions, storeCred)
 
-	for k, v := range storeCred {
-		storeOptions[k] = v
+	if repoParam.CacheDir != "" {
+		storeOptions[udmrepo.StoreOptionCacheDir] = repoParam.CacheDir
 	}
 
 	return storeOptions, nil
@@ -597,6 +616,6 @@ func getStorageVariables(backupLocation *velerov1api.BackupStorageLocation, repo
 	return result, nil
 }
 
-func createRepoService(log logrus.FieldLogger) udmrepo.BackupRepoService {
-	return reposervice.Create(log)
+func createRepoService(repoBackend string, log logrus.FieldLogger) udmrepo.BackupRepoService {
+	return reposervice.Create(repoBackend, log)
 }
