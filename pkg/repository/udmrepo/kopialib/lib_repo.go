@@ -18,6 +18,7 @@ package kopialib
 
 import (
 	"context"
+	"io"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -72,7 +73,9 @@ type kopiaObjectWriter struct {
 	rawWriter object.Writer
 }
 
-type openOptions struct{}
+type openOptions struct {
+	repoLogger io.Writer
+}
 
 const (
 	defaultLogInterval             = time.Second * 10
@@ -117,7 +120,7 @@ func (ks *kopiaRepoService) Open(ctx context.Context, repoOption udmrepo.RepoOpt
 
 	repoCtx := kopia.SetupKopiaLog(ctx, ks.logger)
 
-	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, nil)
+	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, &openOptions{repoLogger: kopia.RepositoryLogger(ks.logger)})
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +165,7 @@ func (ks *kopiaRepoService) Maintain(ctx context.Context, repoOption udmrepo.Rep
 
 	ks.logger.Info("Start to open repo for maintenance, allow index write on load")
 
-	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, nil)
+	r, err := openKopiaRepo(repoCtx, repoConfig, repoOption.RepoPassword, &openOptions{repoLogger: kopia.RepositoryLogger(ks.logger)})
 	if err != nil {
 		return err
 	}
@@ -560,8 +563,10 @@ func (lt *logThrottle) shouldLog() bool {
 	return false
 }
 
-func openKopiaRepo(ctx context.Context, configFile string, password string, _ *openOptions) (repo.Repository, error) {
-	r, err := kopiaRepoOpen(ctx, configFile, password, &repo.Options{})
+func openKopiaRepo(ctx context.Context, configFile string, password string, options *openOptions) (repo.Repository, error) {
+	r, err := kopiaRepoOpen(ctx, configFile, password, &repo.Options{
+		ContentLogWriter: options.repoLogger,
+	})
 	if os.IsNotExist(err) {
 		return nil, errors.Wrap(err, "error to open repo, repo doesn't exist")
 	}
@@ -574,7 +579,7 @@ func openKopiaRepo(ctx context.Context, configFile string, password string, _ *o
 }
 
 func writeInitParameters(ctx context.Context, repoOption udmrepo.RepoOptions, logger logrus.FieldLogger) error {
-	r, err := openKopiaRepo(ctx, repoOption.ConfigFilePath, repoOption.RepoPassword, nil)
+	r, err := openKopiaRepo(ctx, repoOption.ConfigFilePath, repoOption.RepoPassword, &openOptions{repoLogger: kopia.RepositoryLogger(logger)})
 	if err != nil {
 		return err
 	}
