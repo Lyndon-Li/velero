@@ -235,9 +235,10 @@ Hooks:  <none>
   Excluded:  <none>
 
 Resources:
-  Included:        *
-  Excluded:        <none>
-  Cluster-scoped:  auto
+  Included cluster-scoped:    <none>
+  Excluded cluster-scoped:    <none>
+  Included namespace-scoped:  *
+  Excluded namespace-scoped:  <none>
 
 Label selector:  <none>
 
@@ -282,6 +283,73 @@ Hooks:
 OrderedResources:
   kind1: rs1-1, rs1-2
 `
+	input4 := builder.ForBackup("test-ns", "test-backup-4").
+		DefaultVolumesToFsBackup(true).
+		StorageLocation("backup-location").
+		Result().Spec
+
+	expect4 := `Namespaces:
+  Included:  *
+  Excluded:  <none>
+
+Resources:
+  Included cluster-scoped:    <none>
+  Excluded cluster-scoped:    <none>
+  Included namespace-scoped:  *
+  Excluded namespace-scoped:  <none>
+
+Label selector:  <none>
+
+Or label selector:  <none>
+
+Storage Location:  backup-location
+
+Velero-Native Snapshot PVs:    auto
+File System Backup (Default):  true
+Snapshot Move Data:            auto
+Data Mover:                    velero
+
+TTL:  0s
+
+CSISnapshotTimeout:    0s
+ItemOperationTimeout:  0s
+
+Hooks:  <none>
+`
+
+	input5 := builder.ForBackup("test-ns", "test-backup-5").
+		DefaultVolumesToFsBackup(false).
+		StorageLocation("backup-location").
+		Result().Spec
+
+	expect5 := `Namespaces:
+  Included:  *
+  Excluded:  <none>
+
+Resources:
+  Included cluster-scoped:    <none>
+  Excluded cluster-scoped:    <none>
+  Included namespace-scoped:  *
+  Excluded namespace-scoped:  <none>
+
+Label selector:  <none>
+
+Or label selector:  <none>
+
+Storage Location:  backup-location
+
+Velero-Native Snapshot PVs:    auto
+File System Backup (Default):  false
+Snapshot Move Data:            auto
+Data Mover:                    velero
+
+TTL:  0s
+
+CSISnapshotTimeout:    0s
+ItemOperationTimeout:  0s
+
+Hooks:  <none>
+`
 
 	testcases := []struct {
 		name   string
@@ -302,6 +370,16 @@ OrderedResources:
 			name:   "old resource filter with hooks and ordered resources",
 			input:  input3,
 			expect: expect3,
+		},
+		{
+			name:   "DefaultVolumesToFsBackup is true",
+			input:  input4,
+			expect: expect4,
+		},
+		{
+			name:   "DefaultVolumesToFsBackup is false",
+			input:  input5,
+			expect: expect5,
 		},
 	}
 
@@ -519,11 +597,12 @@ func TestCSISnapshots(t *testing.T) {
 					Result:            volume.VolumeResultFailed,
 					SnapshotDataMoved: true,
 					SnapshotDataMovementInfo: &volume.SnapshotDataMovementInfo{
-						UploaderType:   "fake-uploader",
-						SnapshotHandle: "fake-repo-id-5",
-						OperationID:    "fake-operation-5",
-						Size:           100,
-						Phase:          velerov2alpha1.DataUploadPhaseFailed,
+						UploaderType:    "fake-uploader",
+						SnapshotHandle:  "fake-repo-id-5",
+						OperationID:     "fake-operation-5",
+						Size:            100,
+						IncrementalSize: 50,
+						Phase:           velerov2alpha1.DataUploadPhaseFailed,
 					},
 				},
 			},
@@ -535,6 +614,7 @@ func TestCSISnapshots(t *testing.T) {
         Data Mover: velero
         Uploader Type: fake-uploader
         Moved data Size (bytes): 100
+        Incremental data Size (bytes): 50
         Result: failed
 `,
 		},

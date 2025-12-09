@@ -17,7 +17,6 @@ limitations under the License.
 package kube
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -34,12 +33,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/vmware-tanzu/velero/pkg/builder"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
-
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestNamespaceAndName(t *testing.T) {
@@ -228,7 +226,7 @@ func TestGetVolumeDirectorySuccess(t *testing.T) {
 		fakeKubeClient := fake.NewSimpleClientset(objs...)
 
 		// Function under test
-		dir, err := GetVolumeDirectory(context.Background(), logrus.StandardLogger(), tc.pod, tc.pod.Spec.Volumes[0].Name, fakeKubeClient)
+		dir, err := GetVolumeDirectory(t.Context(), logrus.StandardLogger(), tc.pod, tc.pod.Spec.Volumes[0].Name, fakeKubeClient)
 
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, dir)
@@ -277,7 +275,7 @@ func TestGetVolumeModeSuccess(t *testing.T) {
 		fakeKubeClient := fake.NewSimpleClientset(objs...)
 
 		// Function under test
-		mode, err := GetVolumeMode(context.Background(), logrus.StandardLogger(), tc.pod, tc.pod.Spec.Volumes[0].Name, fakeKubeClient)
+		mode, err := GetVolumeMode(t.Context(), logrus.StandardLogger(), tc.pod, tc.pod.Spec.Volumes[0].Name, fakeKubeClient)
 
 		require.NoError(t, err)
 		assert.Equal(t, tc.want, mode)
@@ -680,5 +678,55 @@ func TestHasBackupLabel(t *testing.T) {
 	for _, tc := range testCases {
 		actual := HasBackupLabel(&tc.o, tc.backupName)
 		assert.Equal(t, tc.expected, actual)
+	}
+}
+
+func TestVerifyJsonConfigs(t *testing.T) {
+	testCases := []struct {
+		name          string
+		configMapName string
+		configMap     *corev1api.ConfigMap
+		configType    any
+		expectedErr   string
+	}{
+		{
+			name:          "ConfigMap not exist",
+			configMapName: "non-exist",
+			expectedErr:   "fail to find ConfigMap non-exist: configmaps \"non-exist\" not found",
+		},
+		{
+			name:          "ConfigMap doesn't have data",
+			configMapName: "no-data",
+			expectedErr:   "data is not available in ConfigMap no-data",
+			configMap:     builder.ForConfigMap("velero", "no-data").Result(),
+		},
+		{
+			name:          "ConfigMap data is invalid",
+			configMapName: "invalid",
+			expectedErr:   "error to unmarshall data from ConfigMap invalid: unexpected end of JSON input",
+			configMap:     builder.ForConfigMap("velero", "invalid").Data("global", "{\"podResources\": {\"cpuRequest\": \"100m\", \"cpuLimit\": \"200m\", \"memoryRequest\": \"100Mi\", \"memoryLimit\": \"200Mi\"}, \"keepLatestMaintenanceJobs\": 1}", "other", "{\"podResources\": {\"cpuRequest\": \"100m\", \"cpuLimit\": \"200m\", \"memoryRequest\": \"100Mi\", \"memoryLimit\": \"200Mi\"}, \"keepLatestMaintenanceJobs: 1}").Result(),
+		},
+		{
+			name:          "Normal case",
+			configMapName: "normal",
+			configMap:     builder.ForConfigMap("velero", "normal").Data("global", "{\"podResources\": {\"cpuRequest\": \"100m\", \"cpuLimit\": \"200m\", \"memoryRequest\": \"100Mi\", \"memoryLimit\": \"200Mi\"}, \"keepLatestMaintenanceJobs\": 1}", "other", "{\"podResources\": {\"cpuRequest\": \"100m\", \"cpuLimit\": \"200m\", \"memoryRequest\": \"100Mi\", \"memoryLimit\": \"200Mi\"}, \"keepLatestMaintenanceJobs\": 1}").Result(),
+			configType:    make(map[string]any),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			objects := make([]runtime.Object, 0)
+			if tc.configMap != nil {
+				objects = append(objects, tc.configMap)
+			}
+			fakeClient := velerotest.NewFakeControllerRuntimeClient(t, objects...)
+			err := VerifyJSONConfigs(t.Context(), "velero", fakeClient, tc.configMapName, tc.configMap)
+			if len(tc.expectedErr) > 0 {
+				require.EqualError(t, err, tc.expectedErr)
+			} else {
+				require.NoError(t, err)
+			}
+		})
 	}
 }

@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
@@ -65,10 +66,19 @@ type GenericRestoreExposeParam struct {
 	NodeOS string
 
 	// RestorePVCConfig is the config for restorePVC (intermediate PVC) of generic restore
-	RestorePVCConfig nodeagent.RestorePVC
+	RestorePVCConfig velerotypes.RestorePVC
 
 	// LoadAffinity specifies the node affinity of the backup pod
-	LoadAffinity *kube.LoadAffinity
+	LoadAffinity []*kube.LoadAffinity
+
+	// PriorityClassName is the priority class name for the data mover pod
+	PriorityClassName string
+
+	// RestoreSize specifies the data size for the volume to be restored
+	RestoreSize int64
+
+	// CacheVolume specifies the info for cache volumes
+	CacheVolume *CacheConfigs
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
@@ -136,6 +146,36 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		return errors.Errorf("Target PVC %s/%s has already been bound, abort", param.TargetNamespace, param.TargetPVCName)
 	}
 
+	// Data mover allows the StorageClass name not set for PVC.
+	storageClassName := ""
+	if targetPVC.Spec.StorageClassName != nil {
+		storageClassName = *targetPVC.Spec.StorageClassName
+	}
+
+	affinity := kube.GetLoadAffinityByStorageClass(param.LoadAffinity, storageClassName, curLog)
+
+	var cachePVC *corev1api.PersistentVolumeClaim
+	if param.CacheVolume != nil {
+		cacheVolumeSize := getCacheVolumeSize(param.RestoreSize, param.CacheVolume)
+		if cacheVolumeSize > 0 {
+			curLog.Infof("Creating cache PVC with size %v", cacheVolumeSize)
+
+			if pvc, err := createCachePVC(ctx, e.kubeClient.CoreV1(), ownerObject, param.CacheVolume.StorageClass, cacheVolumeSize, selectedNode); err != nil {
+				return errors.Wrap(err, "error to create cache pvc")
+			} else {
+				cachePVC = pvc
+			}
+
+			defer func() {
+				if err != nil {
+					kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), cachePVC.Name, cachePVC.Namespace, 0, curLog)
+				}
+			}()
+		} else {
+			curLog.Infof("Don't need to create cache volume, restore size %v, cache info %v", param.RestoreSize, param.CacheVolume)
+		}
+	}
+
 	restorePod, err := e.createRestorePod(
 		ctx,
 		ownerObject,
@@ -147,7 +187,9 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		selectedNode,
 		param.Resources,
 		param.NodeOS,
-		param.LoadAffinity,
+		affinity,
+		param.PriorityClassName,
+		cachePVC,
 	)
 	if err != nil {
 		return errors.Wrapf(err, "error to create restore pod")
@@ -274,8 +316,22 @@ func (e *genericRestoreExposer) DiagnoseExpose(ctx context.Context, ownerObject 
 		diag += fmt.Sprintf("error getting restore pvc %s, err: %v\n", restorePVCName, err)
 	}
 
+	cachePVC, err := e.kubeClient.CoreV1().PersistentVolumeClaims(ownerObject.Namespace).Get(ctx, getCachePVCName(ownerObject), metav1.GetOptions{})
+	if err != nil {
+		cachePVC = nil
+
+		if !apierrors.IsNotFound(err) {
+			diag += fmt.Sprintf("error getting cache pvc %s, err: %v\n", getCachePVCName(ownerObject), err)
+		}
+	}
+
+	events, err := e.kubeClient.CoreV1().Events(ownerObject.Namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		diag += fmt.Sprintf("error listing events, err: %v\n", err)
+	}
+
 	if pod != nil {
-		diag += kube.DiagnosePod(pod)
+		diag += kube.DiagnosePod(pod, events)
 
 		if pod.Spec.NodeName != "" {
 			if err := nodeagent.KbClientIsRunningInNode(ctx, ownerObject.Namespace, pod.Spec.NodeName, e.kubeClient); err != nil {
@@ -285,11 +341,23 @@ func (e *genericRestoreExposer) DiagnoseExpose(ctx context.Context, ownerObject 
 	}
 
 	if pvc != nil {
-		diag += kube.DiagnosePVC(pvc)
+		diag += kube.DiagnosePVC(pvc, events)
 
 		if pvc.Spec.VolumeName != "" {
 			if pv, err := e.kubeClient.CoreV1().PersistentVolumes().Get(ctx, pvc.Spec.VolumeName, metav1.GetOptions{}); err != nil {
 				diag += fmt.Sprintf("error getting restore pv %s, err: %v\n", pvc.Spec.VolumeName, err)
+			} else {
+				diag += kube.DiagnosePV(pv)
+			}
+		}
+	}
+
+	if cachePVC != nil {
+		diag += kube.DiagnosePVC(cachePVC, events)
+
+		if cachePVC.Spec.VolumeName != "" {
+			if pv, err := e.kubeClient.CoreV1().PersistentVolumes().Get(ctx, cachePVC.Spec.VolumeName, metav1.GetOptions{}); err != nil {
+				diag += fmt.Sprintf("error getting cache pv %s, err: %v\n", cachePVC.Spec.VolumeName, err)
 			} else {
 				diag += kube.DiagnosePV(pv)
 			}
@@ -304,9 +372,11 @@ func (e *genericRestoreExposer) DiagnoseExpose(ctx context.Context, ownerObject 
 func (e *genericRestoreExposer) CleanUp(ctx context.Context, ownerObject corev1api.ObjectReference) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
+	cachePVCName := getCachePVCName(ownerObject)
 
 	kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePodName, ownerObject.Namespace, e.log)
 	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVCName, ownerObject.Namespace, 0, e.log)
+	kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), cachePVCName, ownerObject.Namespace, 0, e.log)
 }
 
 func (e *genericRestoreExposer) RebindVolume(ctx context.Context, ownerObject corev1api.ObjectReference, targetPVCName string, targetNamespace string, timeout time.Duration) error {
@@ -414,6 +484,8 @@ func (e *genericRestoreExposer) createRestorePod(
 	resources corev1api.ResourceRequirements,
 	nodeOS string,
 	affinity *kube.LoadAffinity,
+	priorityClassName string,
+	cachePVC *corev1api.PersistentVolumeClaim,
 ) (*corev1api.Pod, error) {
 	restorePodName := ownerObject.Name
 	restorePVCName := ownerObject.Name
@@ -435,9 +507,13 @@ func (e *genericRestoreExposer) createRestorePod(
 		return nil, errors.Wrap(err, "error to get inherited pod info from node-agent")
 	}
 
+	// Log the priority class if it's set
+	if priorityClassName != "" {
+		e.log.Debugf("Setting priority class %q for data mover pod %s", priorityClassName, restorePodName)
+	}
+
 	var gracePeriod int64
 	volumeMounts, volumeDevices, volumePath := kube.MakePodPVCAttachment(volumeName, targetPVC.Spec.VolumeMode, false)
-	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 
 	volumes := []corev1api.Volume{{
 		Name: volumeName,
@@ -447,6 +523,25 @@ func (e *genericRestoreExposer) createRestorePod(
 			},
 		},
 	}}
+
+	cacheVolumePath := ""
+	if cachePVC != nil {
+		mnt, _, path := kube.MakePodPVCAttachment(cacheVolumeName, nil, false)
+		volumeMounts = append(volumeMounts, mnt...)
+
+		volumes = append(volumes, corev1api.Volume{
+			Name: cacheVolumeName,
+			VolumeSource: corev1api.VolumeSource{
+				PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+					ClaimName: cachePVC.Name,
+				},
+			},
+		})
+
+		cacheVolumePath = path
+	}
+
+	volumeMounts = append(volumeMounts, podInfo.volumeMounts...)
 	volumes = append(volumes, podInfo.volumes...)
 
 	if label == nil {
@@ -464,6 +559,7 @@ func (e *genericRestoreExposer) createRestorePod(
 		fmt.Sprintf("--volume-mode=%s", volumeMode),
 		fmt.Sprintf("--data-download=%s", ownerObject.Name),
 		fmt.Sprintf("--resource-timeout=%s", operationTimeout.String()),
+		fmt.Sprintf("--cache-volume-path=%s", cacheVolumePath),
 	}
 
 	args = append(args, podInfo.logFormatArgs...)
@@ -483,12 +579,20 @@ func (e *genericRestoreExposer) createRestorePod(
 		nodeSelector[kube.NodeOSLabel] = kube.NodeOSWindows
 		podOS.Name = kube.NodeOSWindows
 
-		toleration = append(toleration, corev1api.Toleration{
-			Key:      "os",
-			Operator: "Equal",
-			Effect:   "NoSchedule",
-			Value:    "windows",
-		})
+		toleration = append(toleration, []corev1api.Toleration{
+			{
+				Key:      "os",
+				Operator: "Equal",
+				Effect:   "NoSchedule",
+				Value:    "windows",
+			},
+			{
+				Key:      "os",
+				Operator: "Equal",
+				Effect:   "NoExecute",
+				Value:    "windows",
+			},
+		}...)
 	} else {
 		userID := int64(0)
 		securityCtx = &corev1api.PodSecurityContext{
@@ -548,6 +652,7 @@ func (e *genericRestoreExposer) createRestorePod(
 					Resources:     resources,
 				},
 			},
+			PriorityClassName:             priorityClassName,
 			ServiceAccountName:            podInfo.serviceAccount,
 			TerminationGracePeriodSeconds: &gracePeriod,
 			Volumes:                       volumes,
@@ -558,6 +663,7 @@ func (e *genericRestoreExposer) createRestorePod(
 			DNSPolicy:                     podInfo.dnsPolicy,
 			DNSConfig:                     podInfo.dnsConfig,
 			Affinity:                      podAffinity,
+			ImagePullSecrets:              podInfo.imagePullSecrets,
 		},
 	}
 

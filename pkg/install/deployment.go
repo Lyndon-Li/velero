@@ -59,8 +59,11 @@ type podTemplateConfig struct {
 	repoMaintenanceJobConfigMap     string
 	nodeAgentConfigMap              string
 	itemBlockWorkerCount            int
+	concurrentBackups               int
 	forWindows                      bool
+	kubeletRootDir                  string
 	nodeAgentDisableHostPath        bool
+	priorityClassName               string
 }
 
 func WithImage(image string) podTemplateOption {
@@ -222,9 +225,27 @@ func WithItemBlockWorkerCount(itemBlockWorkerCount int) podTemplateOption {
 	}
 }
 
+func WithConcurrentBackups(concurrentBackups int) podTemplateOption {
+	return func(c *podTemplateConfig) {
+		c.concurrentBackups = concurrentBackups
+	}
+}
+
+func WithPriorityClassName(priorityClassName string) podTemplateOption {
+	return func(c *podTemplateConfig) {
+		c.priorityClassName = priorityClassName
+	}
+}
+
 func WithForWindows() podTemplateOption {
 	return func(c *podTemplateConfig) {
 		c.forWindows = true
+	}
+}
+
+func WithKubeletRootDir(kubeletRootDir string) podTemplateOption {
+	return func(c *podTemplateConfig) {
+		c.kubeletRootDir = kubeletRootDir
 	}
 }
 
@@ -323,6 +344,10 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1api.Deployme
 		args = append(args, fmt.Sprintf("--item-block-worker-count=%d", c.itemBlockWorkerCount))
 	}
 
+	if c.concurrentBackups > 0 {
+		args = append(args, fmt.Sprintf("--concurrent-backups=%d", c.concurrentBackups))
+	}
+
 	deployment := &appsv1api.Deployment{
 		ObjectMeta: objectMeta(namespace, "velero"),
 		TypeMeta: metav1.TypeMeta{
@@ -400,6 +425,7 @@ func Deployment(namespace string, opts ...podTemplateOption) *appsv1api.Deployme
 							},
 						},
 					},
+					PriorityClassName: c.priorityClassName,
 				},
 			},
 		},

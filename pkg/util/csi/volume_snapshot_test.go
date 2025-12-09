@@ -17,13 +17,14 @@ limitations under the License.
 package csi
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
-	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v7/clientset/versioned/fake"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/fake"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,6 +38,7 @@ import (
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/builder"
+	"github.com/vmware-tanzu/velero/pkg/test"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/logging"
@@ -198,7 +200,7 @@ func TestWaitVolumeSnapshotReady(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakeClient := snapshotFake.NewSimpleClientset(test.clientObj...)
 
-			vs, err := WaitVolumeSnapshotReady(context.Background(), fakeClient.SnapshotV1(), test.vsName, test.namespace, time.Millisecond, velerotest.NewLogger())
+			vs, err := WaitVolumeSnapshotReady(t.Context(), fakeClient.SnapshotV1(), test.vsName, test.namespace, time.Millisecond, velerotest.NewLogger())
 			if err != nil {
 				require.EqualError(t, err, test.err)
 			} else {
@@ -390,7 +392,7 @@ func TestEnsureDeleteVS(t *testing.T) {
 				fakeSnapshotClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
 			}
 
-			err := EnsureDeleteVS(context.Background(), fakeSnapshotClient.SnapshotV1(), test.vsName, test.namespace, time.Millisecond)
+			err := EnsureDeleteVS(t.Context(), fakeSnapshotClient.SnapshotV1(), test.vsName, test.namespace, time.Millisecond)
 			if err != nil {
 				assert.EqualError(t, err, test.err)
 			} else {
@@ -500,7 +502,7 @@ func TestEnsureDeleteVSC(t *testing.T) {
 				fakeSnapshotClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
 			}
 
-			err := EnsureDeleteVSC(context.Background(), fakeSnapshotClient.SnapshotV1(), test.vscName, time.Millisecond)
+			err := EnsureDeleteVSC(t.Context(), fakeSnapshotClient.SnapshotV1(), test.vscName, time.Millisecond)
 			if test.err != "" {
 				assert.EqualError(t, err, test.err)
 			} else {
@@ -554,7 +556,7 @@ func TestDeleteVolumeSnapshotContentIfAny(t *testing.T) {
 
 			logMessage := ""
 
-			DeleteVolumeSnapshotContentIfAny(context.Background(), fakeSnapshotClient.SnapshotV1(), test.vscName, velerotest.NewSingleLogger(&logMessage))
+			DeleteVolumeSnapshotContentIfAny(t.Context(), fakeSnapshotClient.SnapshotV1(), test.vscName, velerotest.NewSingleLogger(&logMessage))
 
 			if len(test.logMessage) > 0 {
 				assert.Contains(t, logMessage, test.logMessage)
@@ -618,7 +620,7 @@ func TestDeleteVolumeSnapshotIfAny(t *testing.T) {
 
 			logMessage := ""
 
-			DeleteVolumeSnapshotIfAny(context.Background(), fakeSnapshotClient.SnapshotV1(), test.vsName, test.vsNamespace, velerotest.NewSingleLogger(&logMessage))
+			DeleteVolumeSnapshotIfAny(t.Context(), fakeSnapshotClient.SnapshotV1(), test.vsName, test.vsNamespace, velerotest.NewSingleLogger(&logMessage))
 
 			if len(test.logMessage) > 0 {
 				assert.Contains(t, logMessage, test.logMessage)
@@ -720,7 +722,7 @@ func TestRetainVSC(t *testing.T) {
 				fakeSnapshotClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
 			}
 
-			returned, err := RetainVSC(context.Background(), fakeSnapshotClient.SnapshotV1(), test.vsc)
+			returned, err := RetainVSC(t.Context(), fakeSnapshotClient.SnapshotV1(), test.vsc)
 
 			if len(test.err) == 0 {
 				require.NoError(t, err)
@@ -814,7 +816,7 @@ func TestRemoveVSCProtect(t *testing.T) {
 				fakeSnapshotClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
 			}
 
-			err := RemoveVSCProtect(context.Background(), fakeSnapshotClient.SnapshotV1(), test.vsc, test.timeout)
+			err := RemoveVSCProtect(t.Context(), fakeSnapshotClient.SnapshotV1(), test.vsc, test.timeout)
 
 			if len(test.err) == 0 {
 				require.NoError(t, err)
@@ -823,7 +825,7 @@ func TestRemoveVSCProtect(t *testing.T) {
 			}
 
 			if test.updated != nil {
-				updated, err := fakeSnapshotClient.SnapshotV1().VolumeSnapshotContents().Get(context.Background(), test.vsc, metav1.GetOptions{})
+				updated, err := fakeSnapshotClient.SnapshotV1().VolumeSnapshotContents().Get(t.Context(), test.vsc, metav1.GetOptions{})
 				require.NoError(t, err)
 
 				assert.Equal(t, test.updated.Finalizers, updated.Finalizers)
@@ -1440,14 +1442,14 @@ func TestSetVolumeSnapshotContentDeletionPolicy(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			fakeClient := velerotest.NewFakeControllerRuntimeClient(t, tc.objs...)
-			err := SetVolumeSnapshotContentDeletionPolicy(tc.inputVSCName, fakeClient, tc.policy)
+			_, err := SetVolumeSnapshotContentDeletionPolicy(tc.inputVSCName, fakeClient, tc.policy)
 			if tc.expectError {
 				assert.Error(t, err)
 			} else {
 				require.NoError(t, err)
 				actual := new(snapshotv1api.VolumeSnapshotContent)
 				err := fakeClient.Get(
-					context.TODO(),
+					t.Context(),
 					crclient.ObjectKey{Name: tc.inputVSCName},
 					actual,
 				)
@@ -1497,11 +1499,11 @@ func TestDeleteVolumeSnapshots(t *testing.T) {
 			)
 			logger := logging.DefaultLogger(logrus.DebugLevel, logging.FormatText)
 
-			DeleteReadyVolumeSnapshot(tc.vs, tc.vsc, client, logger)
+			DeleteReadyVolumeSnapshot(tc.vs, client, logger)
 
 			vsList := new(snapshotv1api.VolumeSnapshotList)
 			err := client.List(
-				context.TODO(),
+				t.Context(),
 				vsList,
 				&crclient.ListOptions{
 					Namespace: "velero",
@@ -1511,7 +1513,7 @@ func TestDeleteVolumeSnapshots(t *testing.T) {
 
 			vscList := new(snapshotv1api.VolumeSnapshotContentList)
 			err = client.List(
-				context.TODO(),
+				t.Context(),
 				vscList,
 			)
 			require.NoError(t, err)
@@ -1697,6 +1699,7 @@ func TestDiagnoseVS(t *testing.T) {
 	testCases := []struct {
 		name     string
 		vs       *snapshotv1api.VolumeSnapshot
+		events   *corev1api.EventList
 		expected string
 	}{
 		{
@@ -1779,11 +1782,81 @@ func TestDiagnoseVS(t *testing.T) {
 			},
 			expected: "VS fake-ns/fake-vs, bind to fake-vsc, readyToUse true, errMessage fake-message\n",
 		},
+		{
+			name: "VS with VSC and empty event",
+			vs: &snapshotv1api.VolumeSnapshot{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fake-vs",
+					Namespace: "fake-ns",
+				},
+				Status: &snapshotv1api.VolumeSnapshotStatus{
+					BoundVolumeSnapshotContentName: &vscName,
+					ReadyToUse:                     &readyToUse,
+					Error:                          &snapshotv1api.VolumeSnapshotError{},
+				},
+			},
+			events:   &corev1api.EventList{},
+			expected: "VS fake-ns/fake-vs, bind to fake-vsc, readyToUse true, errMessage \n",
+		},
+		{
+			name: "VS with VSC and events",
+			vs: &snapshotv1api.VolumeSnapshot{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fake-vs",
+					Namespace: "fake-ns",
+					UID:       "fake-vs-uid",
+				},
+				Status: &snapshotv1api.VolumeSnapshotStatus{
+					BoundVolumeSnapshotContentName: &vscName,
+					ReadyToUse:                     &readyToUse,
+					Error:                          &snapshotv1api.VolumeSnapshotError{},
+				},
+			},
+			events: &corev1api.EventList{Items: []corev1api.Event{
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-uid-1"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-1",
+					Message:        "message-1",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-uid-2"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-2",
+					Message:        "message-2",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-vs-uid"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-3",
+					Message:        "message-3",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-vs-uid"},
+					Type:           corev1api.EventTypeNormal,
+					Reason:         "reason-4",
+					Message:        "message-4",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-vs-uid"},
+					Type:           corev1api.EventTypeNormal,
+					Reason:         "reason-5",
+					Message:        "message-5",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-vs-uid"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-6",
+					Message:        "message-6",
+				},
+			}},
+			expected: "VS fake-ns/fake-vs, bind to fake-vsc, readyToUse true, errMessage \nVS event reason reason-3, message message-3\nVS event reason reason-6, message message-6\n",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			diag := DiagnoseVS(tc.vs)
+			diag := DiagnoseVS(tc.vs, tc.events)
 			assert.Equal(t, tc.expected, diag)
 		})
 	}
@@ -1879,6 +1952,60 @@ func TestDiagnoseVSC(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			diag := DiagnoseVSC(tc.vsc)
 			assert.Equal(t, tc.expected, diag)
+		})
+	}
+}
+
+func TestGetVSCForVS(t *testing.T) {
+	testCases := []struct {
+		name        string
+		vs          *snapshotv1api.VolumeSnapshot
+		vsc         *snapshotv1api.VolumeSnapshotContent
+		expectedErr string
+		expectedVSC *snapshotv1api.VolumeSnapshotContent
+	}{
+		{
+			name:        "vs has no status",
+			vs:          builder.ForVolumeSnapshot("ns1", "vs1").Result(),
+			expectedErr: "invalid snapshot info in volume snapshot vs1",
+		},
+		{
+			name:        "vs has no bound vsc",
+			vs:          builder.ForVolumeSnapshot("ns1", "vs1").Status().Result(),
+			expectedErr: "invalid snapshot info in volume snapshot vs1",
+		},
+		{
+			name:        "vs bound vsc cannot be found",
+			vs:          builder.ForVolumeSnapshot("ns1", "vs1").Status().BoundVolumeSnapshotContentName("vsc1").Result(),
+			expectedErr: "error getting volume snapshot content from API: volumesnapshotcontents.snapshot.storage.k8s.io \"vsc1\" not found",
+		},
+		{
+			name:        "normal case",
+			vs:          builder.ForVolumeSnapshot("ns1", "vs1").Status().BoundVolumeSnapshotContentName("vsc1").Result(),
+			vsc:         builder.ForVolumeSnapshotContent("vsc1").Result(),
+			expectedVSC: builder.ForVolumeSnapshotContent("vsc1").Result(),
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := []runtime.Object{tc.vs}
+			if tc.vsc != nil {
+				objs = append(objs, tc.vsc)
+			}
+
+			client := test.NewFakeControllerRuntimeClient(t, objs...)
+			vsc, err := GetVSCForVS(t.Context(), tc.vs, client)
+
+			if tc.expectedErr != "" {
+				require.EqualError(t, err, tc.expectedErr)
+			} else {
+				require.NoError(t, err)
+			}
+
+			if tc.expectedVSC != nil {
+				require.True(t, cmp.Equal(tc.expectedVSC, vsc, cmpopts.IgnoreFields(snapshotv1api.VolumeSnapshotContent{}, "ResourceVersion")))
+			}
 		})
 	}
 }

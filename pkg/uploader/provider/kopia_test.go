@@ -63,14 +63,6 @@ type FakeRestoreProgressUpdater struct {
 func (f *FakeRestoreProgressUpdater) UpdateProgress(p *uploader.Progress) {}
 
 func TestRunBackup(t *testing.T) {
-	mockBRepo := udmrepomocks.NewBackupRepo(t)
-	mockBRepo.On("GetAdvancedFeatures").Return(udmrepo.AdvancedFeatureInfo{})
-
-	var kp kopiaProvider
-	kp.log = logrus.New()
-	kp.bkRepo = mockBRepo
-	updater := FakeBackupProgressUpdater{PodVolumeBackup: &velerov1api.PodVolumeBackup{}, Log: kp.log, Ctx: context.Background(), Cli: fake.NewClientBuilder().WithScheme(util.VeleroScheme).Build()}
-
 	testCases := []struct {
 		name           string
 		hookBackupFunc func(ctx context.Context, fsUploader kopia.SnapshotUploader, repoWriter repo.RepositoryWriter, sourcePath string, realSource string, forceFull bool, parentSnapshot string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (*uploader.SnapshotInfo, bool, error)
@@ -102,11 +94,19 @@ func TestRunBackup(t *testing.T) {
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			mockBRepo := udmrepomocks.NewBackupRepo(t)
+			mockBRepo.On("GetAdvancedFeatures").Return(udmrepo.AdvancedFeatureInfo{})
+
+			var kp kopiaProvider
+			kp.log = logrus.New()
+			kp.bkRepo = mockBRepo
+			updater := FakeBackupProgressUpdater{PodVolumeBackup: &velerov1api.PodVolumeBackup{}, Log: kp.log, Ctx: t.Context(), Cli: fake.NewClientBuilder().WithScheme(util.VeleroScheme).Build()}
+
 			if tc.volMode == "" {
 				tc.volMode = uploader.PersistentVolumeFilesystem
 			}
 			BackupFunc = tc.hookBackupFunc
-			_, _, _, err := kp.RunBackup(context.Background(), "var", "", nil, false, "", tc.volMode, map[string]string{}, &updater)
+			_, _, _, _, err := kp.RunBackup(t.Context(), "var", "", nil, false, "", tc.volMode, map[string]string{}, &updater)
 			if tc.notError {
 				assert.NoError(t, err)
 			} else {
@@ -117,10 +117,6 @@ func TestRunBackup(t *testing.T) {
 }
 
 func TestRunRestore(t *testing.T) {
-	var kp kopiaProvider
-	kp.log = logrus.New()
-	updater := FakeRestoreProgressUpdater{PodVolumeRestore: &velerov1api.PodVolumeRestore{}, Log: kp.log, Ctx: context.Background(), Cli: fake.NewClientBuilder().WithScheme(util.VeleroScheme).Build()}
-
 	testCases := []struct {
 		name            string
 		hookRestoreFunc func(ctx context.Context, rep repo.RepositoryWriter, progress *kopia.Progress, snapshotID, dest string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, log logrus.FieldLogger, cancleCh chan struct{}) (int64, int32, error)
@@ -135,13 +131,6 @@ func TestRunRestore(t *testing.T) {
 			notError: true,
 		},
 		{
-			name: "failed to restore",
-			hookRestoreFunc: func(ctx context.Context, rep repo.RepositoryWriter, progress *kopia.Progress, snapshotID, dest string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, log logrus.FieldLogger, cancleCh chan struct{}) (int64, int32, error) {
-				return 0, 0, errors.New("failed to restore")
-			},
-			notError: false,
-		},
-		{
 			name: "normal block mode restore",
 			hookRestoreFunc: func(ctx context.Context, rep repo.RepositoryWriter, progress *kopia.Progress, snapshotID, dest string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, log logrus.FieldLogger, cancleCh chan struct{}) (int64, int32, error) {
 				return 0, 0, nil
@@ -149,15 +138,26 @@ func TestRunRestore(t *testing.T) {
 			volMode:  uploader.PersistentVolumeBlock,
 			notError: true,
 		},
+		{
+			name: "failed to restore",
+			hookRestoreFunc: func(ctx context.Context, rep repo.RepositoryWriter, progress *kopia.Progress, snapshotID, dest string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, log logrus.FieldLogger, cancleCh chan struct{}) (int64, int32, error) {
+				return 0, 0, errors.New("failed to restore")
+			},
+			notError: false,
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
+			var kp kopiaProvider
+			kp.log = logrus.New()
+			updater := FakeRestoreProgressUpdater{PodVolumeRestore: &velerov1api.PodVolumeRestore{}, Log: kp.log, Ctx: t.Context(), Cli: fake.NewClientBuilder().WithScheme(util.VeleroScheme).Build()}
+
 			if tc.volMode == "" {
 				tc.volMode = uploader.PersistentVolumeFilesystem
 			}
 			RestoreFunc = tc.hookRestoreFunc
-			_, err := kp.RunRestore(context.Background(), "", "/var", tc.volMode, map[string]string{}, &updater)
+			_, err := kp.RunRestore(t.Context(), "", "/var", tc.volMode, map[string]string{}, &updater)
 			if tc.notError {
 				assert.NoError(t, err)
 			} else {
@@ -209,7 +209,7 @@ func TestCheckContext(t *testing.T) {
 				}()
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 
 			go func() {
@@ -311,7 +311,7 @@ func (m *MockRepoSvc) Open(ctx context.Context, opts udmrepo.RepoOptions) (udmre
 
 func TestNewKopiaUploaderProvider(t *testing.T) {
 	requestorType := "testRequestor"
-	ctx := context.Background()
+	ctx := t.Context()
 	backupRepo := repository.NewBackupRepository(velerov1api.DefaultNamespace, repository.BackupRepositoryKey{VolumeNamespace: "fake-volume-ns-02", BackupLocation: "fake-bsl-02", RepositoryType: "fake-repository-type-02"})
 	mockLog := logrus.New()
 
@@ -332,7 +332,7 @@ func TestNewKopiaUploaderProvider(t *testing.T) {
 			mockBackupRepoService: func() udmrepo.BackupRepoService {
 				backupRepoService := &udmrepomocks.BackupRepoService{}
 				var backupRepo udmrepo.BackupRepo
-				backupRepoService.On("Open", context.Background(), mock.Anything).Return(backupRepo, nil)
+				backupRepoService.On("Open", t.Context(), mock.Anything).Return(backupRepo, nil)
 				return backupRepoService
 			}(),
 			expectedError: "",
@@ -347,7 +347,7 @@ func TestNewKopiaUploaderProvider(t *testing.T) {
 			mockBackupRepoService: func() udmrepo.BackupRepoService {
 				backupRepoService := &udmrepomocks.BackupRepoService{}
 				var backupRepo udmrepo.BackupRepo
-				backupRepoService.On("Open", context.Background(), mock.Anything).Return(backupRepo, nil)
+				backupRepoService.On("Open", t.Context(), mock.Anything).Return(backupRepo, nil)
 				return backupRepoService
 			}(),
 			expectedError: "error to get repo options",
@@ -362,7 +362,7 @@ func TestNewKopiaUploaderProvider(t *testing.T) {
 			mockBackupRepoService: func() udmrepo.BackupRepoService {
 				backupRepoService := &udmrepomocks.BackupRepoService{}
 				var backupRepo udmrepo.BackupRepo
-				backupRepoService.On("Open", context.Background(), mock.Anything).Return(backupRepo, errors.New("failed to init repository"))
+				backupRepoService.On("Open", t.Context(), mock.Anything).Return(backupRepo, errors.New("failed to init repository"))
 				return backupRepoService
 			}(),
 			expectedError: "Failed to find kopia repository",
@@ -373,7 +373,7 @@ func TestNewKopiaUploaderProvider(t *testing.T) {
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			credGetter := &credentials.CredentialGetter{FromSecret: tc.mockCredGetter}
-			BackupRepoServiceCreateFunc = func(logger logrus.FieldLogger) udmrepo.BackupRepoService {
+			BackupRepoServiceCreateFunc = func(string, logrus.FieldLogger) udmrepo.BackupRepoService {
 				return tc.mockBackupRepoService
 			}
 			// Call the function being tested.

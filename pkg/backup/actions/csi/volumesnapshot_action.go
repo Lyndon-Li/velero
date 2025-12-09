@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -95,32 +95,25 @@ func (p *volumeSnapshotBackupItemAction) Execute(
 		)
 	}
 
-	p.log.Infof("Getting VolumesnapshotContent for Volumesnapshot %s/%s",
-		vs.Namespace, vs.Name)
-
-	vsc, err := csi.WaitUntilVSCHandleIsReady(
-		vs,
-		p.crClient,
-		p.log,
-		backup.Spec.CSISnapshotTimeout.Duration,
-	)
-	if err != nil {
-		csi.CleanupVolumeSnapshot(vs, p.crClient, p.log)
-		return nil, nil, "", nil, errors.WithStack(err)
-	}
-
 	if backup.Status.Phase == velerov1api.BackupPhaseFinalizing ||
 		backup.Status.Phase == velerov1api.BackupPhaseFinalizingPartiallyFailed {
 		p.log.
 			WithField("Backup", fmt.Sprintf("%s/%s", backup.Namespace, backup.Name)).
 			WithField("BackupPhase", backup.Status.Phase).Debugf("Cleaning VolumeSnapshots.")
 
-		if vsc == nil {
-			vsc = &snapshotv1api.VolumeSnapshotContent{}
-		}
-
-		csi.DeleteReadyVolumeSnapshot(*vs, *vsc, p.crClient, p.log)
+		csi.DeleteReadyVolumeSnapshot(*vs, p.crClient, p.log)
 		return item, nil, "", nil, nil
+	}
+
+	p.log.Infof("Getting VolumesnapshotContent for Volumesnapshot %s/%s",
+		vs.Namespace, vs.Name)
+
+	ctx := context.TODO()
+
+	vsc, err := csi.GetVSCForVS(ctx, vs, p.crClient)
+	if err != nil {
+		csi.CleanupVolumeSnapshot(vs, p.crClient, p.log)
+		return nil, nil, "", nil, errors.WithStack(err)
 	}
 
 	annotations := make(map[string]string)

@@ -49,6 +49,8 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	repository "github.com/vmware-tanzu/velero/pkg/repository/manager"
+	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -66,11 +68,15 @@ type DataDownloadReconciler struct {
 	dataPathMgr           *datapath.Manager
 	vgdpCounter           *exposer.VgdpCounter
 	loadAffinity          []*kube.LoadAffinity
-	restorePVCConfig      nodeagent.RestorePVC
+	restorePVCConfig      velerotypes.RestorePVC
+	backupRepoConfigs     map[string]string
+	cacheVolumeConfigs    *velerotypes.CachePVC
 	podResources          corev1api.ResourceRequirements
 	preparingTimeout      time.Duration
 	metrics               *metrics.ServerMetrics
 	cancelledDataDownload map[string]time.Time
+	dataMovePriorityClass string
+	repoConfigMgr         repository.ConfigManager
 }
 
 func NewDataDownloadReconciler(
@@ -80,12 +86,16 @@ func NewDataDownloadReconciler(
 	dataPathMgr *datapath.Manager,
 	counter *exposer.VgdpCounter,
 	loadAffinity []*kube.LoadAffinity,
-	restorePVCConfig nodeagent.RestorePVC,
+	restorePVCConfig velerotypes.RestorePVC,
+	backupRepoConfigs map[string]string,
+	cacheVolumeConfigs *velerotypes.CachePVC,
 	podResources corev1api.ResourceRequirements,
 	nodeName string,
 	preparingTimeout time.Duration,
 	logger logrus.FieldLogger,
 	metrics *metrics.ServerMetrics,
+	dataMovePriorityClass string,
+	repoConfigMgr repository.ConfigManager,
 ) *DataDownloadReconciler {
 	return &DataDownloadReconciler{
 		client:                client,
@@ -96,6 +106,8 @@ func NewDataDownloadReconciler(
 		nodeName:              nodeName,
 		restoreExposer:        exposer.NewGenericRestoreExposer(kubeClient, logger),
 		restorePVCConfig:      restorePVCConfig,
+		backupRepoConfigs:     backupRepoConfigs,
+		cacheVolumeConfigs:    cacheVolumeConfigs,
 		dataPathMgr:           dataPathMgr,
 		vgdpCounter:           counter,
 		loadAffinity:          loadAffinity,
@@ -103,6 +115,8 @@ func NewDataDownloadReconciler(
 		preparingTimeout:      preparingTimeout,
 		metrics:               metrics,
 		cancelledDataDownload: make(map[string]time.Time),
+		dataMovePriorityClass: dataMovePriorityClass,
+		repoConfigMgr:         repoConfigMgr,
 	}
 }
 
@@ -878,7 +892,18 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 		}
 	}
 
-	affinity := kube.GetLoadAffinityByStorageClass(r.loadAffinity, dd.Spec.BackupStorageLocation, log)
+	var cacheVolume *exposer.CacheConfigs
+	if r.cacheVolumeConfigs != nil {
+		if limit, err := r.repoConfigMgr.ClientSideCacheLimit(velerov1api.BackupRepositoryTypeKopia, r.backupRepoConfigs); err != nil {
+			log.WithError(err).Warnf("Failed to get client side cache limit for repo type %s from configs %v", velerov1api.BackupRepositoryTypeKopia, r.backupRepoConfigs)
+		} else {
+			cacheVolume = &exposer.CacheConfigs{
+				Limit:             limit,
+				StorageClass:      r.cacheVolumeConfigs.StorageClass,
+				ResidentThreshold: r.cacheVolumeConfigs.ResidentThreshold,
+			}
+		}
+	}
 
 	return exposer.GenericRestoreExposeParam{
 		TargetPVCName:         dd.Spec.TargetVolume.PVC,
@@ -891,7 +916,10 @@ func (r *DataDownloadReconciler) setupExposeParam(dd *velerov2alpha1api.DataDown
 		ExposeTimeout:         r.preparingTimeout,
 		NodeOS:                nodeOS,
 		RestorePVCConfig:      r.restorePVCConfig,
-		LoadAffinity:          affinity,
+		LoadAffinity:          r.loadAffinity,
+		PriorityClassName:     r.dataMovePriorityClass,
+		RestoreSize:           dd.Spec.SnapshotSize,
+		CacheVolume:           cacheVolume,
 	}, nil
 }
 

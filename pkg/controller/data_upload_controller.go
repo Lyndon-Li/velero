@@ -22,7 +22,7 @@ import (
 	"strings"
 	"time"
 
-	snapshotter "github.com/kubernetes-csi/external-snapshotter/client/v7/clientset/versioned/typed/volumesnapshot/v1"
+	snapshotter "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/typed/volumesnapshot/v1"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
@@ -50,6 +50,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
+	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -65,22 +66,23 @@ const (
 
 // DataUploadReconciler reconciles a DataUpload object
 type DataUploadReconciler struct {
-	client              client.Client
-	kubeClient          kubernetes.Interface
-	csiSnapshotClient   snapshotter.SnapshotV1Interface
-	mgr                 manager.Manager
-	Clock               clocks.WithTickerAndDelayedExecution
-	nodeName            string
-	logger              logrus.FieldLogger
-	snapshotExposerList map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer
-	dataPathMgr         *datapath.Manager
-	vgdpCounter         *exposer.VgdpCounter
-	loadAffinity        []*kube.LoadAffinity
-	backupPVCConfig     map[string]nodeagent.BackupPVC
-	podResources        corev1api.ResourceRequirements
-	preparingTimeout    time.Duration
-	metrics             *metrics.ServerMetrics
-	cancelledDataUpload map[string]time.Time
+	client                client.Client
+	kubeClient            kubernetes.Interface
+	csiSnapshotClient     snapshotter.SnapshotV1Interface
+	mgr                   manager.Manager
+	Clock                 clocks.WithTickerAndDelayedExecution
+	nodeName              string
+	logger                logrus.FieldLogger
+	snapshotExposerList   map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer
+	dataPathMgr           *datapath.Manager
+	vgdpCounter           *exposer.VgdpCounter
+	loadAffinity          []*kube.LoadAffinity
+	backupPVCConfig       map[string]velerotypes.BackupPVC
+	podResources          corev1api.ResourceRequirements
+	preparingTimeout      time.Duration
+	metrics               *metrics.ServerMetrics
+	cancelledDataUpload   map[string]time.Time
+	dataMovePriorityClass string
 }
 
 func NewDataUploadReconciler(
@@ -91,13 +93,14 @@ func NewDataUploadReconciler(
 	dataPathMgr *datapath.Manager,
 	counter *exposer.VgdpCounter,
 	loadAffinity []*kube.LoadAffinity,
-	backupPVCConfig map[string]nodeagent.BackupPVC,
+	backupPVCConfig map[string]velerotypes.BackupPVC,
 	podResources corev1api.ResourceRequirements,
 	clock clocks.WithTickerAndDelayedExecution,
 	nodeName string,
 	preparingTimeout time.Duration,
 	log logrus.FieldLogger,
 	metrics *metrics.ServerMetrics,
+	dataMovePriorityClass string,
 ) *DataUploadReconciler {
 	return &DataUploadReconciler{
 		client:            client,
@@ -114,14 +117,15 @@ func NewDataUploadReconciler(
 				log,
 			),
 		},
-		dataPathMgr:         dataPathMgr,
-		vgdpCounter:         counter,
-		loadAffinity:        loadAffinity,
-		backupPVCConfig:     backupPVCConfig,
-		podResources:        podResources,
-		preparingTimeout:    preparingTimeout,
-		metrics:             metrics,
-		cancelledDataUpload: make(map[string]time.Time),
+		dataPathMgr:           dataPathMgr,
+		vgdpCounter:           counter,
+		loadAffinity:          loadAffinity,
+		backupPVCConfig:       backupPVCConfig,
+		podResources:          podResources,
+		preparingTimeout:      preparingTimeout,
+		metrics:               metrics,
+		cancelledDataUpload:   make(map[string]time.Time),
+		dataMovePriorityClass: dataMovePriorityClass,
 	}
 }
 
@@ -489,6 +493,7 @@ func (r *DataUploadReconciler) OnDataUploadCompleted(ctx context.Context, namesp
 		du.Status.Path = result.Backup.Source.ByPath
 		du.Status.Phase = velerov2alpha1api.DataUploadPhaseCompleted
 		du.Status.SnapshotID = result.Backup.SnapshotID
+		du.Status.IncrementalBytes = result.Backup.IncrementalBytes
 		du.Status.CompletionTimestamp = &metav1.Time{Time: r.Clock.Now()}
 		if result.Backup.EmptySnapshot {
 			du.Status.Message = "volume was empty so no data was upload"
@@ -912,6 +917,13 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 			return nil, errors.Wrapf(err, "failed to get PVC %s/%s", du.Spec.SourceNamespace, du.Spec.SourcePVC)
 		}
 
+		pv := &corev1api.PersistentVolume{}
+		if err := r.client.Get(context.Background(), types.NamespacedName{
+			Name: pvc.Spec.VolumeName,
+		}, pv); err != nil {
+			return nil, errors.Wrapf(err, "failed to get source PV %s", pvc.Spec.VolumeName)
+		}
+
 		nodeOS := kube.GetPVCAttachingNodeOS(pvc, r.kubeClient.CoreV1(), r.kubeClient.StorageV1(), log)
 
 		if err := kube.HasNodeWithOS(context.Background(), nodeOS, r.kubeClient.CoreV1()); err != nil {
@@ -956,11 +968,11 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 			}
 		}
 
-		affinity := kube.GetLoadAffinityByStorageClass(r.loadAffinity, du.Spec.CSISnapshot.SnapshotClass, log)
-
 		return &exposer.CSISnapshotExposeParam{
 			SnapshotName:          du.Spec.CSISnapshot.VolumeSnapshot,
 			SourceNamespace:       du.Spec.SourceNamespace,
+			SourcePVCName:         pvc.Name,
+			SourcePVName:          pv.Name,
 			StorageClass:          du.Spec.CSISnapshot.StorageClass,
 			HostingPodLabels:      hostingPodLabels,
 			HostingPodAnnotations: hostingPodAnnotation,
@@ -969,10 +981,11 @@ func (r *DataUploadReconciler) setupExposeParam(du *velerov2alpha1api.DataUpload
 			OperationTimeout:      du.Spec.OperationTimeout.Duration,
 			ExposeTimeout:         r.preparingTimeout,
 			VolumeSize:            pvc.Spec.Resources.Requests[corev1api.ResourceStorage],
-			Affinity:              affinity,
+			Affinity:              r.loadAffinity,
 			BackupPVCConfig:       r.backupPVCConfig,
 			Resources:             r.podResources,
 			NodeOS:                nodeOS,
+			PriorityClassName:     r.dataMovePriorityClass,
 		}, nil
 	}
 

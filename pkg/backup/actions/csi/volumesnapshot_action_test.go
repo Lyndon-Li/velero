@@ -17,13 +17,12 @@ limitations under the License.
 package csi
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -119,6 +118,34 @@ func TestVSExecute(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "Backup in finalizing phase - skip VSC lookup",
+			backup: builder.ForBackup("velero", "backup").
+				Phase(velerov1api.BackupPhaseFinalizing).Result(),
+			vs: builder.ForVolumeSnapshot("velero", "vs").
+				ObjectMeta(builder.WithLabels(
+					velerov1api.BackupNameLabel, "backup")).
+				Status().
+				BoundVolumeSnapshotContentName("vsc").Result(),
+			vsc:                     nil, // VSC won't be created/fetched
+			expectedErr:             "",
+			expectedAdditionalItems: nil,
+			expectedItemToUpdate:    nil,
+		},
+		{
+			name: "Backup in finalizing partially failed phase - skip VSC lookup",
+			backup: builder.ForBackup("velero", "backup").
+				Phase(velerov1api.BackupPhaseFinalizingPartiallyFailed).Result(),
+			vs: builder.ForVolumeSnapshot("velero", "vs").
+				ObjectMeta(builder.WithLabels(
+					velerov1api.BackupNameLabel, "backup")).
+				Status().
+				BoundVolumeSnapshotContentName("vsc").Result(),
+			vsc:                     nil, // VSC won't be created/fetched
+			expectedErr:             "",
+			expectedAdditionalItems: nil,
+			expectedItemToUpdate:    nil,
+		},
 	}
 
 	for _, tc := range tests {
@@ -132,7 +159,7 @@ func TestVSExecute(t *testing.T) {
 			require.NoError(t, err)
 
 			if tc.vsc != nil {
-				require.NoError(t, vsBIA.crClient.Create(context.TODO(), tc.vsc))
+				require.NoError(t, vsBIA.crClient.Create(t.Context(), tc.vsc))
 			}
 
 			_, additionalItems, _, itemToUpdate, err := vsBIA.Execute(&unstructured.UnstructuredList{Object: item}, tc.backup)
@@ -262,12 +289,12 @@ func TestVSProgress(t *testing.T) {
 			}
 
 			if tc.vs != nil {
-				err := crClient.Create(context.Background(), tc.vs)
+				err := crClient.Create(t.Context(), tc.vs)
 				require.NoError(t, err)
 			}
 
 			if tc.vsc != nil {
-				require.NoError(t, crClient.Create(context.TODO(), tc.vsc))
+				require.NoError(t, crClient.Create(t.Context(), tc.vsc))
 			}
 
 			progress, err := vsBIA.Progress(tc.operationID, tc.backup)

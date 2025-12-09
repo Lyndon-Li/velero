@@ -17,7 +17,6 @@ limitations under the License.
 package kube
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -123,7 +122,7 @@ func TestWaitPVCBound(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			pv, err := WaitPVCBound(context.Background(), kubeClient.CoreV1(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, time.Millisecond)
+			pv, err := WaitPVCBound(t.Context(), kubeClient.CoreV1(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, time.Millisecond)
 
 			if err != nil {
 				require.EqualError(t, err, test.err)
@@ -287,7 +286,7 @@ func TestWaitPVCConsumed(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			selectedNode, pvc, err := WaitPVCConsumed(context.Background(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, kubeClient.StorageV1(), time.Millisecond, test.ignoreWaitForFirstConsumer)
+			selectedNode, pvc, err := WaitPVCConsumed(t.Context(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, kubeClient.StorageV1(), time.Millisecond, test.ignoreWaitForFirstConsumer)
 
 			if err != nil {
 				require.EqualError(t, err, test.err)
@@ -510,7 +509,7 @@ func TestDeletePVCIfAny(t *testing.T) {
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
 			logMessage := ""
-			DeletePVAndPVCIfAny(context.Background(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, test.ensureTimeout, velerotest.NewSingleLogger(&logMessage))
+			DeletePVAndPVCIfAny(t.Context(), kubeClient.CoreV1(), test.pvcName, test.pvcNamespace, test.ensureTimeout, velerotest.NewSingleLogger(&logMessage))
 
 			if len(test.logMessage) > 0 {
 				assert.Contains(t, logMessage, test.logMessage)
@@ -572,7 +571,7 @@ func TestDeletePVIfAny(t *testing.T) {
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
 			logMessage := ""
-			DeletePVIfAny(context.Background(), kubeClient.CoreV1(), test.pvName, velerotest.NewSingleLogger(&logMessage))
+			DeletePVIfAny(t.Context(), kubeClient.CoreV1(), test.pvName, velerotest.NewSingleLogger(&logMessage))
 
 			if len(test.logMessage) > 0 {
 				assert.Contains(t, logMessage, test.logMessage)
@@ -698,7 +697,7 @@ func TestEnsureDeletePVC(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			err := EnsureDeletePVC(context.Background(), kubeClient.CoreV1(), test.pvcName, test.namespace, test.timeout)
+			err := EnsureDeletePVC(t.Context(), kubeClient.CoreV1(), test.pvcName, test.namespace, test.timeout)
 			if err != nil {
 				assert.EqualError(t, err, test.err)
 			} else {
@@ -786,7 +785,7 @@ func TestEnsureDeletePV(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			err := EnsurePVDeleted(context.Background(), kubeClient.CoreV1(), test.pvName, test.timeout)
+			err := EnsurePVDeleted(t.Context(), kubeClient.CoreV1(), test.pvName, test.timeout)
 			if err != nil {
 				assert.EqualError(t, err, test.err)
 			} else {
@@ -860,7 +859,7 @@ func TestRebindPVC(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			result, err := RebindPVC(context.Background(), kubeClient.CoreV1(), test.pvc, test.pv)
+			result, err := RebindPVC(t.Context(), kubeClient.CoreV1(), test.pvc, test.pv)
 			if err != nil {
 				require.EqualError(t, err, test.err)
 			} else {
@@ -967,7 +966,7 @@ func TestResetPVBinding(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			result, err := ResetPVBinding(context.Background(), kubeClient.CoreV1(), test.pv, test.labels, test.pvc)
+			result, err := ResetPVBinding(t.Context(), kubeClient.CoreV1(), test.pv, test.labels, test.pvc)
 			if err != nil {
 				require.EqualError(t, err, test.err)
 			} else {
@@ -1045,7 +1044,7 @@ func TestSetPVReclaimPolicy(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			result, err := SetPVReclaimPolicy(context.Background(), kubeClient.CoreV1(), test.pv, test.policy)
+			result, err := SetPVReclaimPolicy(t.Context(), kubeClient.CoreV1(), test.pv, test.policy)
 			if err != nil {
 				require.EqualError(t, err, test.err)
 			} else {
@@ -1195,7 +1194,7 @@ func TestWaitPVBound(t *testing.T) {
 
 			var kubeClient kubernetes.Interface = fakeKubeClient
 
-			pv, err := WaitPVBound(context.Background(), kubeClient.CoreV1(), test.pvName, test.pvcName, test.pvcNamespace, time.Millisecond)
+			pv, err := WaitPVBound(t.Context(), kubeClient.CoreV1(), test.pvName, test.pvcName, test.pvcNamespace, time.Millisecond)
 
 			if err != nil {
 				require.EqualError(t, err, test.err)
@@ -1594,10 +1593,11 @@ func TestDiagnosePVC(t *testing.T) {
 	testCases := []struct {
 		name     string
 		pvc      *corev1api.PersistentVolumeClaim
+		events   *corev1api.EventList
 		expected string
 	}{
 		{
-			name: "pvc with all info",
+			name: "pvc with all info but events",
 			pvc: &corev1api.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "fake-pvc",
@@ -1612,11 +1612,83 @@ func TestDiagnosePVC(t *testing.T) {
 			},
 			expected: "PVC fake-ns/fake-pvc, phase Pending, binding to fake-pv\n",
 		},
+		{
+			name: "pvc with all info and empty events",
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fake-pvc",
+					Namespace: "fake-ns",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeName: "fake-pv",
+				},
+				Status: corev1api.PersistentVolumeClaimStatus{
+					Phase: corev1api.ClaimPending,
+				},
+			},
+			events:   &corev1api.EventList{},
+			expected: "PVC fake-ns/fake-pvc, phase Pending, binding to fake-pv\n",
+		},
+		{
+			name: "pvc with all info and events",
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "fake-pvc",
+					Namespace: "fake-ns",
+					UID:       "fake-pvc-uid",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeName: "fake-pv",
+				},
+				Status: corev1api.PersistentVolumeClaimStatus{
+					Phase: corev1api.ClaimPending,
+				},
+			},
+			events: &corev1api.EventList{Items: []corev1api.Event{
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-uid-1"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-1",
+					Message:        "message-1",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-uid-2"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-2",
+					Message:        "message-2",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pvc-uid"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-3",
+					Message:        "message-3",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pvc-uid"},
+					Type:           corev1api.EventTypeNormal,
+					Reason:         "reason-4",
+					Message:        "message-4",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pvc-uid"},
+					Type:           corev1api.EventTypeNormal,
+					Reason:         "reason-5",
+					Message:        "message-5",
+				},
+				{
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pvc-uid"},
+					Type:           corev1api.EventTypeWarning,
+					Reason:         "reason-6",
+					Message:        "message-6",
+				},
+			}},
+			expected: "PVC fake-ns/fake-pvc, phase Pending, binding to fake-pv\nPVC event reason reason-3, message message-3\nPVC event reason reason-6, message message-6\n",
+		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			diag := DiagnosePVC(tc.pvc)
+			diag := DiagnosePVC(tc.pvc, tc.events)
 			assert.Equal(t, tc.expected, diag)
 		})
 	}

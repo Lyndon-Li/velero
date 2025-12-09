@@ -18,6 +18,7 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	corev1client "k8s.io/client-go/kubernetes/typed/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/label"
@@ -52,6 +54,11 @@ const (
 	KubeAnnMigratedTo             = "pv.kubernetes.io/migrated-to"
 	KubeAnnSelectedNode           = "volume.kubernetes.io/selected-node"
 )
+
+// VolumeSnapshotContentManagedByLabel is applied by the snapshot controller
+// to the VolumeSnapshotContent object in case distributed snapshotting is enabled.
+// The value contains the name of the node that handles the snapshot for the volume local to that node.
+const VolumeSnapshotContentManagedByLabel = "snapshot.storage.kubernetes.io/managed-by"
 
 var ErrorPodVolumeIsNotPVC = errors.New("pod volume is not a PVC")
 
@@ -351,4 +358,30 @@ func HasBackupLabel(o *metav1.ObjectMeta, backupName string) bool {
 		return false
 	}
 	return o.Labels[velerov1api.BackupNameLabel] == label.GetValidName(backupName)
+}
+
+func VerifyJSONConfigs(ctx context.Context, namespace string, crClient client.Client, configName string, configType any) error {
+	cm := new(corev1api.ConfigMap)
+	err := crClient.Get(ctx, client.ObjectKey{Namespace: namespace, Name: configName}, cm)
+	if err != nil {
+		return errors.Wrapf(err, "fail to find ConfigMap %s", configName)
+	}
+
+	if cm.Data == nil {
+		return errors.Errorf("data is not available in ConfigMap %s", configName)
+	}
+
+	// Verify all the keys in ConfigMap's data.
+	jsonString := ""
+	for _, v := range cm.Data {
+		jsonString = v
+
+		configs := configType
+		err = json.Unmarshal([]byte(jsonString), configs)
+		if err != nil {
+			return errors.Wrapf(err, "error to unmarshall data from ConfigMap %s", configName)
+		}
+	}
+
+	return nil
 }

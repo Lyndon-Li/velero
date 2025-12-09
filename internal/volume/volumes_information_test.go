@@ -17,13 +17,12 @@ limitations under the License.
 package volume
 
 import (
-	"context"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	corev1api "k8s.io/api/core/v1"
@@ -738,7 +737,7 @@ func TestGenerateVolumeInfoFromPVB(t *testing.T) {
 				}
 			}
 			if tc.pod != nil {
-				require.NoError(t, volumesInfo.crClient.Create(context.TODO(), tc.pod))
+				require.NoError(t, volumesInfo.crClient.Create(t.Context(), tc.pod))
 			}
 			volumesInfo.logger = logging.DefaultLogger(logrus.DebugLevel, logging.FormatJSON)
 

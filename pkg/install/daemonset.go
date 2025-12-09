@@ -18,6 +18,7 @@ package install
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	appsv1api "k8s.io/api/apps/v1"
@@ -56,6 +57,10 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 		daemonSetArgs = append(daemonSetArgs, fmt.Sprintf("--node-agent-configmap=%s", c.nodeAgentConfigMap))
 	}
 
+	if len(c.backupRepoConfigMap) > 0 {
+		daemonSetArgs = append(daemonSetArgs, fmt.Sprintf("--backup-repository-configmap=%s", c.backupRepoConfigMap))
+	}
+
 	userID := int64(0)
 	mountPropagationMode := corev1api.MountPropagationHostToContainer
 
@@ -63,7 +68,8 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 	if c.forWindows {
 		dsName = "node-agent-windows"
 	}
-
+	hostPodsVolumePath := filepath.Join(c.kubeletRootDir, "pods")
+	hostPluginsVolumePath := filepath.Join(c.kubeletRootDir, "plugins")
 	volumes := []corev1api.Volume{}
 	volumeMounts := []corev1api.VolumeMount{}
 	if !c.nodeAgentDisableHostPath {
@@ -72,7 +78,7 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 				Name: "host-pods",
 				VolumeSource: corev1api.VolumeSource{
 					HostPath: &corev1api.HostPathVolumeSource{
-						Path: "/var/lib/kubelet/pods",
+						Path: hostPodsVolumePath,
 					},
 				},
 			},
@@ -80,7 +86,7 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 				Name: "host-plugins",
 				VolumeSource: corev1api.VolumeSource{
 					HostPath: &corev1api.HostPathVolumeSource{
-						Path: "/var/lib/kubelet/plugins",
+						Path: hostPluginsVolumePath,
 					},
 				},
 			},
@@ -177,6 +183,7 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 							Resources: c.resources,
 						},
 					},
+					PriorityClassName: c.priorityClassName,
 				},
 			},
 		},
@@ -239,6 +246,12 @@ func DaemonSet(namespace string, opts ...podTemplateOption) *appsv1api.DaemonSet
 				Key:      "os",
 				Operator: "Equal",
 				Effect:   "NoSchedule",
+				Value:    "windows",
+			},
+			{
+				Key:      "os",
+				Operator: "Equal",
+				Effect:   "NoExecute",
 				Value:    "windows",
 			},
 		}

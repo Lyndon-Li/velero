@@ -17,7 +17,6 @@ limitations under the License.
 package nodeagent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/pkg/errors"
@@ -32,6 +31,7 @@ import (
 	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/vmware-tanzu/velero/pkg/builder"
+	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
 )
 
@@ -95,7 +95,7 @@ func TestIsRunning(t *testing.T) {
 				fakeKubeClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
 			}
 
-			err := isRunning(context.TODO(), fakeKubeClient, test.namespace, daemonSet)
+			err := isRunning(t.Context(), fakeKubeClient, test.namespace, daemonSet)
 			if test.expectErr == "" {
 				assert.NoError(t, err)
 			} else {
@@ -175,7 +175,7 @@ func TestIsRunningInNode(t *testing.T) {
 
 			fakeClient := fakeClientBuilder.WithRuntimeObjects(test.kubeClientObj...).Build()
 
-			err := IsRunningInNode(context.TODO(), "", test.nodeName, fakeClient)
+			err := IsRunningInNode(t.Context(), "", test.nodeName, fakeClient)
 			if test.expectErr == "" {
 				assert.NoError(t, err)
 			} else {
@@ -231,7 +231,7 @@ func TestGetPodSpec(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
 
-			spec, err := GetPodSpec(context.TODO(), fakeKubeClient, test.namespace, kube.NodeOSLinux)
+			spec, err := GetPodSpec(t.Context(), fakeKubeClient, test.namespace, kube.NodeOSLinux)
 			if test.expectErr == "" {
 				require.NoError(t, err)
 				assert.Equal(t, *spec, test.expectSpec)
@@ -247,13 +247,16 @@ func TestGetConfigs(t *testing.T) {
 	cmWithInvalidDataFormat := builder.ForConfigMap("fake-ns", "node-agent-config").Data("fake-key", "wrong").Result()
 	cmWithoutCocurrentData := builder.ForConfigMap("fake-ns", "node-agent-config").Data("fake-key", "{\"someothers\":{\"someother\": 10}}").Result()
 	cmWithValidData := builder.ForConfigMap("fake-ns", "node-agent-config").Data("fake-key", "{\"loadConcurrency\":{\"globalConfig\": 5}}").Result()
+	cmWithPriorityClass := builder.ForConfigMap("fake-ns", "node-agent-config").Data("fake-key", "{\"priorityClassName\": \"high-priority\"}").Result()
+	cmWithPriorityClassAndOther := builder.ForConfigMap("fake-ns", "node-agent-config").Data("fake-key", "{\"priorityClassName\": \"low-priority\", \"loadConcurrency\":{\"globalConfig\": 3}}").Result()
+	cmWithMultipleKeysInData := builder.ForConfigMap("fake-ns", "node-agent-config").Data("fake-key-1", "{}", "fake-key-2", "{}").Result()
 
 	tests := []struct {
 		name          string
 		kubeClientObj []runtime.Object
 		namespace     string
 		kubeReactors  []reactor
-		expectResult  *Configs
+		expectResult  *velerotypes.NodeAgentConfigs
 		expectErr     string
 	}{
 		{
@@ -292,7 +295,7 @@ func TestGetConfigs(t *testing.T) {
 			kubeClientObj: []runtime.Object{
 				cmWithoutCocurrentData,
 			},
-			expectResult: &Configs{},
+			expectResult: &velerotypes.NodeAgentConfigs{},
 		},
 		{
 			name:      "success",
@@ -300,11 +303,42 @@ func TestGetConfigs(t *testing.T) {
 			kubeClientObj: []runtime.Object{
 				cmWithValidData,
 			},
-			expectResult: &Configs{
-				LoadConcurrency: &LoadConcurrency{
+			expectResult: &velerotypes.NodeAgentConfigs{
+				LoadConcurrency: &velerotypes.LoadConcurrency{
 					GlobalConfig: 5,
 				},
 			},
+		},
+		{
+			name:      "configmap with priority class name",
+			namespace: "fake-ns",
+			kubeClientObj: []runtime.Object{
+				cmWithPriorityClass,
+			},
+			expectResult: &velerotypes.NodeAgentConfigs{
+				PriorityClassName: "high-priority",
+			},
+		},
+		{
+			name:      "configmap with priority class and other configs",
+			namespace: "fake-ns",
+			kubeClientObj: []runtime.Object{
+				cmWithPriorityClassAndOther,
+			},
+			expectResult: &velerotypes.NodeAgentConfigs{
+				PriorityClassName: "low-priority",
+				LoadConcurrency: &velerotypes.LoadConcurrency{
+					GlobalConfig: 3,
+				},
+			},
+		},
+		{
+			name:      "ConfigMap's Data has more than one key",
+			namespace: "fake-ns",
+			kubeClientObj: []runtime.Object{
+				cmWithMultipleKeysInData,
+			},
+			expectErr: "more than one keys are found in ConfigMap node-agent-config's data. only expect one",
 		},
 	}
 
@@ -316,16 +350,22 @@ func TestGetConfigs(t *testing.T) {
 				fakeKubeClient.Fake.PrependReactor(reactor.verb, reactor.resource, reactor.reactorFunc)
 			}
 
-			result, err := GetConfigs(context.TODO(), test.namespace, fakeKubeClient, "node-agent-config")
+			result, err := GetConfigs(t.Context(), test.namespace, fakeKubeClient, "node-agent-config")
 			if test.expectErr == "" {
 				require.NoError(t, err)
 
 				if test.expectResult == nil {
 					assert.Nil(t, result)
-				} else if test.expectResult.LoadConcurrency == nil {
-					assert.Nil(t, result.LoadConcurrency)
 				} else {
-					assert.Equal(t, *test.expectResult.LoadConcurrency, *result.LoadConcurrency)
+					// Check PriorityClassName
+					assert.Equal(t, test.expectResult.PriorityClassName, result.PriorityClassName)
+
+					// Check LoadConcurrency
+					if test.expectResult.LoadConcurrency == nil {
+						assert.Nil(t, result.LoadConcurrency)
+					} else {
+						assert.Equal(t, *test.expectResult.LoadConcurrency, *result.LoadConcurrency)
+					}
 				}
 			} else {
 				assert.EqualError(t, err, test.expectErr)
@@ -452,7 +492,7 @@ func TestGetLabelValue(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
 
-			value, err := GetLabelValue(context.TODO(), fakeKubeClient, test.namespace, "fake-label", kube.NodeOSLinux)
+			value, err := GetLabelValue(t.Context(), fakeKubeClient, test.namespace, "fake-label", kube.NodeOSLinux)
 			if test.expectErr == "" {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedValue, value)
@@ -581,7 +621,7 @@ func TestGetAnnotationValue(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
 
-			value, err := GetAnnotationValue(context.TODO(), fakeKubeClient, test.namespace, "fake-annotation", kube.NodeOSLinux)
+			value, err := GetAnnotationValue(t.Context(), fakeKubeClient, test.namespace, "fake-annotation", kube.NodeOSLinux)
 			if test.expectErr == "" {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedValue, value)
@@ -691,7 +731,7 @@ func TestGetToleration(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
 
-			value, err := GetToleration(context.TODO(), fakeKubeClient, test.namespace, "fake-toleration", kube.NodeOSLinux)
+			value, err := GetToleration(t.Context(), fakeKubeClient, test.namespace, "fake-toleration", kube.NodeOSLinux)
 			if test.expectErr == "" {
 				require.NoError(t, err)
 				assert.Equal(t, test.expectedValue, *value)
@@ -851,7 +891,7 @@ func TestGetHostPodPath(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			fakeKubeClient := fake.NewSimpleClientset(test.kubeClientObj...)
 
-			path, err := GetHostPodPath(context.TODO(), fakeKubeClient, test.namespace, test.osType)
+			path, err := GetHostPodPath(t.Context(), fakeKubeClient, test.namespace, test.osType)
 
 			if test.expectErr == "" {
 				require.NoError(t, err)

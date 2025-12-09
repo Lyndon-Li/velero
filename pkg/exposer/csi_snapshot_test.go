@@ -17,13 +17,12 @@ limitations under the License.
 package exposer
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
 
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
-	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v7/clientset/versioned/fake"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/fake"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,10 +37,13 @@ import (
 	clientFake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	velerov1 "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
+	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
+	"github.com/vmware-tanzu/velero/pkg/util"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
+
+	storagev1api "k8s.io/api/storage/v1"
 )
 
 type reactor struct {
@@ -130,6 +132,11 @@ func TestExpose(t *testing.T) {
 		},
 	}
 
+	vscObjWithLabels := vscObj
+	vscObjWithLabels.Labels = map[string]string{
+		"snapshot.storage.kubernetes.io/managed-by": "worker",
+	}
+
 	daemonSet := &appsv1api.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "velero",
@@ -152,6 +159,31 @@ func TestExpose(t *testing.T) {
 		},
 	}
 
+	pvName := "pv-1"
+	volumeAttachement1 := &storagev1api.VolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "va1",
+		},
+		Spec: storagev1api.VolumeAttachmentSpec{
+			Source: storagev1api.VolumeAttachmentSource{
+				PersistentVolumeName: &pvName,
+			},
+			NodeName: "node-1",
+		},
+	}
+
+	volumeAttachement2 := &storagev1api.VolumeAttachment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "va2",
+		},
+		Spec: storagev1api.VolumeAttachmentSpec{
+			Source: storagev1api.VolumeAttachmentSource{
+				PersistentVolumeName: &pvName,
+			},
+			NodeName: "node-2",
+		},
+	}
+
 	tests := []struct {
 		name                          string
 		snapshotClientObj             []runtime.Object
@@ -165,6 +197,7 @@ func TestExpose(t *testing.T) {
 		expectedReadOnlyPVC           bool
 		expectedBackupPVCStorageClass string
 		expectedAffinity              *corev1api.Affinity
+		expectedPVCAnnotation         map[string]string
 	}{
 		{
 			name:        "wait vs ready fail",
@@ -372,6 +405,24 @@ func TestExpose(t *testing.T) {
 			},
 		},
 		{
+			name:        "success-with-labels",
+			ownerBackup: backup,
+			exposeParam: CSISnapshotExposeParam{
+				SnapshotName:     "fake-vs",
+				SourceNamespace:  "fake-ns",
+				AccessMode:       AccessModeFileSystem,
+				OperationTimeout: time.Millisecond,
+				ExposeTimeout:    time.Millisecond,
+			},
+			snapshotClientObj: []runtime.Object{
+				vsObject,
+				vscObjWithLabels,
+			},
+			kubeClientObj: []runtime.Object{
+				daemonSet,
+			},
+		},
+		{
 			name:        "restore size from exposeParam",
 			ownerBackup: backup,
 			exposeParam: CSISnapshotExposeParam{
@@ -401,7 +452,7 @@ func TestExpose(t *testing.T) {
 				AccessMode:       AccessModeFileSystem,
 				OperationTimeout: time.Millisecond,
 				ExposeTimeout:    time.Millisecond,
-				BackupPVCConfig: map[string]nodeagent.BackupPVC{
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
 					"fake-sc": {
 						StorageClass: "fake-sc-read-only",
 						ReadOnly:     true,
@@ -427,7 +478,7 @@ func TestExpose(t *testing.T) {
 				AccessMode:       AccessModeFileSystem,
 				OperationTimeout: time.Millisecond,
 				ExposeTimeout:    time.Millisecond,
-				BackupPVCConfig: map[string]nodeagent.BackupPVC{
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
 					"fake-sc": {
 						StorageClass: "fake-sc-read-only",
 						ReadOnly:     true,
@@ -454,7 +505,7 @@ func TestExpose(t *testing.T) {
 				AccessMode:       AccessModeFileSystem,
 				OperationTimeout: time.Millisecond,
 				ExposeTimeout:    time.Millisecond,
-				BackupPVCConfig: map[string]nodeagent.BackupPVC{
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
 					"fake-sc": {
 						StorageClass: "fake-sc-read-only",
 					},
@@ -479,17 +530,19 @@ func TestExpose(t *testing.T) {
 				AccessMode:       AccessModeFileSystem,
 				OperationTimeout: time.Millisecond,
 				ExposeTimeout:    time.Millisecond,
-				Affinity: &kube.LoadAffinity{
-					NodeSelector: metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{
-								Key:      "kubernetes.io/os",
-								Operator: metav1.LabelSelectorOpIn,
-								Values:   []string{"Linux"},
+				Affinity: []*kube.LoadAffinity{
+					{
+						NodeSelector: metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      "kubernetes.io/os",
+									Operator: metav1.LabelSelectorOpIn,
+									Values:   []string{"Linux"},
+								},
 							},
 						},
+						StorageClass: "fake-sc",
 					},
-					StorageClass: "fake-sc",
 				},
 			},
 			snapshotClientObj: []runtime.Object{
@@ -527,22 +580,24 @@ func TestExpose(t *testing.T) {
 				AccessMode:       AccessModeFileSystem,
 				OperationTimeout: time.Millisecond,
 				ExposeTimeout:    time.Millisecond,
-				BackupPVCConfig: map[string]nodeagent.BackupPVC{
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
 					"fake-sc": {
 						StorageClass: "fake-sc-read-only",
 					},
 				},
-				Affinity: &kube.LoadAffinity{
-					NodeSelector: metav1.LabelSelector{
-						MatchExpressions: []metav1.LabelSelectorRequirement{
-							{
-								Key:      "kubernetes.io/arch",
-								Operator: metav1.LabelSelectorOpIn,
-								Values:   []string{"amd64"},
+				Affinity: []*kube.LoadAffinity{
+					{
+						NodeSelector: metav1.LabelSelector{
+							MatchExpressions: []metav1.LabelSelectorRequirement{
+								{
+									Key:      "kubernetes.io/arch",
+									Operator: metav1.LabelSelectorOpIn,
+									Values:   []string{"amd64"},
+								},
 							},
 						},
+						StorageClass: "fake-sc-read-only",
 					},
-					StorageClass: "fake-sc-read-only",
 				},
 			},
 			snapshotClientObj: []runtime.Object{
@@ -581,7 +636,7 @@ func TestExpose(t *testing.T) {
 				AccessMode:       AccessModeFileSystem,
 				OperationTimeout: time.Millisecond,
 				ExposeTimeout:    time.Millisecond,
-				BackupPVCConfig: map[string]nodeagent.BackupPVC{
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
 					"fake-sc": {
 						StorageClass: "fake-sc-read-only",
 					},
@@ -597,6 +652,117 @@ func TestExpose(t *testing.T) {
 			},
 			expectedBackupPVCStorageClass: "fake-sc-read-only",
 			expectedAffinity:              nil,
+		},
+		{
+			name:        "IntolerateSourceNode, get source node fail",
+			ownerBackup: backup,
+			exposeParam: CSISnapshotExposeParam{
+				SnapshotName:     "fake-vs",
+				SourceNamespace:  "fake-ns",
+				SourcePVName:     pvName,
+				StorageClass:     "fake-sc",
+				AccessMode:       AccessModeFileSystem,
+				OperationTimeout: time.Millisecond,
+				ExposeTimeout:    time.Millisecond,
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
+					"fake-sc": {
+						Annotations: map[string]string{util.VSphereCNSFastCloneAnno: "true"},
+					},
+				},
+				Affinity: nil,
+			},
+			snapshotClientObj: []runtime.Object{
+				vsObject,
+				vscObj,
+			},
+			kubeClientObj: []runtime.Object{
+				daemonSet,
+			},
+			kubeReactors: []reactor{
+				{
+					verb:     "list",
+					resource: "volumeattachments",
+					reactorFunc: func(action clientTesting.Action) (handled bool, ret runtime.Object, err error) {
+						return true, nil, errors.New("fake-create-error")
+					},
+				},
+			},
+			expectedAffinity:      nil,
+			expectedPVCAnnotation: nil,
+		},
+		{
+			name:        "IntolerateSourceNode, get empty source node",
+			ownerBackup: backup,
+			exposeParam: CSISnapshotExposeParam{
+				SnapshotName:     "fake-vs",
+				SourceNamespace:  "fake-ns",
+				SourcePVName:     pvName,
+				StorageClass:     "fake-sc",
+				AccessMode:       AccessModeFileSystem,
+				OperationTimeout: time.Millisecond,
+				ExposeTimeout:    time.Millisecond,
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
+					"fake-sc": {
+						Annotations: map[string]string{util.VSphereCNSFastCloneAnno: "true"},
+					},
+				},
+				Affinity: nil,
+			},
+			snapshotClientObj: []runtime.Object{
+				vsObject,
+				vscObj,
+			},
+			kubeClientObj: []runtime.Object{
+				daemonSet,
+			},
+			expectedAffinity:      nil,
+			expectedPVCAnnotation: map[string]string{util.VSphereCNSFastCloneAnno: "true"},
+		},
+		{
+			name:        "IntolerateSourceNode, get source nodes",
+			ownerBackup: backup,
+			exposeParam: CSISnapshotExposeParam{
+				SnapshotName:     "fake-vs",
+				SourceNamespace:  "fake-ns",
+				SourcePVName:     pvName,
+				StorageClass:     "fake-sc",
+				AccessMode:       AccessModeFileSystem,
+				OperationTimeout: time.Millisecond,
+				ExposeTimeout:    time.Millisecond,
+				BackupPVCConfig: map[string]velerotypes.BackupPVC{
+					"fake-sc": {
+						Annotations: map[string]string{util.VSphereCNSFastCloneAnno: "true"},
+					},
+				},
+				Affinity: nil,
+			},
+			snapshotClientObj: []runtime.Object{
+				vsObject,
+				vscObj,
+			},
+			kubeClientObj: []runtime.Object{
+				daemonSet,
+				volumeAttachement1,
+				volumeAttachement2,
+			},
+			expectedAffinity: &corev1api.Affinity{
+				NodeAffinity: &corev1api.NodeAffinity{
+					RequiredDuringSchedulingIgnoredDuringExecution: &corev1api.NodeSelector{
+						NodeSelectorTerms: []corev1api.NodeSelectorTerm{
+							{
+								MatchExpressions: []corev1api.NodeSelectorRequirement{
+									{
+										Key:      "kubernetes.io/hostname",
+										Operator: corev1api.NodeSelectorOpNotIn,
+										Values:   []string{"node-1", "node-2"},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedPVCAnnotation: map[string]string{util.VSphereCNSFastCloneAnno: "true"},
 		},
 	}
 
@@ -630,20 +796,20 @@ func TestExpose(t *testing.T) {
 				}
 			}
 
-			err := exposer.Expose(context.Background(), ownerObject, &test.exposeParam)
+			err := exposer.Expose(t.Context(), ownerObject, &test.exposeParam)
 			if err == nil {
 				require.NoError(t, err)
 
-				backupPod, err := exposer.kubeClient.CoreV1().Pods(ownerObject.Namespace).Get(context.Background(), ownerObject.Name, metav1.GetOptions{})
+				backupPod, err := exposer.kubeClient.CoreV1().Pods(ownerObject.Namespace).Get(t.Context(), ownerObject.Name, metav1.GetOptions{})
 				require.NoError(t, err)
 
-				backupPVC, err := exposer.kubeClient.CoreV1().PersistentVolumeClaims(ownerObject.Namespace).Get(context.Background(), ownerObject.Name, metav1.GetOptions{})
+				backupPVC, err := exposer.kubeClient.CoreV1().PersistentVolumeClaims(ownerObject.Namespace).Get(t.Context(), ownerObject.Name, metav1.GetOptions{})
 				require.NoError(t, err)
 
-				expectedVS, err := exposer.csiSnapshotClient.VolumeSnapshots(ownerObject.Namespace).Get(context.Background(), ownerObject.Name, metav1.GetOptions{})
+				expectedVS, err := exposer.csiSnapshotClient.VolumeSnapshots(ownerObject.Namespace).Get(t.Context(), ownerObject.Name, metav1.GetOptions{})
 				require.NoError(t, err)
 
-				expectedVSC, err := exposer.csiSnapshotClient.VolumeSnapshotContents().Get(context.Background(), ownerObject.Name, metav1.GetOptions{})
+				expectedVSC, err := exposer.csiSnapshotClient.VolumeSnapshotContents().Get(t.Context(), ownerObject.Name, metav1.GetOptions{})
 				require.NoError(t, err)
 
 				assert.Equal(t, expectedVS.Annotations, vsObject.Annotations)
@@ -651,6 +817,7 @@ func TestExpose(t *testing.T) {
 				assert.Equal(t, expectedVSC.Name, *expectedVS.Spec.Source.VolumeSnapshotContentName)
 
 				assert.Equal(t, expectedVSC.Annotations, vscObj.Annotations)
+				assert.Equal(t, expectedVSC.Labels, vscObj.Labels)
 				assert.Equal(t, expectedVSC.Spec.DeletionPolicy, vscObj.Spec.DeletionPolicy)
 				assert.Equal(t, expectedVSC.Spec.Driver, vscObj.Spec.Driver)
 				assert.Equal(t, *expectedVSC.Spec.VolumeSnapshotClassName, *vscObj.Spec.VolumeSnapshotClassName)
@@ -677,6 +844,12 @@ func TestExpose(t *testing.T) {
 
 				if test.expectedAffinity != nil {
 					assert.Equal(t, test.expectedAffinity, backupPod.Spec.Affinity)
+				}
+
+				if test.expectedPVCAnnotation != nil {
+					assert.Equal(t, test.expectedPVCAnnotation, backupPVC.Annotations)
+				} else {
+					assert.Empty(t, backupPVC.Annotations)
 				}
 			} else {
 				assert.EqualError(t, err, test.err)
@@ -844,7 +1017,7 @@ func TestGetExpose(t *testing.T) {
 
 			test.exposeWaitParam.NodeClient = fakeClient
 
-			result, err := exposer.GetExposed(context.Background(), ownerObject, test.Timeout, &test.exposeWaitParam)
+			result, err := exposer.GetExposed(t.Context(), ownerObject, test.Timeout, &test.exposeWaitParam)
 			if test.err == "" {
 				require.NoError(t, err)
 
@@ -942,7 +1115,7 @@ func TestPeekExpose(t *testing.T) {
 				}
 			}
 
-			err := exposer.PeekExposed(context.Background(), ownerObject)
+			err := exposer.PeekExposed(t.Context(), ownerObject)
 			if test.err == "" {
 				assert.NoError(t, err)
 			} else {
@@ -974,8 +1147,9 @@ func Test_csiSnapshotExposer_createBackupPVC(t *testing.T) {
 
 	backupPVC := corev1api.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: velerov1.DefaultNamespace,
-			Name:      "fake-backup",
+			Namespace:   velerov1.DefaultNamespace,
+			Name:        "fake-backup",
+			Annotations: map[string]string{},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1004,8 +1178,9 @@ func Test_csiSnapshotExposer_createBackupPVC(t *testing.T) {
 
 	backupPVCReadOnly := corev1api.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: velerov1.DefaultNamespace,
-			Name:      "fake-backup",
+			Namespace:   velerov1.DefaultNamespace,
+			Name:        "fake-backup",
+			Annotations: map[string]string{},
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1087,7 +1262,7 @@ func Test_csiSnapshotExposer_createBackupPVC(t *testing.T) {
 					APIVersion: tt.ownerBackup.APIVersion,
 				}
 			}
-			got, err := e.createBackupPVC(context.Background(), ownerObject, tt.backupVS, tt.storageClass, tt.accessMode, tt.resource, tt.readOnly)
+			got, err := e.createBackupPVC(t.Context(), ownerObject, tt.backupVS, tt.storageClass, tt.accessMode, tt.resource, tt.readOnly, map[string]string{})
 			if !tt.wantErr(t, err, fmt.Sprintf("createBackupPVC(%v, %v, %v, %v, %v, %v)", ownerObject, tt.backupVS, tt.storageClass, tt.accessMode, tt.resource, tt.readOnly)) {
 				return
 			}
@@ -1113,6 +1288,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-pod-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1138,6 +1314,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-pod-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1166,6 +1343,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-pvc-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1184,6 +1362,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-pvc-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1229,6 +1408,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-vs-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1244,6 +1424,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-vs-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1261,6 +1442,7 @@ func Test_csiSnapshotExposer_DiagnoseExpose(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: velerov1.DefaultNamespace,
 			Name:      "fake-backup",
+			UID:       "fake-vs-uid",
 			OwnerReferences: []metav1.OwnerReference{
 				{
 					APIVersion: backup.APIVersion,
@@ -1460,6 +1642,74 @@ VS velero/fake-backup, bind to fake-vsc, readyToUse false, errMessage fake-vs-me
 VSC fake-vsc, readyToUse false, errMessage fake-vsc-message, handle 
 end diagnose CSI exposer`,
 		},
+		{
+			name:        "with events",
+			ownerBackup: backup,
+			kubeClientObj: []runtime.Object{
+				&backupPodWithNodeName,
+				&backupPVCWithVolumeName,
+				&backupPV,
+				&nodeAgentPod,
+				&corev1api.Event{
+					ObjectMeta:     metav1.ObjectMeta{Namespace: velerov1.DefaultNamespace, Name: "event-1"},
+					Type:           corev1api.EventTypeWarning,
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-uid-1"},
+					Reason:         "reason-1",
+					Message:        "message-1",
+				},
+				&corev1api.Event{
+					ObjectMeta:     metav1.ObjectMeta{Namespace: velerov1.DefaultNamespace, Name: "event-2"},
+					Type:           corev1api.EventTypeWarning,
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pod-uid"},
+					Reason:         "reason-2",
+					Message:        "message-2",
+				},
+				&corev1api.Event{
+					ObjectMeta:     metav1.ObjectMeta{Namespace: velerov1.DefaultNamespace, Name: "event-3"},
+					Type:           corev1api.EventTypeWarning,
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pvc-uid"},
+					Reason:         "reason-3",
+					Message:        "message-3",
+				},
+				&corev1api.Event{
+					ObjectMeta:     metav1.ObjectMeta{Namespace: velerov1.DefaultNamespace, Name: "event-4"},
+					Type:           corev1api.EventTypeWarning,
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-vs-uid"},
+					Reason:         "reason-4",
+					Message:        "message-4",
+				},
+				&corev1api.Event{
+					ObjectMeta:     metav1.ObjectMeta{Namespace: "other-namespace", Name: "event-5"},
+					Type:           corev1api.EventTypeWarning,
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pod-uid"},
+					Reason:         "reason-5",
+					Message:        "message-5",
+				},
+				&corev1api.Event{
+					ObjectMeta:     metav1.ObjectMeta{Namespace: velerov1.DefaultNamespace, Name: "event-6"},
+					Type:           corev1api.EventTypeWarning,
+					InvolvedObject: corev1api.ObjectReference{UID: "fake-pod-uid"},
+					Reason:         "reason-6",
+					Message:        "message-6",
+				},
+			},
+			snapshotClientObj: []runtime.Object{
+				&backupVSWithVSC,
+				&backupVSC,
+			},
+			expected: `begin diagnose CSI exposer
+Pod velero/fake-backup, phase Pending, node name fake-node
+Pod condition Initialized, status True, reason , message fake-pod-message
+Pod event reason reason-2, message message-2
+Pod event reason reason-6, message message-6
+PVC velero/fake-backup, phase Pending, binding to fake-pv
+PVC event reason reason-3, message message-3
+PV fake-pv, phase Pending, reason , message fake-pv-message
+VS velero/fake-backup, bind to fake-vsc, readyToUse false, errMessage fake-vs-message
+VS event reason reason-4, message message-4
+VSC fake-vsc, readyToUse false, errMessage fake-vsc-message, handle 
+end diagnose CSI exposer`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1481,7 +1731,7 @@ end diagnose CSI exposer`,
 				}
 			}
 
-			diag := e.DiagnoseExpose(context.Background(), ownerObject)
+			diag := e.DiagnoseExpose(t.Context(), ownerObject)
 			assert.Equal(t, tt.expected, diag)
 		})
 	}

@@ -17,7 +17,6 @@ limitations under the License.
 package server
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -34,6 +33,7 @@ import (
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
+	"github.com/vmware-tanzu/velero/pkg/builder"
 	"github.com/vmware-tanzu/velero/pkg/client/mocks"
 	"github.com/vmware-tanzu/velero/pkg/cmd/server/config"
 	"github.com/vmware-tanzu/velero/pkg/constant"
@@ -243,7 +243,28 @@ func Test_newServer(t *testing.T) {
 		ClientBurst:    1,
 		ClientPageSize: 100,
 	}, logger)
-	assert.Error(t, err)
+	require.Error(t, err)
+
+	invalidCM := builder.ForConfigMap("velero", "invalid").Data("invalid", "{\"a\": \"b}").Result()
+	crClient := velerotest.NewFakeControllerRuntimeClient(t, invalidCM)
+
+	factory.On("KubeClient").Return(crClient, nil).
+		On("Client").Return(nil, nil).
+		On("DynamicClient").Return(nil, errors.New("error"))
+	_, err = newServer(factory, &config.Config{
+		UploaderType:     uploader.KopiaType,
+		BackupRepoConfig: "invalid",
+	}, logger)
+	require.Error(t, err)
+
+	factory.On("KubeClient").Return(crClient, nil).
+		On("Client").Return(nil, nil).
+		On("DynamicClient").Return(nil, errors.New("error"))
+	_, err = newServer(factory, &config.Config{
+		UploaderType:             uploader.KopiaType,
+		RepoMaintenanceJobConfig: "invalid",
+	}, logger)
+	require.Error(t, err)
 }
 
 func Test_namespaceExists(t *testing.T) {
@@ -334,14 +355,14 @@ func Test_markInProgressBackupsFailed(t *testing.T) {
 			},
 		}).
 		Build()
-	markInProgressBackupsFailed(context.Background(), c, "velero", logrus.New())
+	markInProgressBackupsFailed(t.Context(), c, "velero", logrus.New())
 
 	backup01 := &velerov1api.Backup{}
-	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "velero", Name: "backup01"}, backup01))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "velero", Name: "backup01"}, backup01))
 	assert.Equal(t, velerov1api.BackupPhaseFailed, backup01.Status.Phase)
 
 	backup02 := &velerov1api.Backup{}
-	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "velero", Name: "backup02"}, backup02))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "velero", Name: "backup02"}, backup02))
 	assert.Equal(t, velerov1api.BackupPhaseCompleted, backup02.Status.Phase)
 }
 
@@ -374,14 +395,14 @@ func Test_markInProgressRestoresFailed(t *testing.T) {
 			},
 		}).
 		Build()
-	markInProgressRestoresFailed(context.Background(), c, "velero", logrus.New())
+	markInProgressRestoresFailed(t.Context(), c, "velero", logrus.New())
 
 	restore01 := &velerov1api.Restore{}
-	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "velero", Name: "restore01"}, restore01))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "velero", Name: "restore01"}, restore01))
 	assert.Equal(t, velerov1api.RestorePhaseFailed, restore01.Status.Phase)
 
 	restore02 := &velerov1api.Restore{}
-	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "velero", Name: "restore02"}, restore02))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "velero", Name: "restore02"}, restore02))
 	assert.Equal(t, velerov1api.RestorePhaseCompleted, restore02.Status.Phase)
 }
 
@@ -408,22 +429,22 @@ func Test_setDefaultBackupLocation(t *testing.T) {
 			},
 		}).
 		Build()
-	setDefaultBackupLocation(context.Background(), c, "velero", "default", logrus.New())
+	setDefaultBackupLocation(t.Context(), c, "velero", "default", logrus.New())
 
 	defaultLocation := &velerov1api.BackupStorageLocation{}
-	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "velero", Name: "default"}, defaultLocation))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "velero", Name: "default"}, defaultLocation))
 	assert.True(t, defaultLocation.Spec.Default)
 
 	nonDefaultLocation := &velerov1api.BackupStorageLocation{}
-	require.NoError(t, c.Get(context.Background(), client.ObjectKey{Namespace: "velero", Name: "non-default"}, nonDefaultLocation))
+	require.NoError(t, c.Get(t.Context(), client.ObjectKey{Namespace: "velero", Name: "non-default"}, nonDefaultLocation))
 	assert.False(t, nonDefaultLocation.Spec.Default)
 
 	// no default location specified
 	c = fake.NewClientBuilder().WithScheme(scheme).Build()
-	err := setDefaultBackupLocation(context.Background(), c, "velero", "", logrus.New())
+	err := setDefaultBackupLocation(t.Context(), c, "velero", "", logrus.New())
 	require.NoError(t, err)
 
 	// no default location created
-	err = setDefaultBackupLocation(context.Background(), c, "velero", "default", logrus.New())
+	err = setDefaultBackupLocation(t.Context(), c, "velero", "default", logrus.New())
 	assert.NoError(t, err)
 }

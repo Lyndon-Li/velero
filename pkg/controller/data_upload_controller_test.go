@@ -22,10 +22,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vmware-tanzu/velero/pkg/nodeagent"
-
-	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v7/apis/volumesnapshot/v1"
-	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v7/clientset/versioned/fake"
+	snapshotv1api "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
+	snapshotFake "github.com/kubernetes-csi/external-snapshotter/client/v8/clientset/versioned/fake"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
@@ -56,6 +54,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/exposer"
 	"github.com/vmware-tanzu/velero/pkg/metrics"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
+	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
 	"github.com/vmware-tanzu/velero/pkg/util/kube"
@@ -242,13 +241,14 @@ func initDataUploaderReconcilerWithError(needError ...error) (*DataUploadReconci
 		dataPathMgr,
 		nil,
 		nil,
-		map[string]nodeagent.BackupPVC{},
+		map[string]velerotypes.BackupPVC{},
 		corev1api.ResourceRequirements{},
 		testclocks.NewFakeClock(now),
 		"test-node",
 		time.Minute*5,
 		velerotest.NewLogger(),
 		metrics.NewServerMetrics(),
+		"", // dataMovePriorityClass
 	), nil
 }
 
@@ -616,12 +616,12 @@ func TestReconcile(t *testing.T) {
 			require.NoError(t, err)
 
 			if !test.notCreateDU {
-				err = r.client.Create(context.Background(), test.du)
+				err = r.client.Create(t.Context(), test.du)
 				require.NoError(t, err)
 			}
 
 			if test.needDelete {
-				err = r.client.Delete(context.Background(), test.du)
+				err = r.client.Delete(t.Context(), test.du)
 				require.NoError(t, err)
 			}
 
@@ -737,7 +737,7 @@ func TestReconcile(t *testing.T) {
 }
 
 func TestOnDataUploadCancelled(t *testing.T) {
-	ctx := context.TODO()
+	ctx := t.Context()
 	r, err := initDataUploaderReconciler()
 	require.NoError(t, err)
 	// Create a DataUpload object
@@ -785,7 +785,7 @@ func TestOnDataUploadProgress(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.TODO()
+			ctx := t.Context()
 
 			r, err := initDataUploaderReconciler(test.needErrs...)
 			require.NoError(t, err)
@@ -797,7 +797,7 @@ func TestOnDataUploadProgress(t *testing.T) {
 			namespace := du.Namespace
 			duName := du.Name
 			// Add the DataUpload object to the fake client
-			require.NoError(t, r.client.Create(context.Background(), du))
+			require.NoError(t, r.client.Create(t.Context(), du))
 
 			// Create a Progress object
 			progress := &uploader.Progress{
@@ -820,7 +820,7 @@ func TestOnDataUploadProgress(t *testing.T) {
 }
 
 func TestOnDataUploadFailed(t *testing.T) {
-	ctx := context.TODO()
+	ctx := t.Context()
 	r, err := initDataUploaderReconciler()
 	require.NoError(t, err)
 
@@ -840,7 +840,7 @@ func TestOnDataUploadFailed(t *testing.T) {
 }
 
 func TestOnDataUploadCompleted(t *testing.T) {
-	ctx := context.TODO()
+	ctx := t.Context()
 	r, err := initDataUploaderReconciler()
 	require.NoError(t, err)
 	// Create a DataUpload object
@@ -850,11 +850,20 @@ func TestOnDataUploadCompleted(t *testing.T) {
 	// Add the DataUpload object to the fake client
 	require.NoError(t, r.client.Create(ctx, du))
 	r.snapshotExposerList = map[velerov2alpha1api.SnapshotType]exposer.SnapshotExposer{velerov2alpha1api.SnapshotTypeCSI: exposer.NewCSISnapshotExposer(r.kubeClient, r.csiSnapshotClient, velerotest.NewLogger())}
-	r.OnDataUploadCompleted(ctx, namespace, duName, datapath.Result{})
+	r.OnDataUploadCompleted(ctx, namespace, duName, datapath.Result{
+		Backup: datapath.BackupResult{
+			SnapshotID: "fake-id",
+			Source: datapath.AccessPoint{
+				ByPath: "fake-path",
+			},
+		},
+	})
 	updatedDu := &velerov2alpha1api.DataUpload{}
 	require.NoError(t, r.client.Get(ctx, types.NamespacedName{Name: duName, Namespace: namespace}, updatedDu))
 	assert.Equal(t, velerov2alpha1api.DataUploadPhaseCompleted, updatedDu.Status.Phase)
 	assert.False(t, updatedDu.Status.CompletionTimestamp.IsZero())
+	assert.Equal(t, "fake-id", updatedDu.Status.SnapshotID)
+	assert.Equal(t, "fake-path", updatedDu.Status.Path)
 }
 
 func TestFindDataUploadForPod(t *testing.T) {
@@ -903,11 +912,11 @@ func TestFindDataUploadForPod(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		ctx := context.Background()
+		ctx := t.Context()
 		assert.NoError(t, r.client.Create(ctx, test.pod))
 		assert.NoError(t, r.client.Create(ctx, test.du))
 		// Call the findDataUploadForPod function
-		requests := r.findDataUploadForPod(context.Background(), test.pod)
+		requests := r.findDataUploadForPod(t.Context(), test.pod)
 		test.checkFunc(test.du, requests)
 		r.client.Delete(ctx, test.du, &kbclient.DeleteOptions{})
 		if test.pod != nil {
@@ -957,7 +966,7 @@ func TestAcceptDataUpload(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		ctx := context.Background()
+		ctx := t.Context()
 		r, err := initDataUploaderReconcilerWithError(test.needErrs...)
 		require.NoError(t, err)
 
@@ -1001,7 +1010,7 @@ func TestOnDuPrepareTimeout(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		ctx := context.Background()
+		ctx := t.Context()
 		r, err := initDataUploaderReconcilerWithError(test.needErrs...)
 		require.NoError(t, err)
 
@@ -1046,7 +1055,7 @@ func TestTryCancelDataUpload(t *testing.T) {
 		},
 	}
 	for _, test := range tests {
-		ctx := context.Background()
+		ctx := t.Context()
 		r, err := initDataUploaderReconcilerWithError(test.needErrs...)
 		require.NoError(t, err)
 
@@ -1103,7 +1112,7 @@ func TestUpdateDataUploadWithRetry(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.Name, func(t *testing.T) {
-			ctx, cancelFunc := context.WithTimeout(context.TODO(), time.Second*5)
+			ctx, cancelFunc := context.WithTimeout(t.Context(), time.Second*5)
 			defer cancelFunc()
 			r, err := initDataUploaderReconciler(tc.needErrs...)
 			require.NoError(t, err)
@@ -1212,7 +1221,7 @@ func TestAttemptDataUploadResume(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.TODO()
+			ctx := t.Context()
 			r, err := initDataUploaderReconciler(test.needErrs...)
 			r.nodeName = "node-1"
 			require.NoError(t, err)
@@ -1236,28 +1245,28 @@ func TestAttemptDataUploadResume(t *testing.T) {
 				// Verify DataUploads marked as Canceled
 				for _, duName := range test.cancelledDataUploads {
 					dataUpload := &velerov2alpha1api.DataUpload{}
-					err := r.client.Get(context.Background(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
+					err := r.client.Get(t.Context(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
 					require.NoError(t, err)
 					assert.True(t, dataUpload.Spec.Cancel)
 				}
 				// Verify DataUploads marked as Accepted
 				for _, duName := range test.acceptedDataUploads {
 					dataUpload := &velerov2alpha1api.DataUpload{}
-					err := r.client.Get(context.Background(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
+					err := r.client.Get(t.Context(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
 					require.NoError(t, err)
 					assert.Equal(t, velerov2alpha1api.DataUploadPhaseAccepted, dataUpload.Status.Phase)
 				}
 				// Verify DataUploads marked as Prepared
 				for _, duName := range test.prepareddDataUploads {
 					dataUpload := &velerov2alpha1api.DataUpload{}
-					err := r.client.Get(context.Background(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
+					err := r.client.Get(t.Context(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
 					require.NoError(t, err)
 					assert.Equal(t, velerov2alpha1api.DataUploadPhasePrepared, dataUpload.Status.Phase)
 				}
 				// Verify DataUploads marked as InProgress
 				for _, duName := range test.inProgressDataUploads {
 					dataUpload := &velerov2alpha1api.DataUpload{}
-					err := r.client.Get(context.Background(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
+					err := r.client.Get(t.Context(), types.NamespacedName{Namespace: "velero", Name: duName}, dataUpload)
 					require.NoError(t, err)
 					assert.Equal(t, velerov2alpha1api.DataUploadPhaseInProgress, dataUpload.Status.Phase)
 				}
@@ -1339,7 +1348,7 @@ func TestResumeCancellableBackup(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			ctx := context.TODO()
+			ctx := t.Context()
 			r, err := initDataUploaderReconciler()
 			r.nodeName = "node-1"
 			require.NoError(t, err)

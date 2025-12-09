@@ -35,6 +35,8 @@ import (
 	veleroutil "github.com/vmware-tanzu/velero/test/util/velero"
 )
 
+const BackupObjectsPrefix = "backups"
+
 type migrationE2E struct {
 	framework.TestCase
 	useVolumeSnapshots bool
@@ -140,6 +142,7 @@ func (m *migrationE2E) Backup() error {
 						"Fail to set images for the migrate-from Velero installation.")
 
 					m.veleroCLI2Version.VeleroCLI, err = veleroutil.InstallVeleroCLI(
+						m.Ctx,
 						m.veleroCLI2Version.VeleroVersion)
 					Expect(err).To(Succeed())
 				}
@@ -263,6 +266,8 @@ func (m *migrationE2E) Backup() error {
 		snapshotCheckPoint.NamespaceBackedUp = m.CaseBaseName
 
 		if OriginVeleroCfg.SnapshotMoveData {
+			// todo: Remove this as VSC are not preserved post backup. It's 0 by default.
+
 			//VolumeSnapshotContent should be deleted after data movement
 			_, err := util.CheckVolumeSnapshotCR(
 				*m.VeleroCfg.DefaultClient,
@@ -284,16 +289,27 @@ func (m *migrationE2E) Backup() error {
 			}
 
 			By("Snapshot should be created in cloud object store with retain policy", func() {
-				snapshotCheckPoint, err = veleroutil.GetSnapshotCheckPoint(
-					*OriginVeleroCfg.DefaultClient,
+				backupVolumeInfo, err := providers.GetVolumeInfo(
+					OriginVeleroCfg.ObjectStoreProvider,
+					OriginVeleroCfg.CloudCredentialsFile,
+					OriginVeleroCfg.BSLBucket,
+					OriginVeleroCfg.BSLPrefix,
+					OriginVeleroCfg.BSLConfig,
+					m.BackupName,
+					BackupObjectsPrefix+"/"+m.BackupName,
+				)
+				Expect(err).NotTo(HaveOccurred(), "Failed to get volume info for backup")
+
+				snapshotCheckPoint, err := veleroutil.BuildSnapshotCheckPointFromVolumeInfo(
 					OriginVeleroCfg,
+					backupVolumeInfo,
 					m.kibishiiData.ExpectedNodes,
 					m.CaseBaseName,
 					m.BackupName,
 					kibishii.GetKibishiiPVCNameList(m.kibishiiData.ExpectedNodes),
 				)
-
 				Expect(err).NotTo(HaveOccurred(), "Fail to get snapshot checkpoint")
+
 				Expect(providers.CheckSnapshotsInProvider(
 					OriginVeleroCfg,
 					m.BackupName,
@@ -326,6 +342,12 @@ func (m *migrationE2E) Restore() error {
 		By("Install StorageClass for E2E.")
 		Expect(veleroutil.InstallStorageClasses(
 			m.VeleroCfg.StandbyClusterCloudProvider)).To(Succeed())
+
+		By("Install PriorityClass for E2E.")
+		Expect(veleroutil.CreatePriorityClasses(
+			context.Background(),
+			test.VeleroCfg.StandbyClient.Kubebuilder,
+		)).To(Succeed())
 
 		if strings.EqualFold(m.VeleroCfg.Features, test.FeatureCSI) &&
 			m.VeleroCfg.UseVolumeSnapshots {
@@ -432,6 +454,7 @@ func (m *migrationE2E) Clean() error {
 
 		Expect(k8sutil.KubectlConfigUseContext(
 			m.Ctx, m.VeleroCfg.StandbyClusterContext)).To(Succeed())
+
 		m.VeleroCfg.ClientToInstallVelero = m.VeleroCfg.StandbyClient
 		m.VeleroCfg.ClusterToInstallVelero = m.VeleroCfg.StandbyClusterName
 
@@ -444,7 +467,6 @@ func (m *migrationE2E) Clean() error {
 			fmt.Println("Fail to delete StorageClass1: ", err)
 			return
 		}
-
 		if err := k8sutil.DeleteStorageClass(
 			m.Ctx,
 			*m.VeleroCfg.ClientToInstallVelero,
@@ -453,6 +475,12 @@ func (m *migrationE2E) Clean() error {
 			fmt.Println("Fail to delete StorageClass2: ", err)
 			return
 		}
+
+		By("Delete PriorityClasses created by E2E")
+		Expect(veleroutil.DeletePriorityClasses(
+			m.Ctx,
+			m.VeleroCfg.ClientToInstallVelero.Kubebuilder,
+		)).To(Succeed())
 
 		if strings.EqualFold(m.VeleroCfg.Features, test.FeatureCSI) &&
 			m.VeleroCfg.UseVolumeSnapshots {

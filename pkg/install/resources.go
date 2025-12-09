@@ -54,6 +54,8 @@ var (
 	DefaultNodeAgentPodMemLimit   = "0"
 
 	DefaultVeleroNamespace = "velero"
+
+	DefaultKubeletRootDir = "/var/lib/kubelet"
 )
 
 func Labels() map[string]string {
@@ -269,7 +271,11 @@ type VeleroOptions struct {
 	RepoMaintenanceJobConfigMap     string
 	NodeAgentConfigMap              string
 	ItemBlockWorkerCount            int
+	ConcurrentBackups               int
+	KubeletRootDir                  string
 	NodeAgentDisableHostPath        bool
+	ServerPriorityClassName         string
+	NodeAgentPriorityClassName      string
 }
 
 func AllCRDs() *unstructured.UnstructuredList {
@@ -357,6 +363,11 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		WithPodResources(o.PodResources),
 		WithKeepLatestMaintenanceJobs(o.KeepLatestMaintenanceJobs),
 		WithItemBlockWorkerCount(o.ItemBlockWorkerCount),
+		WithConcurrentBackups(o.ConcurrentBackups),
+	}
+
+	if o.ServerPriorityClassName != "" {
+		deployOpts = append(deployOpts, WithPriorityClassName(o.ServerPriorityClassName))
 	}
 
 	if len(o.Features) > 0 {
@@ -415,6 +426,18 @@ func AllResources(o *VeleroOptions) *unstructured.UnstructuredList {
 		}
 		if len(o.NodeAgentConfigMap) > 0 {
 			dsOpts = append(dsOpts, WithNodeAgentConfigMap(o.NodeAgentConfigMap))
+		}
+
+		if len(o.BackupRepoConfigMap) > 0 {
+			dsOpts = append(dsOpts, WithBackupRepoConfigMap(o.BackupRepoConfigMap))
+		}
+
+		if len(o.KubeletRootDir) > 0 {
+			dsOpts = append(dsOpts, WithKubeletRootDir(o.KubeletRootDir))
+		}
+
+		if o.NodeAgentPriorityClassName != "" {
+			dsOpts = append(dsOpts, WithPriorityClassName(o.NodeAgentPriorityClassName))
 		}
 
 		if o.UseNodeAgent {
