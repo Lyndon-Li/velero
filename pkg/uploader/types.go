@@ -24,6 +24,7 @@ import (
 const (
 	ResticType           = "restic"
 	KopiaType            = "kopia"
+	BlockType            = "velero-block"
 	SnapshotRequesterTag = "snapshot-requester"
 	SnapshotUploaderTag  = "snapshot-uploader"
 )
@@ -41,7 +42,7 @@ const (
 // It will return an error if it's invalid.
 func ValidateUploaderType(t string) (string, error) {
 	t = strings.TrimSpace(t)
-	if t != KopiaType {
+	if t != KopiaType && t != BlockType {
 		return "", fmt.Errorf("invalid uploader type '%s', valid type: '%s'", t, KopiaType)
 	}
 

@@ -18,14 +18,10 @@ package azure
 
 import (
 	"context"
+	"errors"
 
 	"github.com/kopia/kopia/repo/blob"
-	"github.com/kopia/kopia/repo/blob/azure"
 	"github.com/kopia/kopia/repo/blob/throttling"
-
-	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
-	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/kopialib/backend/logging"
-	azureutil "github.com/vmware-tanzu/velero/pkg/util/azure"
 )
 
 const (
@@ -54,30 +50,5 @@ func (s *Storage) ConnectionInfo() blob.ConnectionInfo {
 }
 
 func NewStorage(ctx context.Context, option *Option, isCreate bool) (blob.Storage, error) {
-	cfg := option.Config
-
-	// Get logger from context
-	logger := logging.LoggerFromContext(ctx)
-
-	client, _, err := azureutil.NewStorageClient(logger, cfg)
-	if err != nil {
-		return nil, err
-	}
-
-	opt := &azure.Options{
-		Container: cfg[udmrepo.StoreOptionOssBucket],
-		Prefix:    cfg[udmrepo.StoreOptionPrefix],
-		Limits:    option.Limits,
-	}
-	azStorage, err := azure.NewWithClient(ctx, opt, client)
-	if err != nil {
-		return nil, err
-	}
-
-	logger.Info("Successfully created Azure storage backend")
-
-	return &Storage{
-		Option:  option,
-		Storage: azStorage,
-	}, nil
+	return nil, errors.ErrUnsupported
 }

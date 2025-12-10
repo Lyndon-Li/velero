@@ -282,6 +282,11 @@ func (sr *shimObjectWriter) Write(p []byte) (n int, err error) {
 	return sr.repoWriter.Write(p)
 }
 
+// Skippable write
+func (sr *shimObjectWriter) WriteAt(data []byte, offset int64) (n int, err error) {
+	return sr.repoWriter.WriteAt(data, offset)
+}
+
 // Periodically called to preserve the state of data written to the repo so far.
 func (sr *shimObjectWriter) Checkpoint() (object.ID, error) {
 	id, err := sr.repoWriter.Checkpoint()

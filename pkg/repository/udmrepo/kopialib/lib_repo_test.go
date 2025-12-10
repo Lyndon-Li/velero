@@ -692,7 +692,7 @@ func TestConcatenateObjects(t *testing.T) {
 }
 
 func TestNewObjectWriter(t *testing.T) {
-	rawObjWriter := repomocks.NewWriter(t)
+	rawObjWriter := repomocks.NewMockWriter(t)
 	testCases := []struct {
 		name         string
 		rawWriter    *repomocks.DirectRepositoryWriter
@@ -949,7 +949,7 @@ func TestReaderLength(t *testing.T) {
 func TestWriterWrite(t *testing.T) {
 	testCases := []struct {
 		name            string
-		rawObjWriter    *repomocks.Writer
+		rawObjWriter    *repomocks.MockWriter
 		rawWrtierRet    int
 		rawWriterRetErr error
 		expectedRet     int
@@ -961,13 +961,13 @@ func TestWriterWrite(t *testing.T) {
 		},
 		{
 			name:            "raw read fail",
-			rawObjWriter:    repomocks.NewWriter(t),
+			rawObjWriter:    repomocks.NewMockWriter(t),
 			rawWriterRetErr: errors.New("fake-write-error"),
 			expectedErr:     "fake-write-error",
 		},
 		{
 			name:         "succeed",
-			rawObjWriter: repomocks.NewWriter(t),
+			rawObjWriter: repomocks.NewMockWriter(t),
 			rawWrtierRet: 200,
 			expectedRet:  200,
 		},
@@ -997,7 +997,7 @@ func TestWriterWrite(t *testing.T) {
 func TestWriterCheckpoint(t *testing.T) {
 	testCases := []struct {
 		name            string
-		rawObjWriter    *repomocks.Writer
+		rawObjWriter    *repomocks.MockWriter
 		rawWrtierRet    object.ID
 		rawWriterRetErr error
 		expectedRet     udmrepo.ID
@@ -1009,13 +1009,13 @@ func TestWriterCheckpoint(t *testing.T) {
 		},
 		{
 			name:            "raw checkpoint fail",
-			rawObjWriter:    repomocks.NewWriter(t),
+			rawObjWriter:    repomocks.NewMockWriter(t),
 			rawWriterRetErr: errors.New("fake-checkpoint-error"),
 			expectedErr:     "error to checkpoint object: fake-checkpoint-error",
 		},
 		{
 			name:         "succeed",
-			rawObjWriter: repomocks.NewWriter(t),
+			rawObjWriter: repomocks.NewMockWriter(t),
 			rawWrtierRet: object.ID{},
 			expectedRet:  udmrepo.ID(""),
 		},
@@ -1045,7 +1045,7 @@ func TestWriterCheckpoint(t *testing.T) {
 func TestWriterResult(t *testing.T) {
 	testCases := []struct {
 		name            string
-		rawObjWriter    *repomocks.Writer
+		rawObjWriter    *repomocks.MockWriter
 		rawWrtierRet    object.ID
 		rawWriterRetErr error
 		expectedRet     udmrepo.ID
@@ -1057,13 +1057,13 @@ func TestWriterResult(t *testing.T) {
 		},
 		{
 			name:            "raw result fail",
-			rawObjWriter:    repomocks.NewWriter(t),
+			rawObjWriter:    repomocks.NewMockWriter(t),
 			rawWriterRetErr: errors.New("fake-result-error"),
 			expectedErr:     "error to wait object: fake-result-error",
 		},
 		{
 			name:         "succeed",
-			rawObjWriter: repomocks.NewWriter(t),
+			rawObjWriter: repomocks.NewMockWriter(t),
 			rawWrtierRet: object.ID{},
 			expectedRet:  udmrepo.ID(""),
 		},
@@ -1093,7 +1093,7 @@ func TestWriterResult(t *testing.T) {
 func TestWriterClose(t *testing.T) {
 	testCases := []struct {
 		name            string
-		rawObjWriter    *repomocks.Writer
+		rawObjWriter    *repomocks.MockWriter
 		rawWriterRetErr error
 		expectedErr     string
 	}{
@@ -1102,13 +1102,13 @@ func TestWriterClose(t *testing.T) {
 		},
 		{
 			name:            "raw close fail",
-			rawObjWriter:    repomocks.NewWriter(t),
+			rawObjWriter:    repomocks.NewMockWriter(t),
 			rawWriterRetErr: errors.New("fake-close-error"),
 			expectedErr:     "fake-close-error",
 		},
 		{
 			name:         "succeed",
-			rawObjWriter: repomocks.NewWriter(t),
+			rawObjWriter: repomocks.NewMockWriter(t),
 		},
 	}
 

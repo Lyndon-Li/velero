@@ -181,7 +181,7 @@ func TestShimObjReader(t *testing.T) {
 
 func TestShimObjWriter(t *testing.T) {
 	writer := new(shimObjectWriter)
-	objWriter := &mocks.ObjectWriter{}
+	objWriter := mocks.NewMockObjectWriter(t)
 	writer.repoWriter = objWriter
 	// All below calls put together for the implementation are empty or just very simple, and just want to cover testing
 	// If wanting to write unit tests for some functions could remove it and with writing new function alone

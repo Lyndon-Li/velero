@@ -535,6 +535,14 @@ func (kow *kopiaObjectWriter) Write(p []byte) (int, error) {
 	return kow.rawWriter.Write(p)
 }
 
+func (kow *kopiaObjectWriter) WriteAt(data []byte, offset int64) (n int, err error) {
+	if kow.rawWriter == nil {
+		return 0, errors.New("object writer is closed or not open")
+	}
+
+	return kow.rawWriter.WriteAt(data, offset)
+}
+
 func (kow *kopiaObjectWriter) Seek(offset int64, whence int) (int64, error) {
 	return -1, errors.New("not supported")
 }

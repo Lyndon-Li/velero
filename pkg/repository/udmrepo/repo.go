@@ -62,17 +62,19 @@ const (
 
 // ObjectWriteOptions defines the options when creating an object for write
 type ObjectWriteOptions struct {
-	FullPath    string // Full logical path of the object
-	DataType    int    // OBJECT_DATA_TYPE_*
-	Description string // A description of the object, could be empty
-	Prefix      ID     // A prefix of the name used to save the object
-	AccessMode  int    // OBJECT_DATA_ACCESS_*
-	BackupMode  int    // OBJECT_DATA_BACKUP_*
-	AsyncWrites int    // Num of async writes for the object, 0 means no async write
+	FullPath     string // Full logical path of the object
+	DataType     int    // OBJECT_DATA_TYPE_*
+	Description  string // A description of the object, could be empty
+	Prefix       ID     // A prefix of the name used to save the object
+	AccessMode   int    // OBJECT_DATA_ACCESS_*
+	BackupMode   int    // OBJECT_DATA_BACKUP_*
+	AsyncWrites  int    // Num of async writes for the object, 0 means no async write
+	ParentObject ID     // the parent object based on which incremental write will be done
 }
 
 type AdvancedFeatureInfo struct {
-	MultiPartBackup bool // if set to true, it means the repo supports multiple-part backup
+	MultiPartBackup   bool // if set to true, it means the repo supports multiple-part backup
+	SparseObjectWrite bool // if set to true, it means the repo supports sparse write objects
 }
 
 // BackupRepoService is used to initialize, open or maintain a backup repository
@@ -153,6 +155,7 @@ type ObjectReader interface {
 
 type ObjectWriter interface {
 	io.WriteCloser
+	io.WriterAt
 
 	// Seeker is used in the cases that the object is not written sequentially
 	io.Seeker
