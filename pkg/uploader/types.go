@@ -27,6 +27,8 @@ const (
 	BlockType            = "velero-block"
 	SnapshotRequesterTag = "snapshot-requester"
 	SnapshotUploaderTag  = "snapshot-uploader"
+	SnapshotSourceIDTag  = "snapshot-source-id"
+	SnapshotChangeIDTag  = "snapshot-change-id"
 )
 
 type PersistentVolumeMode string
@@ -50,8 +52,11 @@ func ValidateUploaderType(t string) (string, error) {
 }
 
 type SnapshotInfo struct {
-	ID   string `json:"id"`
-	Size int64  `json:"Size"`
+	ID              string
+	Size            int64
+	IncrementalSize int64
+	SourceID        string
+	ChangeID        string
 }
 
 // Progress which defined two variables to record progress

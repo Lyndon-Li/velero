@@ -77,6 +77,27 @@ type AdvancedFeatureInfo struct {
 	SparseObjectWrite bool // if set to true, it means the repo supports sparse write objects
 }
 
+type ObjectMetadata struct {
+	ID       ID
+	Type     int // OBJECT_DATA_TYPE_*
+	FileSize int64
+}
+
+type Metadata struct {
+	SubObjects []ObjectMetadata
+}
+
+type Snapshot struct {
+	ID          ID
+	Source      string
+	Description string
+	StartTime   time.Time
+	EndTime     time.Time
+	Tags        map[string]string
+	RootObject  ID
+	Size        int64
+}
+
 // BackupRepoService is used to initialize, open or maintain a backup repository
 type BackupRepoService interface {
 	// Create creates a new backup repository.
@@ -123,6 +144,13 @@ type BackupRepo interface {
 	// return: A unified identifier of the object on success.
 	NewObjectWriter(ctx context.Context, opt ObjectWriteOptions) ObjectWriter
 
+	// WriteMetadata writes metadata to the repo, metadata is used to describe data, e.g., file system
+	// dirs are saved as metadata
+	WriteMetadata(ctx context.Context, meta *Metadata, opt ObjectWriteOptions) (ID, error)
+
+	// ReadMetadata reads a metadata from repo by the metadata's object ID
+	ReadMetadata(ctx context.Context, id ID) (*Metadata, error)
+
 	// PutManifest saves a manifest object into the backup repository.
 	PutManifest(ctx context.Context, mani RepoManifest) (ID, error)
 
@@ -140,6 +168,18 @@ type BackupRepo interface {
 
 	// Time returns the local time of the backup repository. It may be different from the time of the caller
 	Time() time.Time
+
+	// SaveSnapshot saves a repo snapshot
+	SaveSnapshot(ctx context.Context, snapshot Snapshot) (ID, error)
+
+	// GetSnapshot returns a repo snapshot from snapshot ID
+	GetSnapshot(ctx context.Context, id ID) (Snapshot, error)
+
+	// DeleteSnapshot deletes a repo snapshot
+	DeleteSnapshot(ctx context.Context, id ID) error
+
+	// ListSnapshot lists all snapshots in repo for the given source (if specified)
+	ListSnapshot(ctx context.Context, source string) ([]Snapshot, error)
 
 	// Close closes the backup repository
 	Close(ctx context.Context) error

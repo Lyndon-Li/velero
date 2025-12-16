@@ -152,13 +152,13 @@ func setupPolicy(ctx context.Context, rep repo.RepositoryWriter, sourceInfo snap
 
 // Backup backup specific sourcePath and update progress
 func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.RepositoryWriter, sourcePath string, realSource string,
-	forceFull bool, parentSnapshot string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (*uploader.SnapshotInfo, bool, error) {
+	parentSnapshot *uploader.SnapshotInfo, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
 	if fsUploader == nil {
-		return nil, false, errors.New("get empty kopia uploader")
+		return uploader.SnapshotInfo{}, false, errors.New("get empty kopia uploader")
 	}
 	source, err := filepath.Abs(sourcePath)
 	if err != nil {
-		return nil, false, errors.Wrapf(err, "Invalid source path '%s'", sourcePath)
+		return uploader.SnapshotInfo{}, false, errors.Wrapf(err, "Invalid source path '%s'", sourcePath)
 	}
 
 	source = filepath.Clean(source)
@@ -177,19 +177,19 @@ func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.Re
 	if volMode == uploader.PersistentVolumeBlock {
 		sourceEntry, err = getLocalBlockEntry(source)
 		if err != nil {
-			return nil, false, errors.Wrap(err, "unable to get local block device entry")
+			return uploader.SnapshotInfo{}, false, errors.Wrap(err, "unable to get local block device entry")
 		}
 	} else {
 		sourceEntry, err = getLocalFSEntry(source)
 		if err != nil {
-			return nil, false, errors.Wrap(err, "unable to get local filesystem entry")
+			return uploader.SnapshotInfo{}, false, errors.Wrap(err, "unable to get local filesystem entry")
 		}
 	}
 
 	kopiaCtx := kopia.SetupKopiaLog(ctx, log)
 
-	snapID, snapshotSize, err := SnapshotSource(kopiaCtx, repoWriter, fsUploader, sourceInfo, sourceEntry, forceFull, parentSnapshot, tags, uploaderCfg, log, "Kopia Uploader")
-	snapshotInfo := &uploader.SnapshotInfo{
+	snapID, snapshotSize, err := SnapshotSource(kopiaCtx, repoWriter, fsUploader, sourceInfo, sourceEntry, parentSnapshot, tags, uploaderCfg, log, "Kopia Uploader")
+	snapshotInfo := uploader.SnapshotInfo{
 		ID:   snapID,
 		Size: snapshotSize,
 	}
@@ -232,8 +232,7 @@ func SnapshotSource(
 	u SnapshotUploader,
 	sourceInfo snapshot.SourceInfo,
 	rootDir fs.Entry,
-	forceFull bool,
-	parentSnapshot string,
+	parentSnapshot *uploader.SnapshotInfo,
 	snapshotTags map[string]string,
 	uploaderCfg map[string]string,
 	log logrus.FieldLogger,
@@ -243,28 +242,16 @@ func SnapshotSource(
 	snapshotStartTime := time.Now()
 
 	var previous []*snapshot.Manifest
-	if !forceFull {
-		if parentSnapshot != "" {
-			log.Infof("Using provided parent snapshot %s", parentSnapshot)
-
-			mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
-			if err != nil {
-				log.WithError(err).Warnf("Failed to load previous snapshot %v from kopia, fallback to full backup", parentSnapshot)
-			} else {
-				previous = append(previous, mani)
-			}
+	if parentSnapshot != nil {
+		mani, err := loadParentSnapshot(ctx, rep, parentSnapshot)
+		if err != nil {
+			log.WithError(err).Warn("Failed to load previous snapshot from kopia, fallback to full backup")
 		} else {
-			log.Infof("Searching for parent snapshot")
-
-			pre, err := findPreviousSnapshotManifest(ctx, rep, sourceInfo, snapshotTags, nil, log)
-			if err != nil {
-				return "", 0, errors.Wrapf(err, "Failed to find previous kopia snapshot manifests for si %v", sourceInfo)
-			}
-
-			previous = pre
+			previous = append(previous, mani)
+			log.Infof("Using provided parent snapshot %s", parentSnapshot.ID)
 		}
 	} else {
-		log.Info("Forcing full snapshot")
+		log.Info("Running full snapshot")
 	}
 
 	for i := range previous {
@@ -302,6 +289,31 @@ func SnapshotSource(
 	return reportSnapshotStatus(manifest, policyTree)
 }
 
+func loadParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, parent *uploader.SnapshotInfo) (*snapshot.Manifest, error) {
+	mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parent.ID))
+	if err != nil {
+		return nil, errors.Wrapf(err, "error loading snapshot %s", parent.ID)
+	}
+
+	if mani.Tags == nil {
+		return nil, errors.Errorf("no tags from snapshot %s", parent.ID)
+	}
+
+	if id, found := mani.Tags[uploader.SnapshotSourceIDTag]; !found {
+		return nil, errors.Errorf("no snapshot source from snapshot %s", parent.ID)
+	} else if parent.SourceID != id {
+		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", parent.SourceID, id, parent.ID)
+	}
+
+	if id, found := mani.Tags[uploader.SnapshotChangeIDTag]; !found {
+		return nil, errors.Errorf("no change ID from snapshot %s", parent.ID)
+	} else if parent.ChangeID != id {
+		return nil, errors.Errorf("change ID is not expected (%s vs. %s) from snapshot %s", parent.ChangeID, id, parent.ID)
+	}
+
+	return mani, nil
+}
+
 func reportSnapshotStatus(manifest *snapshot.Manifest, policyTree *policy.Tree) (string, int64, error) {
 	manifestID := manifest.ID
 	snapSize := manifest.Stats.TotalFileSize
@@ -329,14 +341,13 @@ func reportSnapshotStatus(manifest *snapshot.Manifest, policyTree *policy.Tree) 
 
 // findPreviousSnapshotManifest returns the list of previous snapshots for a given source, including
 // last complete snapshot following it.
-func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sourceInfo snapshot.SourceInfo, snapshotTags map[string]string, noLaterThan *fs.UTCTimestamp, log logrus.FieldLogger) ([]*snapshot.Manifest, error) {
+func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sourceInfo snapshot.SourceInfo, requestor string, noLaterThan *fs.UTCTimestamp, log logrus.FieldLogger) (*snapshot.Manifest, error) {
 	man, err := listSnapshotsFunc(ctx, rep, sourceInfo)
 	if err != nil {
 		return nil, err
 	}
 
 	var previousComplete *snapshot.Manifest
-	var result []*snapshot.Manifest
 
 	for _, p := range man {
 		log.Debugf("Found one snapshot %s, start time %v, incomplete %s, tags %v", p.ID, p.StartTime.ToTime(), p.IncompleteReason, p.Tags)
@@ -346,7 +357,7 @@ func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sour
 			continue
 		}
 
-		if requester != snapshotTags[uploader.SnapshotRequesterTag] {
+		if requester != requestor {
 			continue
 		}
 
@@ -355,7 +366,7 @@ func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sour
 			continue
 		}
 
-		if uploaderName != snapshotTags[uploader.SnapshotUploaderTag] {
+		if uploaderName != uploader.KopiaType {
 			continue
 		}
 
@@ -368,11 +379,7 @@ func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sour
 		}
 	}
 
-	if previousComplete != nil {
-		result = append(result, previousComplete)
-	}
-
-	return result, nil
+	return previousComplete, nil
 }
 
 // Restore restore specific sourcePath with given snapshotID and update progress
@@ -454,4 +461,54 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *Progress,
 		return 0, 0, errors.Wrapf(err, "Failed to copy snapshot data to the target")
 	}
 	return stat.RestoredTotalFileSize, stat.RestoredFileCount, nil
+}
+
+func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (*uploader.SnapshotInfo, error) {
+	source, err := filepath.Abs(sourcePath)
+	if err != nil {
+		return nil, errors.Wrapf(err, "invalid source path '%s'", sourcePath)
+	}
+
+	source = filepath.Clean(source)
+
+	sourceInfo := snapshot.SourceInfo{
+		UserName: udmrepo.GetRepoUser(),
+		Host:     udmrepo.GetRepoDomain(),
+		Path:     filepath.Clean(realSource),
+	}
+	if realSource == "" {
+		sourceInfo.Path = source
+	}
+
+	var previous *snapshot.Manifest
+	if parentSnapshot != "" {
+		log.Infof("Using provided parent snapshot %s", parentSnapshot)
+
+		mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
+		if err != nil {
+			return nil, errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
+		}
+
+		previous = mani
+	} else {
+		log.Infof("Searching for parent snapshot")
+
+		mani, err := findPreviousSnapshotManifest(ctx, rep, sourceInfo, requestor, nil, log)
+		if err != nil {
+			return nil, errors.Wrapf(err, "error finding previous kopia snapshot manifests for si %v", sourceInfo)
+		}
+
+		previous = mani
+	}
+
+	info := &uploader.SnapshotInfo{
+		ID: string(previous.ID),
+	}
+
+	if previous.Tags != nil {
+		info.SourceID = previous.Tags[uploader.SnapshotSourceIDTag]
+		info.ChangeID = previous.Tags[uploader.SnapshotChangeIDTag]
+	}
+
+	return info, nil
 }

@@ -195,7 +195,6 @@ func (r *BackupMicroService) RunCancelableDataPath(ctx context.Context) (string,
 	if err := fsBackup.StartBackup(r.sourceTargetPath, pvb.Spec.UploaderSettings, &datapath.FSBRStartParam{
 		RealSource:     GetRealSource(pvb),
 		ParentSnapshot: "",
-		ForceFull:      false,
 		Tags:           tags,
 	}); err != nil {
 		return "", errors.Wrap(err, "error starting data path backup")

@@ -30,6 +30,7 @@ import (
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 )
 
 const restoreProgressCheckInterval = 10 * time.Second
@@ -46,11 +47,12 @@ type Provider interface {
 		path string,
 		realSource string,
 		tags map[string]string,
-		forceFull bool,
-		parentSnapshot string,
+		parentSnapshot *uploader.SnapshotInfo,
+		cbt cbt.Iterator,
 		volMode uploader.PersistentVolumeMode,
 		uploaderCfg map[string]string,
-		updater uploader.ProgressUpdater) (string, bool, int64, int64, error)
+		updater uploader.ProgressUpdater) (uploader.SnapshotInfo, bool, error)
+
 	// RunRestore which will do restore for one specific volume with given snapshot id and return error
 	// updater is used for updating backup progress which implement by third-party
 	RunRestore(
@@ -60,6 +62,15 @@ type Provider interface {
 		volMode uploader.PersistentVolumeMode,
 		uploaderConfig map[string]string,
 		updater uploader.ProgressUpdater) (int64, error)
+
+	// GetParentSnapshot find the parent snapshot for the given source
+	GetParentSnapshot(
+		ctx context.Context,
+		path string,
+		realSource string,
+		parentSnapshot string,
+	) (*uploader.SnapshotInfo, error)
+
 	// Close which will close related repository
 	Close(ctx context.Context) error
 }

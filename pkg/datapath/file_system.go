@@ -51,7 +51,6 @@ type FSBRInitParam struct {
 type FSBRStartParam struct {
 	RealSource     string
 	ParentSnapshot string
-	ForceFull      bool
 	Tags           map[string]string
 }
 
@@ -182,19 +181,26 @@ func (fs *fileSystemBR) StartBackup(source AccessPoint, uploaderConfig map[strin
 			fs.wgDataPath.Done()
 		}()
 
-		snapshotID, emptySnapshot, totalBytes, incrementalBytes, err := fs.uploaderProv.RunBackup(fs.ctx, source.ByPath, backupParam.RealSource, backupParam.Tags, backupParam.ForceFull,
-			backupParam.ParentSnapshot, source.VolMode, uploaderConfig, fs)
+		parent, err := fs.uploaderProv.GetParentSnapshot(fs.ctx, source.ByPath, backupParam.RealSource, backupParam.ParentSnapshot)
+		if err != nil {
+			fs.log.Warnf("Failed to load parent snapshot for source %s (%s), run full backup", source.ByPath, backupParam.RealSource)
+		} else if parent == nil {
+			fs.log.Warnf("Parent snapshot is empty for source %s (%s), run full backup", source.ByPath, backupParam.RealSource)
+		}
+
+		snapshotInfo, emptySnapshot, err := fs.uploaderProv.RunBackup(fs.ctx, source.ByPath, backupParam.RealSource, backupParam.Tags,
+			parent, source.VolMode, uploaderConfig, fs)
 
 		if err == provider.ErrorCanceled {
 			fs.callbacks.OnCancelled(context.Background(), fs.namespace, fs.jobName)
 		} else if err != nil {
 			dataPathErr := DataPathError{
-				snapshotID: snapshotID,
+				snapshotID: snapshotInfo.ID,
 				err:        err,
 			}
 			fs.callbacks.OnFailed(context.Background(), fs.namespace, fs.jobName, dataPathErr)
 		} else {
-			fs.callbacks.OnCompleted(context.Background(), fs.namespace, fs.jobName, Result{Backup: BackupResult{snapshotID, emptySnapshot, source, totalBytes, incrementalBytes}})
+			fs.callbacks.OnCompleted(context.Background(), fs.namespace, fs.jobName, Result{Backup: BackupResult{snapshotInfo.ID, emptySnapshot, source, snapshotInfo.Size, snapshotInfo.IncrementalSize}})
 		}
 	}()
 

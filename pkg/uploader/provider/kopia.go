@@ -27,6 +27,7 @@ import (
 	"github.com/sirupsen/logrus"
 
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 	"github.com/vmware-tanzu/velero/pkg/uploader/kopia"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
@@ -36,9 +37,9 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/service"
 )
 
-// BackupFunc mainly used to make testing more convenient
-var BackupFunc = kopia.Backup
-var RestoreFunc = kopia.Restore
+var kopiaBackupFunc = kopia.Backup
+var kopiaRestoreFunc = kopia.Restore
+var kopiaGetParentSnapshotFunc = kopia.GetParentSnapshot
 var BackupRepoServiceCreateFunc = service.Create
 
 // kopiaProvider recorded info related with kopiaProvider
@@ -116,23 +117,22 @@ func (kp *kopiaProvider) RunBackup(
 	path string,
 	realSource string,
 	tags map[string]string,
-	forceFull bool,
-	parentSnapshot string,
+	parentSnapshot *uploader.SnapshotInfo,
+	cbt cbt.Iterator,
 	volMode uploader.PersistentVolumeMode,
 	uploaderCfg map[string]string,
-	updater uploader.ProgressUpdater) (string, bool, int64, int64, error) {
+	updater uploader.ProgressUpdater) (uploader.SnapshotInfo, bool, error) {
 	if updater == nil {
-		return "", false, 0, 0, errors.New("Need to initial backup progress updater first")
+		return uploader.SnapshotInfo{}, false, errors.New("Need to initial backup progress updater first")
 	}
 
 	if path == "" {
-		return "", false, 0, 0, errors.New("path is empty")
+		return uploader.SnapshotInfo{}, false, errors.New("path is empty")
 	}
 
 	log := kp.log.WithFields(logrus.Fields{
-		"path":           path,
-		"realSource":     realSource,
-		"parentSnapshot": parentSnapshot,
+		"path":       path,
+		"realSource": realSource,
 	})
 	repoWriter := kopia.NewShimRepo(kp.bkRepo)
 	kpUploader := upload.NewUploader(repoWriter)
@@ -165,21 +165,20 @@ func (kp *kopiaProvider) RunBackup(
 		uploaderCfg[kopia.UploaderConfigMultipartKey] = "true"
 	}
 
-	snapshotInfo, _, err := BackupFunc(ctx, kpUploader, repoWriter, path, realSource, forceFull, parentSnapshot, volMode, uploaderCfg, tags, log)
+	snapshotInfo, _, err := kopiaBackupFunc(ctx, kpUploader, repoWriter, path, realSource, parentSnapshot, volMode, uploaderCfg, tags, log)
 	if err != nil {
-		snapshotID := ""
-		if snapshotInfo != nil {
-			snapshotID = snapshotInfo.ID
-		} else {
+		if snapshotInfo.ID == "" {
 			log.Infof("Kopia backup failed with %v and get empty snapshot ID", err)
 		}
 
 		if kpUploader.IsCanceled() {
 			log.Warn("Kopia backup is canceled")
-			return snapshotID, false, 0, 0, ErrorCanceled
+			return snapshotInfo, false, ErrorCanceled
 		}
-		return snapshotID, false, 0, 0, errors.Wrapf(err, "Failed to run kopia backup")
+		return snapshotInfo, false, errors.Wrapf(err, "Failed to run kopia backup")
 	}
+
+	snapshotInfo.IncrementalSize = progress.GetIncrementalSize()
 
 	// which ensure that the statistic data of TotalBytes equal to BytesDone when finished
 	updater.UpdateProgress(
@@ -190,7 +189,7 @@ func (kp *kopiaProvider) RunBackup(
 	)
 
 	log.Debugf("Kopia backup finished, snapshot ID %s, backup size %d", snapshotInfo.ID, snapshotInfo.Size)
-	return snapshotInfo.ID, false, snapshotInfo.Size, progress.GetIncrementalSize(), nil
+	return snapshotInfo, false, nil
 }
 
 func (kp *kopiaProvider) GetPassword(param any) (string, error) {
@@ -233,7 +232,7 @@ func (kp *kopiaProvider) RunRestore(
 	// We use the cancel channel to control the restore cancel, so don't pass a context with cancel to Kopia restore.
 	// Otherwise, Kopia restore will not response to the cancel control but return an arbitrary error.
 	// Kopia restore cancel is not designed as well as Kopia backup which uses the context to control backup cancel all the way.
-	size, fileCount, err := RestoreFunc(context.Background(), repoWriter, progress, snapshotID, volumePath, volMode, uploaderCfg, log, restoreCancel)
+	size, fileCount, err := kopiaRestoreFunc(context.Background(), repoWriter, progress, snapshotID, volumePath, volMode, uploaderCfg, log, restoreCancel)
 
 	if err != nil {
 		return 0, errors.Wrapf(err, "Failed to run kopia restore")
@@ -255,4 +254,21 @@ func (kp *kopiaProvider) RunRestore(
 	log.Info(output)
 
 	return size, nil
+}
+
+func (kp *kopiaProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (*uploader.SnapshotInfo, error) {
+	if path == "" {
+		return nil, errors.New("path is empty")
+	}
+
+	if realSource != "" {
+		realSource = fmt.Sprintf("%s/%s/%s", kp.requestorType, uploader.KopiaType, realSource)
+	}
+
+	snapshotInfo, err := kopiaGetParentSnapshotFunc(ctx, kopia.NewShimRepo(kp.bkRepo), path, realSource, parentSnapshot, kp.requestorType, kp.log)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
+	}
+
+	return snapshotInfo, nil
 }

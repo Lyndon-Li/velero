@@ -20,9 +20,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync/atomic"
 
-	"github.com/kopia/kopia/snapshot/upload"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 	"github.com/vmware-tanzu/velero/internal/credentials"
@@ -30,9 +28,14 @@ import (
 	repokeys "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
+	"github.com/vmware-tanzu/velero/pkg/uploader/block"
+	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 )
 
-// blockProvider recorded info related with blockProvider
+var blockBackupFunc = block.Backup
+var blockRestoreFunc = block.Restore
+var blockGetParentSnapshotFunc = block.GetParentSnapshot
+
 type blockProvider struct {
 	requestorType string
 	bkRepo        udmrepo.BackupRepo
@@ -54,7 +57,7 @@ func NewBlockUploaderProvider(
 		log:           log,
 		credGetter:    credGetter,
 	}
-	//repoUID which is used to generate kopia repository config with unique directory path
+
 	repoUID := string(backupRepo.GetUID())
 	repoOpt, err := udmrepo.NewRepoOptions(
 		udmrepo.WithPassword(bp, ""),
@@ -72,6 +75,7 @@ func NewBlockUploaderProvider(
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed to find backup repository")
 	}
+
 	return bp, nil
 }
 
@@ -91,24 +95,38 @@ func (bp *blockProvider) GetPassword(param any) (string, error) {
 	return strings.TrimSpace(rawPass), nil
 }
 
-// RunBackup which will backup specific path and update backup progress
-// return snapshotID, isEmptySnapshot, error
 func (bp *blockProvider) RunBackup(
 	ctx context.Context,
 	path string,
 	realSource string,
 	tags map[string]string,
-	forceFull bool,
-	parentSnapshot string,
+	parentSnapshot *uploader.SnapshotInfo,
+	cbt cbt.Iterator,
 	volMode uploader.PersistentVolumeMode,
 	uploaderCfg map[string]string,
-	updater uploader.ProgressUpdater) (string, bool, int64, int64, error) {
+	updater uploader.ProgressUpdater) (uploader.SnapshotInfo, bool, error) {
 	if updater == nil {
-		return "", false, 0, 0, errors.New("Need to initial backup progress updater first")
+		return uploader.SnapshotInfo{}, false, errors.New("Need to initial backup progress updater first")
 	}
 
 	if path == "" {
-		return "", false, 0, 0, errors.New("path is empty")
+		return uploader.SnapshotInfo{}, false, errors.New("path is empty")
+	}
+
+	if cbt != nil {
+		if parentSnapshot == nil {
+			return uploader.SnapshotInfo{}, false, errors.New("no parent snapshot but CBT is provided")
+		}
+
+		if parentSnapshot.SourceID != cbt.SourceID() {
+			return uploader.SnapshotInfo{}, false, errors.New("cbt sourceID is not correct")
+		}
+
+		if cbt.ChangeID() == "" {
+			return uploader.SnapshotInfo{}, false, errors.New("cbt changeID is empty")
+		}
+	} else if parentSnapshot != nil {
+		return uploader.SnapshotInfo{}, false, errors.New("no CBT but parent snapshot is provided")
 	}
 
 	log := bp.log.WithFields(logrus.Fields{
@@ -117,13 +135,7 @@ func (bp *blockProvider) RunBackup(
 		"parentSnapshot": parentSnapshot,
 	})
 
-	quit := make(chan struct{})
-	log.Info("Starting backup")
-	go bp.checkContext(ctx, quit, nil, kpUploader)
-
-	defer func() {
-		close(quit)
-	}()
+	blkUploader := block.NewUploader(ctx, bp.bkRepo, updater, log)
 
 	if tags == nil {
 		tags = make(map[string]string)
@@ -135,13 +147,17 @@ func (bp *blockProvider) RunBackup(
 		realSource = fmt.Sprintf("%s/%s/%s", bp.requestorType, uploader.BlockType, realSource)
 	}
 
-	if bp.bkRepo.GetAdvancedFeatures().MultiPartBackup {
-		if uploaderCfg == nil {
-			uploaderCfg = make(map[string]string)
-		}
+	snapshotInfo, _, err := blockBackupFunc(ctx, blkUploader, bp.bkRepo, path, realSource, parentSnapshot, cbt, uploaderCfg, tags, log)
+
+	if err == block.ErrCanceled {
+		log.Warn("Block backup is canceled")
+		return snapshotInfo, false, ErrorCanceled
 	}
 
-	// which ensure that the statistic data of TotalBytes equal to BytesDone when finished
+	if err != nil {
+		return snapshotInfo, false, errors.Wrapf(err, "Failed to run block backup")
+	}
+
 	updater.UpdateProgress(
 		&uploader.Progress{
 			TotalBytes: snapshotInfo.Size,
@@ -149,11 +165,11 @@ func (bp *blockProvider) RunBackup(
 		},
 	)
 
-	log.Debugf("Kopia backup finished, snapshot ID %s, backup size %d", snapshotInfo.ID, snapshotInfo.Size)
-	return snapshotInfo.ID, false, snapshotInfo.Size, progress.GetIncrementalSize(), nil
+	log.Debugf("Block backup finished, snapshot ID %s, backup size %d", snapshotInfo.ID, snapshotInfo.Size)
+
+	return snapshotInfo, false, nil
 }
 
-// RunRestore which will restore specific path and update restore progress
 func (bp *blockProvider) RunRestore(
 	ctx context.Context,
 	snapshotID string,
@@ -165,46 +181,44 @@ func (bp *blockProvider) RunRestore(
 		"snapshotID": snapshotID,
 		"volumePath": volumePath,
 	})
-
-	restoreCancel := make(chan struct{})
-	quit := make(chan struct{})
-
 	log.Info("Starting restore")
-	defer func() {
-		close(quit)
-	}()
 
-	go bp.checkContext(ctx, quit, restoreCancel, nil)
+	blkUploader := block.NewUploader(ctx, bp.bkRepo, updater, log)
 
-	// which ensure that the statistic data of TotalBytes equal to BytesDone when finished
+	size, err := block.Restore(ctx, blkUploader, bp.bkRepo, snapshotID, volumePath, uploaderCfg, log)
+
+	if err == block.ErrCanceled {
+		log.Warn("Block restore is canceled")
+		return 0, ErrorCanceled
+	}
+
+	if err != nil {
+		return 0, errors.Wrapf(err, "Failed to run block restore")
+	}
+
 	updater.UpdateProgress(&uploader.Progress{
 		TotalBytes: size,
 		BytesDone:  size,
 	})
 
-	output := fmt.Sprintf("Kopia restore finished, restore size %d, file count %d", size, fileCount)
-
-	log.Info(output)
+	log.Info("Block restore finished, restore size %d", size)
 
 	return size, nil
 }
 
-func (bp *blockProvider) checkContext(ctx context.Context, finishChan chan struct{}, restoreChan chan struct{}, uploader *upload.Uploader) {
-	select {
-	case <-finishChan:
-		bp.log.Infof("Action finished")
-		return
-	case <-ctx.Done():
-		atomic.StoreInt32(&bp.canceling, 1)
-
-		if uploader != nil {
-			uploader.Cancel()
-			bp.log.Infof("Backup is been canceled")
-		}
-		if restoreChan != nil {
-			close(restoreChan)
-			bp.log.Infof("Restore is been canceled")
-		}
-		return
+func (bp *blockProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (*uploader.SnapshotInfo, error) {
+	if path == "" {
+		return nil, errors.New("path is empty")
 	}
+
+	if realSource != "" {
+		realSource = fmt.Sprintf("%s/%s/%s", bp.requestorType, uploader.KopiaType, realSource)
+	}
+
+	snapshotInfo, err := blockGetParentSnapshotFunc(ctx, bp.bkRepo, path, realSource, parentSnapshot, bp.requestorType, bp.log)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
+	}
+
+	return snapshotInfo, nil
 }
