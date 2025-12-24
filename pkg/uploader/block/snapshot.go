@@ -93,7 +93,7 @@ func SnapshotSource(
 
 	var previous *udmrepo.Snapshot
 	if parentSnapshot != nil {
-		snap, err := loadParentSnapshot(ctx, rep, parentSnapshot)
+		snap, err := loadSnapshot(ctx, rep, parentSnapshot)
 		if err != nil {
 			log.WithError(err).Warn("Failed to load previous snapshot, fallback to full backup")
 		} else {
@@ -130,26 +130,26 @@ func SnapshotSource(
 	return string(snapID), backupSize, nil
 }
 
-func loadParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, parent *uploader.SnapshotInfo) (*udmrepo.Snapshot, error) {
-	snap, err := rep.GetSnapshot(ctx, udmrepo.ID(parent.ID))
+func loadSnapshot(ctx context.Context, rep udmrepo.BackupRepo, snapInfo *uploader.SnapshotInfo) (*udmrepo.Snapshot, error) {
+	snap, err := rep.GetSnapshot(ctx, udmrepo.ID(snapInfo.ID))
 	if err != nil {
-		return nil, errors.Wrapf(err, "error loading snapshot %s", parent.ID)
+		return nil, errors.Wrapf(err, "error loading snapshot %s", snapInfo.ID)
 	}
 
 	if snap.Tags == nil {
-		return nil, errors.Errorf("no tags from snapshot %s", parent.ID)
+		return nil, errors.Errorf("no tags from snapshot %s", snapInfo.ID)
 	}
 
 	if id, found := snap.Tags[uploader.SnapshotSourceIDTag]; !found {
-		return nil, errors.Errorf("no snapshot source from snapshot %s", parent.ID)
-	} else if parent.SourceID != id {
-		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", parent.SourceID, id, parent.ID)
+		return nil, errors.Errorf("no snapshot source from snapshot %s", snapInfo.ID)
+	} else if snapInfo.SourceID != id {
+		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", snapInfo.SourceID, id, snapInfo.ID)
 	}
 
 	if id, found := snap.Tags[uploader.SnapshotChangeIDTag]; !found {
-		return nil, errors.Errorf("no change ID from snapshot %s", parent.ID)
-	} else if parent.ChangeID != id {
-		return nil, errors.Errorf("change ID is not expected (%s vs. %s) from snapshot %s", parent.ChangeID, id, parent.ID)
+		return nil, errors.Errorf("no change ID from snapshot %s", snapInfo.ID)
+	} else if snapInfo.ChangeID != id {
+		return nil, errors.Errorf("change ID is not expected (%s vs. %s) from snapshot %s", snapInfo.ChangeID, id, snapInfo.ID)
 	}
 
 	return &snap, nil

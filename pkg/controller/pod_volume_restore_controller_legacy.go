@@ -147,7 +147,7 @@ func (c *PodVolumeRestoreReconcilerLegacy) Reconcile(ctx context.Context, req ct
 		OnProgress:  c.OnDataPathProgress,
 	}
 
-	fsRestore, err := c.dataPathMgr.CreateFileSystemBR(pvr.Name, pVBRRequestor, ctx, c.Client, pvr.Namespace, callbacks, log)
+	dp, err := c.dataPathMgr.CreateFileSystemBR(pvr.Name, pVBRRequestor, ctx, c.Client, pvr.Namespace, callbacks, log)
 	if err != nil {
 		if err == datapath.ConcurrentLimitExceed {
 			return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 5}, nil
@@ -172,7 +172,7 @@ func (c *PodVolumeRestoreReconcilerLegacy) Reconcile(ctx context.Context, req ct
 
 	log.WithField("path", volumePath.ByPath).Debugf("Found host path")
 
-	if err := fsRestore.Init(ctx, &datapath.FSBRInitParam{
+	if err := dp.Init(ctx, &datapath.InitParam{
 		BSLName:           pvr.Spec.BackupStorageLocation,
 		SourceNamespace:   pvr.Spec.SourceNamespace,
 		UploaderType:      pvr.Spec.UploaderType,
@@ -185,7 +185,7 @@ func (c *PodVolumeRestoreReconcilerLegacy) Reconcile(ctx context.Context, req ct
 		return c.errorOut(ctx, pvr, err, "error to initialize data path", log)
 	}
 
-	if err := fsRestore.StartRestore(pvr.Spec.SnapshotID, volumePath, pvr.Spec.UploaderSettings); err != nil {
+	if err := dp.StartRestore(pvr.Spec.SnapshotID, volumePath, pvr.Spec.UploaderSettings); err != nil {
 		c.closeDataPath(ctx, pvr.Name)
 		return c.errorOut(ctx, pvr, err, "error starting data path restore", log)
 	}
