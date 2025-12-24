@@ -17,7 +17,7 @@ limitations under the License.
 package cbt
 
 import (
-	"math"
+	"math/bits"
 
 	"github.com/RoaringBitmap/roaring"
 )
@@ -56,7 +56,7 @@ func NewCBT(blockSize int, length int64, sourceID string, changeID string) CBT {
 	return &cbtImpl{
 		bitmap:       roaring.New(),
 		blockSize:    blockSize,
-		blockSizeLog: int(math.Log2(float64(blockSize))),
+		blockSizeLog: bits.Len(uint(blockSize)) - 1,
 		sourceID:     sourceID,
 		changeID:     changeID,
 	}

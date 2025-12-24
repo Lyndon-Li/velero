@@ -161,15 +161,15 @@ func (r *RestoreMicroService) RunCancelableDataPath(ctx context.Context) (string
 		OnProgress:  r.OnPvrProgress,
 	}
 
-	fsRestore, err := r.dataPathMgr.CreateFileSystemBR(pvr.Name, podVolumeRequestor, ctx, r.client, pvr.Namespace, callbacks, log)
+	dp, err := r.dataPathMgr.CreateFileSystemBR(pvr.Name, podVolumeRequestor, ctx, r.client, pvr.Namespace, callbacks, log)
 	if err != nil {
 		return "", errors.Wrap(err, "error to create data path")
 	}
 
 	log.Debug("Async fs br created")
 
-	if err := fsRestore.Init(ctx,
-		&datapath.FSBRInitParam{
+	if err := dp.Init(ctx,
+		&datapath.InitParam{
 			BSLName:           pvr.Spec.BackupStorageLocation,
 			SourceNamespace:   pvr.Spec.SourceNamespace,
 			UploaderType:      pvr.Spec.UploaderType,
@@ -184,7 +184,7 @@ func (r *RestoreMicroService) RunCancelableDataPath(ctx context.Context) (string
 
 	log.Info("Async fs br init")
 
-	if err := fsRestore.StartRestore(pvr.Spec.SnapshotID, r.sourceTargetPath, pvr.Spec.UploaderSettings); err != nil {
+	if err := dp.StartRestore(pvr.Spec.SnapshotID, r.sourceTargetPath, pvr.Spec.UploaderSettings); err != nil {
 		return "", errors.Wrap(err, "error starting data path restore")
 	}
 

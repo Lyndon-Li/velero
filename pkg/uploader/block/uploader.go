@@ -173,7 +173,7 @@ type readResult struct {
 
 func (r *readResult) resetBuffer(list *freelist.FreeList) {
 	if r.buffer != nil {
-		list.Put(r.buffer)
+		list.Return(r.buffer)
 		r.buffer = nil
 	}
 }
@@ -194,15 +194,16 @@ func (bu *blockUploader) copyDataFull(reader io.Reader, writer io.Writer, totalL
 		defer close(resultChan)
 
 		for {
+			var buffer []byte
+
 			select {
 			case <-bu.ctx.Done():
 				return
 			case <-quit:
 				return
-			default:
+			case buffer = <-list.Chunks():
 			}
 
-			buffer := list.Get()
 			length, err := reader.Read(buffer)
 			if err == nil && length <= 0 {
 				err = io.ErrUnexpectedEOF
@@ -292,16 +293,16 @@ func (bu *blockUploader) copyDataIncremental(reader io.ReaderAt, writer udmrepo.
 		defer close(resultChan)
 
 		offset, valid := cbt.Next()
+		var buffer []byte
 		for valid {
 			select {
 			case <-bu.ctx.Done():
 				return
 			case <-quit:
 				return
-			default:
+			case buffer = <-list.Chunks():
 			}
 
-			buffer := list.Get()
 			length, err := reader.ReadAt(buffer, offset)
 			if err == nil && length <= 0 {
 				err = io.ErrUnexpectedEOF

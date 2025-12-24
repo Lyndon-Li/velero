@@ -28,7 +28,7 @@ import (
 )
 
 var ConcurrentLimitExceed error = errors.New("Concurrent number exceeds")
-var FSBRCreator = newFileSystemBR
+var FSBRCreator = newGeneralDataPath
 var MicroServiceBRWatcherCreator = newMicroServiceBRWatcher
 
 type Manager struct {

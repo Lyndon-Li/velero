@@ -16,6 +16,10 @@ limitations under the License.
 
 package freelist
 
+import (
+	"fmt"
+)
+
 type FreeList struct {
 	chunks    chan []byte
 	memory    []byte
@@ -41,11 +45,15 @@ func New(size, chunkSize int) *FreeList {
 	}
 }
 
-func (f *FreeList) Get() []byte {
-	return <-f.chunks
+func (f *FreeList) Chunks() chan []byte {
+	return f.chunks
 }
 
-func (f *FreeList) Put(chunk []byte) {
+func (f *FreeList) Return(chunk []byte) {
+	if cap(chunk) != f.chunkSize {
+		panic(fmt.Sprintf("chunk (%v) is not allocated by me", cap(chunk)))
+	}
+
 	chunk = chunk[:cap(chunk)]
 	f.chunks <- chunk
 }
