@@ -495,9 +495,13 @@ func (e *genericRestoreExposer) createRestorePod(
 
 	nodeSelector := map[string]string{}
 	if selectedNode != "" {
-		affinity = &kube.LoadAffinity{}
+		affinity = nil
 		nodeSelector["kubernetes.io/hostname"] = selectedNode
 		e.log.Infof("Selected node for restore pod. Ignore affinity from the node-agent config.")
+	}
+
+	if affinity == nil {
+		affinity = &kube.LoadAffinity{}
 	}
 
 	podInfo, err := getInheritedPodInfo(ctx, e.kubeClient, ownerObject.Namespace, nodeOS)
