@@ -25,12 +25,15 @@ import (
 
 	"github.com/kopia/kopia/fs"
 	"github.com/kopia/kopia/snapshot/restore"
+	"github.com/sirupsen/logrus"
 )
 
 type BlockOutput struct {
 	*restore.FilesystemOutput
 
 	targetFileName string
+
+	logger logrus.FieldLogger
 }
 
 func (o *BlockOutput) WriteFile(ctx context.Context, relativePath string, remoteFile fs.File, progressCb restore.FileWriteProgress) error {

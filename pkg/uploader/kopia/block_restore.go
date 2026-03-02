@@ -29,6 +29,7 @@ import (
 	"github.com/kopia/kopia/fs"
 	"github.com/kopia/kopia/snapshot/restore"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 type BlockOutput struct {
@@ -36,6 +37,8 @@ type BlockOutput struct {
 
 	targetFileName string
 	targetFile     *os.File
+
+	logger logrus.FieldLogger
 }
 
 var _ restore.Output = &BlockOutput{}
@@ -115,6 +118,8 @@ func (o *BlockOutput) Flush() error {
 
 func (o *BlockOutput) Terminate() error {
 	if o.targetFile != nil {
+		o.logger.Infof("Flushing block dev %s", o.targetFile.Name())
+
 		if err := o.targetFile.Close(); err != nil {
 			return errors.Wrapf(err, "error closing block dev %v", o.targetFileName)
 		}

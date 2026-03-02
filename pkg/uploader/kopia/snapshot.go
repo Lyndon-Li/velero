@@ -451,6 +451,7 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *Progress,
 	if volMode == uploader.PersistentVolumeBlock {
 		output = &BlockOutput{
 			FilesystemOutput: fsOutput,
+			logger:           log,
 		}
 	} else {
 		output = &fileSystemRestoreOutput{
