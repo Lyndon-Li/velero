@@ -18,7 +18,6 @@ package restic
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +27,6 @@ import (
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
-	repoconfig "github.com/vmware-tanzu/velero/pkg/repository/config"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 )
 
@@ -90,53 +88,7 @@ func (e *environ) Unset(key string) {
 // should be used when running a restic command for a particular backend provider.
 // This list is the current environment, plus any provider-specific variables restic needs.
 func CmdEnv(backupLocation *velerov1api.BackupStorageLocation, credentialFileStore credentials.FileStore) ([]string, error) {
-	var env environ
-	env = os.Environ()
-	customEnv := map[string]string{}
-	var err error
-
-	config := backupLocation.Spec.Config
-	if config == nil {
-		config = map[string]string{}
-	}
-
-	if backupLocation.Spec.Credential != nil {
-		credsFile, err := credentialFileStore.Path(backupLocation.Spec.Credential)
-		if err != nil {
-			return []string{}, errors.WithStack(err)
-		}
-		config[repoconfig.CredentialsFileKey] = credsFile
-	}
-
-	backendType := repoconfig.GetBackendType(backupLocation.Spec.Provider, backupLocation.Spec.Config)
-
-	switch backendType {
-	case repoconfig.AWSBackend:
-		customEnv, err = repoconfig.GetS3ResticEnvVars(config)
-		if err != nil {
-			return []string{}, err
-		}
-	case repoconfig.AzureBackend:
-		customEnv, err = repoconfig.GetAzureResticEnvVars(config)
-		if err != nil {
-			return []string{}, err
-		}
-	case repoconfig.GCPBackend:
-		customEnv, err = repoconfig.GetGCPResticEnvVars(config)
-		if err != nil {
-			return []string{}, err
-		}
-	}
-
-	for k, v := range customEnv {
-		env.Unset(k)
-		if v == "" {
-			continue
-		}
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
-	}
-
-	return env, nil
+	return nil, nil
 }
 
 // GetInsecureSkipTLSVerifyFromBSL get insecureSkipTLSVerify flag from BSL configuration,

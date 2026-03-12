@@ -24,18 +24,6 @@ const (
 	gcpCredentialsFileEnvVar = "GOOGLE_APPLICATION_CREDENTIALS"
 )
 
-// GetGCPResticEnvVars gets the environment variables that restic relies
-// on based on info in the provided object storage location config map.
-func GetGCPResticEnvVars(config map[string]string) (map[string]string, error) {
-	result := make(map[string]string)
-
-	if credentialsFile, ok := config[CredentialsFileKey]; ok {
-		result[gcpCredentialsFileEnvVar] = credentialsFile
-	}
-
-	return result, nil
-}
-
 // GetGCPCredentials gets the credential file required by a GCP bucket connection,
 // if the provided config doean't have the value, get it from system's environment variables
 func GetGCPCredentials(config map[string]string) string {

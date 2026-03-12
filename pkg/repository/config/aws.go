@@ -49,35 +49,6 @@ const (
 	awsDefaultProfile        = "default"
 )
 
-// GetS3ResticEnvVars gets the environment variables that restic
-// relies on (AWS_PROFILE) based on info in the provided object
-// storage location config map.
-func GetS3ResticEnvVars(config map[string]string) (map[string]string, error) {
-	result := make(map[string]string)
-
-	if credentialsFile, ok := config[CredentialsFileKey]; ok {
-		result[awsCredentialsFileEnvVar] = credentialsFile
-	}
-
-	if profile, ok := config[awsProfileKey]; ok {
-		result[awsProfileEnvVar] = profile
-	}
-
-	// GetS3ResticEnvVars reads the AWS config, from files and envs
-	// if needed assumes the role and returns the session credentials
-	// setting these variables emulates what would happen for example when using kube2iam
-	if creds, err := getS3CredentialsFunc(config); err == nil && creds != nil {
-		result[awsKeyIDEnvVar] = creds.AccessKeyID
-		result[awsSecretKeyEnvVar] = creds.SecretAccessKey
-		result[awsSessTokenEnvVar] = creds.SessionToken
-		result[awsCredentialsFileEnvVar] = ""
-		result[awsProfileEnvVar] = "" // profile is not needed since we have the credentials from profile via GetS3Credentials
-		result[awsConfigFileEnvVar] = ""
-	}
-
-	return result, nil
-}
-
 // GetS3Credentials gets the S3 credential values according to the information
 // of the provided config or the system's environment variables
 func GetS3Credentials(config map[string]string) (*aws.Credentials, error) {
