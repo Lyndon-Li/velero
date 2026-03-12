@@ -1494,7 +1494,7 @@ func TestDeleteOldMaintenanceJobWithConfigMap(t *testing.T) {
 					MaintenanceFrequency:  metav1.Duration{Duration: testMaintenanceFrequency},
 					BackupStorageLocation: "default",
 					VolumeNamespace:       "test-ns",
-					RepositoryType:        "restic",
+					RepositoryType:        "kopia",
 				},
 				Status: velerov1api.BackupRepositoryStatus{
 					Phase: velerov1api.BackupRepositoryPhaseReady,
@@ -1531,7 +1531,7 @@ func TestDeleteOldMaintenanceJobWithConfigMap(t *testing.T) {
 					MaintenanceFrequency:  metav1.Duration{Duration: testMaintenanceFrequency},
 					BackupStorageLocation: "default",
 					VolumeNamespace:       "test-ns",
-					RepositoryType:        "restic",
+					RepositoryType:        "kopia",
 				},
 				Status: velerov1api.BackupRepositoryStatus{
 					Phase: velerov1api.BackupRepositoryPhaseReady,
@@ -1550,8 +1550,8 @@ func TestDeleteOldMaintenanceJobWithConfigMap(t *testing.T) {
 					Name:      "repo-maintenance-job-config",
 				},
 				Data: map[string]string{
-					"global":                 `{"keepLatestMaintenanceJobs": 5}`,
-					"test-ns-default-restic": `{"keepLatestMaintenanceJobs": 2}`,
+					"global":                `{"keepLatestMaintenanceJobs": 5}`,
+					"test-ns-default-kopia": `{"keepLatestMaintenanceJobs": 2}`,
 				},
 			},
 		},

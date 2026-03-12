@@ -22,77 +22,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/stretchr/testify/require"
 )
-
-func TestGetS3ResticEnvVars(t *testing.T) {
-	testCases := []struct {
-		name             string
-		config           map[string]string
-		expected         map[string]string
-		getS3Credentials func(config map[string]string) (*aws.Credentials, error)
-	}{
-		{
-			name:     "when config is empty, no env vars are returned",
-			config:   map[string]string{},
-			expected: map[string]string{},
-			getS3Credentials: func(config map[string]string) (*aws.Credentials, error) {
-				return nil, nil
-			},
-		},
-		{
-			name: "when config contains profile key, profile env var is set with profile value",
-			config: map[string]string{
-				"profile": "profile-value",
-			},
-			expected: map[string]string{
-				"AWS_PROFILE": "profile-value",
-			},
-		},
-		{
-			name: "when config contains credentials file key, credentials file env var is set with credentials file value",
-			config: map[string]string{
-				"credentialsFile": "/tmp/credentials/path/to/secret",
-			},
-			expected: map[string]string{
-				"AWS_SHARED_CREDENTIALS_FILE": "/tmp/credentials/path/to/secret",
-			},
-			getS3Credentials: func(config map[string]string) (*aws.Credentials, error) {
-				return nil, nil
-			},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			// Mock GetS3Credentials
-			if tc.getS3Credentials != nil {
-				getS3CredentialsFunc = tc.getS3Credentials
-			} else {
-				getS3CredentialsFunc = GetS3Credentials
-			}
-
-			actual, err := GetS3ResticEnvVars(tc.config)
-
-			require.NoError(t, err)
-
-			// Avoid direct comparison of expected and actual to prevent exposing secrets.
-			// This may occur if the test doesn't set getS3Credentials func correctly.
-			if !reflect.DeepEqual(tc.expected, actual) {
-				t.Errorf("Expected and actual results do not match for test case %q", tc.name)
-				for key, value := range actual {
-					if expVal, err := tc.expected[key]; !err || expVal != value {
-						if actualVal, ok := actual[key]; !ok {
-							t.Errorf("Key %q is missing in actual result", key)
-						} else if expVal != actualVal {
-							t.Errorf("Key %q: expected value %q", key, expVal)
-						}
-					}
-				}
-			}
-		})
-	}
-}
 
 func TestGetS3CredentialsCorrectlyUseProfile(t *testing.T) {
 	type args struct {
