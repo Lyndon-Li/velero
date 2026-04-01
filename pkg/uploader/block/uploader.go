@@ -17,6 +17,7 @@ limitations under the License.
 package block
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -136,7 +137,7 @@ func (bu *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, confi
 	}
 	defer reader.Close()
 
-	size, err := bu.copyDataFull(reader, dest.dev, snapshot.Size)
+	size, err := bu.restoreDataFull(reader, dest.dev, snapshot.Size, dest.path)
 	if err != nil {
 		return 0, errors.Wrapf(err, "error restoring data to volume %s", dest.path)
 	}
@@ -149,7 +150,7 @@ func (bu *blockUploader) BackupData(dev *os.File, dest udmrepo.ObjectWriter, cbt
 	var err error
 
 	if cbt == nil {
-		size, err = bu.copyDataFull(dev, dest, totalLength)
+		size, err = bu.backupDataFull(dev, dest, totalLength)
 		if err != nil {
 			return "", size, errors.Wrap(err, "error copying file data full")
 		}
@@ -183,7 +184,7 @@ const (
 	fullReadBlockSize = 2 << 20
 )
 
-func (bu *blockUploader) copyDataFull(reader io.Reader, writer io.Writer, totalLength int64) (int64, error) {
+func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, totalLength int64) (int64, error) {
 	list := freelist.New(bufferSize, fullReadBlockSize)
 	resultChan := make(chan readResult, list.Capacity())
 
@@ -279,6 +280,162 @@ func (bu *blockUploader) copyDataFull(reader io.Reader, writer io.Writer, totalL
 	}
 
 	return written, nil
+}
+
+func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalLength int64, destPath string) (int64, error) {
+	list := freelist.New(bufferSize, fullReadBlockSize)
+	resultChan := make(chan readResult, list.Capacity())
+	zeroBlock := make([]byte, fullReadBlockSize)
+
+	quit := make(chan struct{})
+	defer close(quit)
+
+	go func() {
+		defer close(resultChan)
+
+		for {
+			var buffer []byte
+
+			select {
+			case <-bu.ctx.Done():
+				return
+			case <-quit:
+				return
+			case buffer = <-list.Chunks():
+			}
+
+			length, err := reader.Read(buffer)
+			if err == nil && length <= 0 {
+				err = io.ErrUnexpectedEOF
+			}
+
+			r := readResult{
+				buffer: buffer,
+				length: length,
+				err:    err,
+			}
+
+			if r.err != nil {
+				r.resetBuffer(list)
+			}
+
+			resultChan <- r
+
+			if r.err != nil {
+				return
+			}
+		}
+	}()
+
+	var written int64
+	var result readResult
+	var writeErr error
+	var readerRunning bool
+	var curOffset int64
+	var zeroStart int64
+	var zeroLength int64
+
+	for written < totalLength {
+		select {
+		case <-bu.ctx.Done():
+			writeErr = ErrCanceled
+		case result, readerRunning = <-resultChan:
+			if !readerRunning {
+				if bu.ctx.Err() != nil {
+					writeErr = ErrCanceled
+				} else {
+					writeErr = io.ErrUnexpectedEOF
+				}
+			}
+		}
+
+		if writeErr != nil {
+			break
+		}
+
+		if result.err != nil {
+			writeErr = result.err
+			break
+		}
+
+		if bytes.Equal(result.buffer[0:result.length], zeroBlock[0:result.length]) {
+			if zeroStart == -1 {
+				zeroStart = curOffset
+			}
+
+			zeroLength += int64(result.length)
+		} else {
+			if zeroStart != -1 {
+				if err := bu.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
+					writeErr = errors.Wrapf(err, "error flushing zero blocks from %v, length %v", zeroStart, zeroLength)
+					break
+				}
+
+				zeroStart = -1
+				zeroLength = 0
+			}
+
+			n, err := dest.Write(result.buffer[0:result.length])
+			if err != nil {
+				writeErr = err
+				break
+			}
+
+			if result.length != n {
+				writeErr = io.ErrShortWrite
+				break
+			}
+		}
+
+		written += int64(result.length)
+		result.resetBuffer(list)
+
+		bu.progress.UpdateProgress(&uploader.Progress{BytesDone: written, TotalBytes: totalLength})
+	}
+
+	result.resetBuffer(list)
+
+	if writeErr != nil {
+		return written, writeErr
+	}
+
+	if zeroStart != -1 {
+		if err := bu.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
+			return written, errors.Wrapf(err, "error flushing zero blocks from %v, length %v", zeroStart, zeroLength)
+		}
+	}
+
+	return written, nil
+}
+
+func (bu *blockUploader) flushZeroBlocks(dest *os.File, start int64, length int64, zeroBlock []byte, destPath string) error {
+	err := blkZeroOut(dest, start, length)
+	if err == nil {
+		return nil
+	}
+
+	bu.log.WithError(err).Warnf("Failed to call zero out from dev %s, start %v, length %v. Fallback to conservative way", destPath, start, length)
+
+	var written int64
+	for written < length {
+		writeSize := len(zeroBlock)
+		if writeSize > int(length-written) {
+			writeSize = int(length - written)
+		}
+
+		n, err := dest.WriteAt(zeroBlock[0:writeSize], start+written)
+		if err != nil {
+			return errors.Wrapf(err, "error writing zero buffer at %v, length %v", start+written, writeSize)
+		}
+
+		if writeSize != n {
+			return errors.Wrapf(err, "short write zero buffer at %v, length %v", start+written, writeSize)
+		}
+
+		written += int64(writeSize)
+	}
+
+	return nil
 }
 
 func (bu *blockUploader) copyDataIncremental(reader io.ReaderAt, writer udmrepo.ObjectWriter, cbt cbt.Iterator, totalLength int64) (int64, error) {

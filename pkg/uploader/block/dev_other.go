@@ -27,3 +27,7 @@ import (
 func openBlockDevice(_ string, _ bool) (*os.File, error) {
 	return nil, fmt.Errorf("block mode is not supported for Windows")
 }
+
+func blkZeroOut(dest *os.File, start int64, length int64) error {
+	return fmt.Errorf("block mode is not supported for Windows")
+}
