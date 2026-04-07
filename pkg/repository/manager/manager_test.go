@@ -37,7 +37,7 @@ func TestGetRepositoryProvider(t *testing.T) {
 	assert.NotNil(t, provider)
 
 	// valid repository type
-	repo.Spec.RepositoryType = velerov1.BackupRepositoryTypeRestic
+	repo.Spec.RepositoryType = velerov1.BackupRepositoryTypeKopia
 	provider, err = mgr.getRepositoryProvider(repo)
 	require.NoError(t, err)
 	assert.NotNil(t, provider)
@@ -61,6 +61,6 @@ func TestGetRepositoryConfigProvider(t *testing.T) {
 	assert.NotNil(t, provider)
 
 	// invalid repository type
-	_, err = mgr.getRepositoryProvider(velerov1.BackupRepositoryTypeRestic)
+	_, err = mgr.getRepositoryProvider(velerov1.BackupRepositoryTypeKopia)
 	require.Error(t, err)
 }
