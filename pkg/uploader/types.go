@@ -22,13 +22,12 @@ import (
 )
 
 const (
-	ResticType            = "restic"
-	KopiaType             = "kopia"
-	BlockType             = "velero-block"
-	SnapshotRequesterTag  = "snapshot-requester"
-	SnapshotUploaderTag   = "snapshot-uploader"
-	SnapshotSourceIDTag   = "snapshot-source-id"
-	SnapshotSnapshotIDTag = "snapshot-snapshot-id"
+	ResticType           = "restic"
+	KopiaType            = "kopia"
+	BlockType            = "velero-block"
+	SnapshotRequesterTag = "snapshot-requester"
+	SnapshotUploaderTag  = "snapshot-uploader"
+	CBTChangeIDTag       = "cbt-change-id"
 )
 
 type PersistentVolumeMode string
@@ -55,8 +54,6 @@ type SnapshotInfo struct {
 	ID              string
 	Size            int64
 	IncrementalSize int64
-	SourceID        string
-	SnapshotID      string
 }
 
 // Progress which defined two variables to record progress

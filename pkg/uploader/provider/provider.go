@@ -29,8 +29,8 @@ import (
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
-	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 )
 
 const restoreProgressCheckInterval = 10 * time.Second
@@ -46,9 +46,10 @@ type Provider interface {
 		ctx context.Context,
 		path string,
 		realSource string,
+		cbtSource cbtservice.SourceInfo,
 		tags map[string]string,
-		parentSnapshot *uploader.SnapshotInfo,
-		cbt cbt.Iterator,
+		parentSnapshot string,
+		cbt cbtservice.Service,
 		volMode uploader.PersistentVolumeMode,
 		uploaderCfg map[string]string,
 		updater uploader.ProgressUpdater) (uploader.SnapshotInfo, bool, error)
@@ -69,7 +70,7 @@ type Provider interface {
 		path string,
 		realSource string,
 		parentSnapshot string,
-	) (*uploader.SnapshotInfo, error)
+	) (string, error)
 
 	// Close which will close related repository
 	Close(ctx context.Context) error

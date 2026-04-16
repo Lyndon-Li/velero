@@ -152,7 +152,7 @@ func setupPolicy(ctx context.Context, rep repo.RepositoryWriter, sourceInfo snap
 
 // Backup backup specific sourcePath and update progress
 func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.RepositoryWriter, sourcePath string, realSource string,
-	parentSnapshot *uploader.SnapshotInfo, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
+	parentSnapshot string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
 	if fsUploader == nil {
 		return uploader.SnapshotInfo{}, false, errors.New("get empty kopia uploader")
 	}
@@ -232,7 +232,7 @@ func SnapshotSource(
 	u SnapshotUploader,
 	sourceInfo snapshot.SourceInfo,
 	rootDir fs.Entry,
-	parentSnapshot *uploader.SnapshotInfo,
+	parentSnapshot string,
 	snapshotTags map[string]string,
 	uploaderCfg map[string]string,
 	log logrus.FieldLogger,
@@ -242,16 +242,16 @@ func SnapshotSource(
 	snapshotStartTime := time.Now()
 
 	var previous []*snapshot.Manifest
-	if parentSnapshot != nil {
-		mani, err := loadParentSnapshot(ctx, rep, parentSnapshot)
+	if parentSnapshot != "" {
+		mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
 		if err != nil {
 			log.WithError(err).Warn("Failed to load previous snapshot from kopia, fallback to full backup")
 		} else {
 			previous = append(previous, mani)
-			log.Infof("Using provided parent snapshot %s", parentSnapshot.ID)
+			log.Infof("Using provided parent snapshot %s", parentSnapshot)
 		}
 	} else {
-		log.Info("Running full snapshot")
+		log.Info("No parent snapshot, running full snapshot")
 	}
 
 	for i := range previous {
@@ -287,31 +287,6 @@ func SnapshotSource(
 	}
 	log.Infof("Created snapshot with root %v and ID %v in %v", manifest.RootObjectID(), manifest.ID, time.Since(snapshotStartTime).Truncate(time.Second))
 	return reportSnapshotStatus(manifest, policyTree)
-}
-
-func loadParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, parent *uploader.SnapshotInfo) (*snapshot.Manifest, error) {
-	mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parent.ID))
-	if err != nil {
-		return nil, errors.Wrapf(err, "error loading snapshot %s", parent.ID)
-	}
-
-	if mani.Tags == nil {
-		return nil, errors.Errorf("no tags from snapshot %s", parent.ID)
-	}
-
-	if id, found := mani.Tags[uploader.SnapshotSourceIDTag]; !found {
-		return nil, errors.Errorf("no snapshot source from snapshot %s", parent.ID)
-	} else if parent.SourceID != id {
-		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", parent.SourceID, id, parent.ID)
-	}
-
-	if id, found := mani.Tags[uploader.SnapshotSnapshotIDTag]; !found {
-		return nil, errors.Errorf("no snapshot ID from snapshot %s", parent.ID)
-	} else if parent.SnapshotID != id {
-		return nil, errors.Errorf("snapshot ID is not expected (%s vs. %s) from snapshot %s", parent.SnapshotID, id, parent.ID)
-	}
-
-	return mani, nil
 }
 
 func reportSnapshotStatus(manifest *snapshot.Manifest, policyTree *policy.Tree) (string, int64, error) {
@@ -463,10 +438,10 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *Progress,
 	return stat.RestoredTotalFileSize, stat.RestoredFileCount, nil
 }
 
-func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (*uploader.SnapshotInfo, error) {
+func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (string, error) {
 	source, err := filepath.Abs(sourcePath)
 	if err != nil {
-		return nil, errors.Wrapf(err, "invalid source path '%s'", sourcePath)
+		return "", errors.Wrapf(err, "invalid source path '%s'", sourcePath)
 	}
 
 	source = filepath.Clean(source)
@@ -486,7 +461,7 @@ func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePat
 
 		mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
 		if err != nil {
-			return nil, errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
+			return "", errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
 		}
 
 		previous = mani
@@ -495,20 +470,11 @@ func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePat
 
 		mani, err := findPreviousSnapshotManifest(ctx, rep, sourceInfo, requestor, nil, log)
 		if err != nil {
-			return nil, errors.Wrapf(err, "error finding previous kopia snapshot manifests for si %v", sourceInfo)
+			return "", errors.Wrapf(err, "error finding previous kopia snapshot manifests for si %v", sourceInfo)
 		}
 
 		previous = mani
 	}
 
-	info := &uploader.SnapshotInfo{
-		ID: string(previous.ID),
-	}
-
-	if previous.Tags != nil {
-		info.SourceID = previous.Tags[uploader.SnapshotSourceIDTag]
-		info.SnapshotID = previous.Tags[uploader.SnapshotSnapshotIDTag]
-	}
-
-	return info, nil
+	return string(previous.ID), nil
 }

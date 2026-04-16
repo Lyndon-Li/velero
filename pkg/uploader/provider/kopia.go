@@ -26,8 +26,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
+	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
-	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 	"github.com/vmware-tanzu/velero/pkg/uploader/kopia"
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
@@ -116,9 +116,10 @@ func (kp *kopiaProvider) RunBackup(
 	ctx context.Context,
 	path string,
 	realSource string,
+	cbtSource cbtservice.SourceInfo,
 	tags map[string]string,
-	parentSnapshot *uploader.SnapshotInfo,
-	cbt cbt.Iterator,
+	parentSnapshot string,
+	cbt cbtservice.Service,
 	volMode uploader.PersistentVolumeMode,
 	uploaderCfg map[string]string,
 	updater uploader.ProgressUpdater) (uploader.SnapshotInfo, bool, error) {
@@ -256,19 +257,19 @@ func (kp *kopiaProvider) RunRestore(
 	return size, nil
 }
 
-func (kp *kopiaProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (*uploader.SnapshotInfo, error) {
+func (kp *kopiaProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (string, error) {
 	if path == "" {
-		return nil, errors.New("path is empty")
+		return "", errors.New("path is empty")
 	}
 
 	if realSource != "" {
 		realSource = fmt.Sprintf("%s/%s/%s", kp.requestorType, uploader.KopiaType, realSource)
 	}
 
-	snapshotInfo, err := kopiaGetParentSnapshotFunc(ctx, kopia.NewShimRepo(kp.bkRepo), path, realSource, parentSnapshot, kp.requestorType, kp.log)
+	snapshot, err := kopiaGetParentSnapshotFunc(ctx, kopia.NewShimRepo(kp.bkRepo), path, realSource, parentSnapshot, kp.requestorType, kp.log)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
+		return "", errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
 	}
 
-	return snapshotInfo, nil
+	return snapshot, nil
 }

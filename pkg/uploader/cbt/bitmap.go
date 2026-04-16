@@ -22,12 +22,15 @@ import (
 	"github.com/RoaringBitmap/roaring"
 )
 
-type CBT interface {
+type Bitmap interface {
 	Set(int64, int64)
-	Iterator() Iterator
+	SetFull()
+	SourceID() string
+	ChangeID() string
+	Iterator() BitmapIterator
 }
 
-type Iterator interface {
+type BitmapIterator interface {
 	SourceID() string
 	ChangeID() string
 	BlockSize() int
@@ -39,48 +42,65 @@ const (
 	InvalidOffset64 = ^int64(0)
 )
 
-type cbtImpl struct {
+type bitmapImpl struct {
 	bitmap       *roaring.Bitmap
 	blockSize    int
 	blockSizeLog int
+	length       int64
 	sourceID     string
 	changeID     string
 }
 
-type cbtIterator struct {
-	cbtImpl
+type bitmapIterator struct {
+	bitmapImpl
 	iterator roaring.IntPeekable
 }
 
-func NewCBT(blockSize int, length int64, sourceID string, changeID string) CBT {
-	return &cbtImpl{
+func NewBitmap(blockSize int, length int64, sourceID string, changeID string) Bitmap {
+	return &bitmapImpl{
 		bitmap:       roaring.New(),
 		blockSize:    blockSize,
 		blockSizeLog: bits.Len(uint(blockSize)) - 1,
+		length:       length,
 		sourceID:     sourceID,
 		changeID:     changeID,
 	}
 }
 
-func (c *cbtImpl) Set(offset, length int64) {
+func (c *bitmapImpl) Set(offset, length int64) {
 	start := uint64(offset >> c.blockSizeLog)
 	end := uint64((offset + length + int64(c.blockSize) - 1) >> c.blockSizeLog)
 
 	c.bitmap.AddRange(start, end)
 }
 
-func (c *cbtImpl) Iterator() Iterator {
+func (c *bitmapImpl) SetFull() {
+	start := uint64(0)
+	end := uint64((c.length + int64(c.blockSize) - 1) >> c.blockSizeLog)
+
+	c.bitmap.AddRange(start, end)
+}
+
+func (c *bitmapImpl) SourceID() string {
+	return c.sourceID
+}
+
+func (c *bitmapImpl) ChangeID() string {
+	return c.changeID
+}
+
+func (c *bitmapImpl) Iterator() BitmapIterator {
 	if c.bitmap == nil {
 		return nil
 	}
 
-	return &cbtIterator{
-		cbtImpl:  *c,
-		iterator: c.bitmap.Iterator(),
+	return &bitmapIterator{
+		bitmapImpl: *c,
+		iterator:   c.bitmap.Iterator(),
 	}
 }
 
-func (c *cbtIterator) Next() (int64, bool) {
+func (c *bitmapIterator) Next() (int64, bool) {
 	if !c.iterator.HasNext() {
 		return InvalidOffset64, false
 	}
@@ -88,18 +108,18 @@ func (c *cbtIterator) Next() (int64, bool) {
 	return int64(c.iterator.Next()) << c.blockSizeLog, true
 }
 
-func (c *cbtIterator) Count() uint64 {
+func (c *bitmapIterator) Count() uint64 {
 	return c.bitmap.GetCardinality()
 }
 
-func (c *cbtIterator) BlockSize() int {
+func (c *bitmapIterator) BlockSize() int {
 	return c.blockSize
 }
 
-func (c *cbtIterator) SourceID() string {
+func (c *bitmapIterator) SourceID() string {
 	return c.sourceID
 }
 
-func (c *cbtIterator) ChangeID() string {
+func (c *bitmapIterator) ChangeID() string {
 	return c.changeID
 }

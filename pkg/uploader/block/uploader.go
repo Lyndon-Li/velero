@@ -32,6 +32,11 @@ import (
 
 var ErrCanceled = errors.New("uploader is canceled")
 
+const (
+	blockSize  = (1 << 20)
+	bufferSize = 100 << 20
+)
+
 type sourceInfo struct {
 	dev        *os.File
 	realSource string
@@ -44,7 +49,7 @@ type destInfo struct {
 }
 
 type Uploader interface {
-	Backup(sourceInfo, *udmrepo.Snapshot, cbt.Iterator, map[string]string) (udmrepo.Snapshot, int64, error)
+	Backup(sourceInfo, udmrepo.ID, cbt.BitmapIterator, map[string]string) (udmrepo.Snapshot, int64, error)
 	Restore(udmrepo.Snapshot, destInfo, map[string]string) (int64, error)
 }
 
@@ -64,8 +69,12 @@ func NewUploader(ctx context.Context, repoWriter udmrepo.BackupRepo, progress up
 	}
 }
 
-func (bu *blockUploader) Backup(source sourceInfo, parent *udmrepo.Snapshot, cbt cbt.Iterator, configs map[string]string) (udmrepo.Snapshot, int64, error) {
+func (bu *blockUploader) Backup(source sourceInfo, parentObject udmrepo.ID, bitmap cbt.BitmapIterator, configs map[string]string) (udmrepo.Snapshot, int64, error) {
 	snapStart := bu.repoWriter.Time()
+
+	if bitmap == nil {
+		return udmrepo.Snapshot{}, 0, errors.New("bitmap is not available")
+	}
 
 	destObj := bu.repoWriter.NewObjectWriter(bu.ctx, udmrepo.ObjectWriteOptions{
 		Description:  "FILE:" + source.realSource,
@@ -73,18 +82,18 @@ func (bu *blockUploader) Backup(source sourceInfo, parent *udmrepo.Snapshot, cbt
 		DataType:     udmrepo.ObjectDataTypeData,
 		FullPath:     source.realSource,
 		AccessMode:   udmrepo.ObjectDataAccessModeFile,
-		ParentObject: parent.RootObject,
+		ParentObject: parentObject,
 	})
 
 	defer destObj.Close()
 
-	id, backupSize, err := bu.BackupData(source.dev, destObj, cbt, source.size)
+	id, backupSize, err := bu.BackupData(source.dev, destObj, bitmap, source.size)
 	if err != nil {
 		return udmrepo.Snapshot{}, 0, errors.Wrap(err, "error to backup file with incremental")
 	}
 
 	backupMode := udmrepo.ObjectDataBackupModeInc
-	if parent == nil {
+	if parentObject == "" {
 		backupMode = udmrepo.ObjectDataBackupModeFull
 	}
 
@@ -112,6 +121,7 @@ func (bu *blockUploader) Backup(source sourceInfo, parent *udmrepo.Snapshot, cbt
 	snapEnd := bu.repoWriter.Time()
 
 	return udmrepo.Snapshot{
+		Source:      source.realSource,
 		StartTime:   snapStart,
 		EndTime:     snapEnd,
 		Description: "",
@@ -145,20 +155,13 @@ func (bu *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, confi
 	return size, nil
 }
 
-func (bu *blockUploader) BackupData(dev *os.File, dest udmrepo.ObjectWriter, cbt cbt.Iterator, totalLength int64) (udmrepo.ID, int64, error) {
+func (bu *blockUploader) BackupData(dev *os.File, dest udmrepo.ObjectWriter, bitmap cbt.BitmapIterator, totalLength int64) (udmrepo.ID, int64, error) {
 	var size int64
 	var err error
 
-	if cbt == nil {
-		size, err = bu.backupDataFull(dev, dest, totalLength)
-		if err != nil {
-			return "", size, errors.Wrap(err, "error copying file data full")
-		}
-	} else {
-		size, err = bu.copyDataIncremental(dev, dest, cbt, totalLength)
-		if err != nil {
-			return "", size, errors.Wrap(err, "error copying file data incremental")
-		}
+	size, err = bu.backupData(dev, dest, bitmap, totalLength)
+	if err != nil {
+		return "", size, errors.Wrap(err, "error copying file data incremental")
 	}
 
 	id, err := dest.Result()
@@ -179,14 +182,10 @@ func (r *readResult) resetBuffer(list *freelist.FreeList) {
 	}
 }
 
-const (
-	bufferSize        = 100 << 20
-	fullReadBlockSize = 2 << 20
-)
-
-func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, totalLength int64) (int64, error) {
-	list := freelist.New(bufferSize, fullReadBlockSize)
+func (bu *blockUploader) backupData(reader io.ReaderAt, writer udmrepo.ObjectWriter, cbt cbt.BitmapIterator, totalLength int64) (int64, error) {
+	list := freelist.New(bufferSize, cbt.BlockSize())
 	resultChan := make(chan readResult, list.Capacity())
+	totalCount := cbt.Count()
 
 	quit := make(chan struct{})
 	defer close(quit)
@@ -194,9 +193,9 @@ func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, tota
 	go func() {
 		defer close(resultChan)
 
-		for {
-			var buffer []byte
-
+		offset, valid := cbt.Next()
+		var buffer []byte
+		for valid {
 			select {
 			case <-bu.ctx.Done():
 				return
@@ -205,13 +204,14 @@ func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, tota
 			case buffer = <-list.Chunks():
 			}
 
-			length, err := reader.Read(buffer)
+			length, err := reader.ReadAt(buffer, offset)
 			if err == nil && length <= 0 {
 				err = io.ErrUnexpectedEOF
 			}
 
 			r := readResult{
 				buffer: buffer,
+				offset: offset,
 				length: length,
 				err:    err,
 			}
@@ -225,15 +225,19 @@ func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, tota
 			if r.err != nil {
 				return
 			}
+
+			offset, valid = cbt.Next()
 		}
 	}()
 
-	var written int64
+	var lastPos int64
 	var result readResult
+	var written int64
+	var curCount int64
 	var writeErr error
 	var readerRunning bool
 
-	for written < totalLength {
+	for curCount < int64(totalCount) {
 		select {
 		case <-bu.ctx.Done():
 			writeErr = ErrCanceled
@@ -256,7 +260,7 @@ func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, tota
 			break
 		}
 
-		n, err := writer.Write(result.buffer[0:result.length])
+		n, err := writer.WriteAt(result.buffer[0:result.length], result.offset)
 		if err != nil {
 			writeErr = err
 			break
@@ -267,10 +271,12 @@ func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, tota
 			break
 		}
 
-		written += int64(n)
+		written += int64(result.length)
+		lastPos = result.offset + int64(result.length)
 		result.resetBuffer(list)
+		curCount++
 
-		bu.progress.UpdateProgress(&uploader.Progress{BytesDone: written, TotalBytes: totalLength})
+		bu.progress.UpdateProgress(&uploader.Progress{BytesDone: lastPos, TotalBytes: totalLength})
 	}
 
 	result.resetBuffer(list)
@@ -279,13 +285,21 @@ func (bu *blockUploader) backupDataFull(reader io.Reader, writer io.Writer, tota
 		return written, writeErr
 	}
 
+	if lastPos != totalLength {
+		if _, err := writer.WriteAt(nil, totalLength); err != nil {
+			return written, errors.Wrap(err, "unable to clone from parent object")
+		}
+
+		bu.progress.UpdateProgress(&uploader.Progress{BytesDone: totalLength, TotalBytes: totalLength})
+	}
+
 	return written, nil
 }
 
 func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalLength int64, destPath string) (int64, error) {
-	list := freelist.New(bufferSize, fullReadBlockSize)
+	list := freelist.New(bufferSize, blockSize)
 	resultChan := make(chan readResult, list.Capacity())
-	zeroBlock := make([]byte, fullReadBlockSize)
+	zeroBlock := make([]byte, blockSize)
 
 	quit := make(chan struct{})
 	defer close(quit)
@@ -436,118 +450,4 @@ func (bu *blockUploader) flushZeroBlocks(dest *os.File, start int64, length int6
 	}
 
 	return nil
-}
-
-func (bu *blockUploader) copyDataIncremental(reader io.ReaderAt, writer udmrepo.ObjectWriter, cbt cbt.Iterator, totalLength int64) (int64, error) {
-	list := freelist.New(bufferSize, cbt.BlockSize())
-	resultChan := make(chan readResult, list.Capacity())
-	totalCount := cbt.Count()
-
-	quit := make(chan struct{})
-	defer close(quit)
-
-	go func() {
-		defer close(resultChan)
-
-		offset, valid := cbt.Next()
-		var buffer []byte
-		for valid {
-			select {
-			case <-bu.ctx.Done():
-				return
-			case <-quit:
-				return
-			case buffer = <-list.Chunks():
-			}
-
-			length, err := reader.ReadAt(buffer, offset)
-			if err == nil && length <= 0 {
-				err = io.ErrUnexpectedEOF
-			}
-
-			r := readResult{
-				buffer: buffer,
-				offset: offset,
-				length: length,
-				err:    err,
-			}
-
-			if r.err != nil {
-				r.resetBuffer(list)
-			}
-
-			resultChan <- r
-
-			if r.err != nil {
-				return
-			}
-
-			offset, valid = cbt.Next()
-		}
-	}()
-
-	var lastPos int64
-	var result readResult
-	var written int64
-	var curCount int64
-	var writeErr error
-	var readerRunning bool
-
-	for curCount < int64(totalCount) {
-		select {
-		case <-bu.ctx.Done():
-			writeErr = ErrCanceled
-		case result, readerRunning = <-resultChan:
-			if !readerRunning {
-				if bu.ctx.Err() != nil {
-					writeErr = ErrCanceled
-				} else {
-					writeErr = io.ErrUnexpectedEOF
-				}
-			}
-		}
-
-		if writeErr != nil {
-			break
-		}
-
-		if result.err != nil {
-			writeErr = result.err
-			break
-		}
-
-		n, err := writer.WriteAt(result.buffer[0:result.length], result.offset)
-		if err != nil {
-			writeErr = err
-			break
-		}
-
-		if result.length != n {
-			writeErr = io.ErrShortWrite
-			break
-		}
-
-		written += int64(result.length)
-		lastPos = result.offset + int64(result.length)
-		result.resetBuffer(list)
-		curCount++
-
-		bu.progress.UpdateProgress(&uploader.Progress{BytesDone: lastPos, TotalBytes: totalLength})
-	}
-
-	result.resetBuffer(list)
-
-	if writeErr != nil {
-		return written, writeErr
-	}
-
-	if lastPos != totalLength {
-		if _, err := writer.WriteAt(nil, totalLength); err != nil {
-			return written, errors.Wrap(err, "unable to clone from parent object")
-		}
-
-		bu.progress.UpdateProgress(&uploader.Progress{BytesDone: totalLength, TotalBytes: totalLength})
-	}
-
-	return written, nil
 }

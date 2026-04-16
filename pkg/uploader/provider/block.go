@@ -25,11 +25,11 @@ import (
 	"github.com/sirupsen/logrus"
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	repokeys "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/uploader/block"
-	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 )
 
 var blockBackupFunc = block.Backup
@@ -99,9 +99,10 @@ func (bp *blockProvider) RunBackup(
 	ctx context.Context,
 	path string,
 	realSource string,
+	cbtSource cbtservice.SourceInfo,
 	tags map[string]string,
-	parentSnapshot *uploader.SnapshotInfo,
-	cbt cbt.Iterator,
+	parentSnapshot string,
+	cbt cbtservice.Service,
 	volMode uploader.PersistentVolumeMode,
 	uploaderCfg map[string]string,
 	updater uploader.ProgressUpdater) (uploader.SnapshotInfo, bool, error) {
@@ -111,22 +112,6 @@ func (bp *blockProvider) RunBackup(
 
 	if path == "" {
 		return uploader.SnapshotInfo{}, false, errors.New("path is empty")
-	}
-
-	if cbt != nil {
-		if parentSnapshot == nil {
-			return uploader.SnapshotInfo{}, false, errors.New("no parent snapshot but CBT is provided")
-		}
-
-		if parentSnapshot.SourceID != cbt.SourceID() {
-			return uploader.SnapshotInfo{}, false, errors.New("cbt sourceID is not correct")
-		}
-
-		if cbt.ChangeID() == "" {
-			return uploader.SnapshotInfo{}, false, errors.New("cbt changeID is empty")
-		}
-	} else if parentSnapshot != nil {
-		return uploader.SnapshotInfo{}, false, errors.New("no CBT but parent snapshot is provided")
 	}
 
 	log := bp.log.WithFields(logrus.Fields{
@@ -147,7 +132,7 @@ func (bp *blockProvider) RunBackup(
 		realSource = fmt.Sprintf("%s/%s/%s", bp.requestorType, uploader.BlockType, realSource)
 	}
 
-	snapshotInfo, _, err := blockBackupFunc(ctx, blkUploader, bp.bkRepo, path, realSource, parentSnapshot, cbt, uploaderCfg, tags, log)
+	snapshotInfo, _, err := blockBackupFunc(ctx, blkUploader, bp.bkRepo, path, realSource, cbtSource, parentSnapshot, cbt, uploaderCfg, tags, log)
 
 	if err == block.ErrCanceled {
 		log.Warn("Block backup is canceled")
@@ -206,19 +191,19 @@ func (bp *blockProvider) RunRestore(
 	return size, nil
 }
 
-func (bp *blockProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (*uploader.SnapshotInfo, error) {
+func (bp *blockProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (string, error) {
 	if path == "" {
-		return nil, errors.New("path is empty")
+		return "", errors.New("path is empty")
 	}
 
 	if realSource != "" {
 		realSource = fmt.Sprintf("%s/%s/%s", bp.requestorType, uploader.KopiaType, realSource)
 	}
 
-	snapshotInfo, err := blockGetParentSnapshotFunc(ctx, bp.bkRepo, path, realSource, parentSnapshot, bp.requestorType, bp.log)
+	snapshot, err := blockGetParentSnapshotFunc(ctx, bp.bkRepo, path, realSource, parentSnapshot, bp.requestorType, bp.log)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
+		return "", errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
 	}
 
-	return snapshotInfo, nil
+	return snapshot, nil
 }

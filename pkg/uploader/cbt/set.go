@@ -1,0 +1,80 @@
+/*
+Copyright The Velero Contributors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package cbt
+
+import (
+	"context"
+
+	"github.com/pkg/errors"
+
+	"github.com/vmware-tanzu/velero/pkg/cbtservice"
+)
+
+func SetBitmapOrFull(ctx context.Context, service cbtservice.Service, bitmap Bitmap) error {
+	var err error
+	if bitmap.ChangeID() == "" {
+		err = setFromAllocatedBlocks(ctx, service, bitmap)
+	} else {
+		err = setFromChangedBlocks(ctx, service, bitmap)
+	}
+
+	if err != nil {
+		bitmap.SetFull()
+	}
+
+	return err
+}
+
+func setFromAllocatedBlocks(ctx context.Context, service cbtservice.Service, bitmap Bitmap) error {
+	if service == nil {
+		return errors.New("CBT service is absent")
+	}
+
+	if bitmap.SourceID() == "" {
+		return errors.New("invalid source ID")
+	}
+
+	err := service.GetAllocatedBlocks(ctx, bitmap.SourceID(), func(blocks []cbtservice.Range) error {
+		for _, b := range blocks {
+			bitmap.Set(b.Offset, b.Length)
+		}
+
+		return nil
+	})
+
+	return errors.Wrapf(err, "error getting allocated blocks from CBT service")
+}
+
+func setFromChangedBlocks(ctx context.Context, service cbtservice.Service, bitmap Bitmap) error {
+	if service == nil {
+		return errors.New("CBT service is absent")
+	}
+
+	if bitmap.SourceID() == "" {
+		return errors.New("invalid source ID")
+	}
+
+	err := service.GetChangedBlocks(ctx, bitmap.SourceID(), bitmap.ChangeID(), func(blocks []cbtservice.Range) error {
+		for _, b := range blocks {
+			bitmap.Set(b.Offset, b.Length)
+		}
+
+		return nil
+	})
+
+	return errors.Wrapf(err, "error getting allocated blocks from CBT service")
+}

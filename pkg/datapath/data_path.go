@@ -26,11 +26,11 @@ import (
 
 	"github.com/vmware-tanzu/velero/internal/credentials"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	"github.com/vmware-tanzu/velero/pkg/repository"
 	repokey "github.com/vmware-tanzu/velero/pkg/repository/keys"
 	repoProvider "github.com/vmware-tanzu/velero/pkg/repository/provider"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
-	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 	"github.com/vmware-tanzu/velero/pkg/uploader/provider"
 	"github.com/vmware-tanzu/velero/pkg/util/filesystem"
 )
@@ -52,7 +52,8 @@ type InitParam struct {
 type BackupStartParam struct {
 	RealSource     string
 	ParentSnapshot string
-	CBT            cbt.Iterator
+	CBT            cbtservice.Service
+	CBTSourceInfo  cbtservice.SourceInfo
 	Tags           map[string]string
 }
 
@@ -186,11 +187,11 @@ func (dp *genearalDataPath) StartBackup(source AccessPoint, uploaderConfig map[s
 		parent, err := dp.uploaderProv.GetParentSnapshot(dp.ctx, source.ByPath, backupParam.RealSource, backupParam.ParentSnapshot)
 		if err != nil {
 			dp.log.Warnf("Failed to load parent snapshot for source %s (%s), run full backup", source.ByPath, backupParam.RealSource)
-		} else if parent == nil {
+		} else if parent == "" {
 			dp.log.Warnf("Parent snapshot is empty for source %s (%s), run full backup", source.ByPath, backupParam.RealSource)
 		}
 
-		snapshotInfo, emptySnapshot, err := dp.uploaderProv.RunBackup(dp.ctx, source.ByPath, backupParam.RealSource, backupParam.Tags,
+		snapshotInfo, emptySnapshot, err := dp.uploaderProv.RunBackup(dp.ctx, source.ByPath, backupParam.RealSource, backupParam.CBTSourceInfo, backupParam.Tags,
 			parent, backupParam.CBT, source.VolMode, uploaderConfig, dp)
 
 		if err == provider.ErrorCanceled {

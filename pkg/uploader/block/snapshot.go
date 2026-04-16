@@ -19,19 +19,21 @@ package block
 import (
 	"context"
 	"io"
+	"maps"
 	"path/filepath"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
+	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/uploader"
 	"github.com/vmware-tanzu/velero/pkg/uploader/cbt"
 )
 
 // Backup backup specific sourcePath and update progress
-func Backup(ctx context.Context, blkup Uploader, repoWriter udmrepo.BackupRepo, sourcePath string, realSource string,
-	parentSnapshot *uploader.SnapshotInfo, cbt cbt.Iterator, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
+func Backup(ctx context.Context, blkup Uploader, repoWriter udmrepo.BackupRepo, sourcePath string, realSource string, cbtSource cbtservice.SourceInfo,
+	parentSnapshot string, cbtservice cbtservice.Service, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
 	if blkup == nil {
 		return uploader.SnapshotInfo{}, false, errors.New("get empty block uploader")
 	}
@@ -66,7 +68,7 @@ func Backup(ctx context.Context, blkup Uploader, repoWriter udmrepo.BackupRepo, 
 		return uploader.SnapshotInfo{}, false, errors.Wrapf(err, "error reset pos of block device %s", source)
 	}
 
-	snapID, backupSize, err := SnapshotSource(ctx, repoWriter, blkup, sourceInfo, parentSnapshot, cbt, tags, uploaderCfg, log, "Block Uploader")
+	snapID, backupSize, err := SnapshotSource(ctx, repoWriter, blkup, sourceInfo, parentSnapshot, cbtSource, cbtservice, tags, uploaderCfg, log, "Block Uploader")
 	snapshotInfo := uploader.SnapshotInfo{
 		ID:              snapID,
 		Size:            sourceInfo.size,
@@ -81,8 +83,9 @@ func SnapshotSource(
 	rep udmrepo.BackupRepo,
 	u Uploader,
 	source sourceInfo,
-	parentSnapshot *uploader.SnapshotInfo,
-	cbt cbt.Iterator,
+	parentSnapshot string,
+	cbtSource cbtservice.SourceInfo,
+	cbtservice cbtservice.Service,
 	snapshotTags map[string]string,
 	uploaderCfg map[string]string,
 	log logrus.FieldLogger,
@@ -92,28 +95,55 @@ func SnapshotSource(
 	snapshotStartTime := time.Now()
 
 	var previous *udmrepo.Snapshot
-	if parentSnapshot != nil {
-		snap, err := loadSnapshot(ctx, rep, parentSnapshot)
+	if parentSnapshot != "" {
+		snap, err := rep.GetSnapshot(ctx, udmrepo.ID(parentSnapshot))
 		if err != nil {
 			log.WithError(err).Warn("Failed to load previous snapshot, fallback to full backup")
 		} else {
-			previous = snap
-			log.Infof("Using provided parent snapshot %s", parentSnapshot.ID)
+			previous = &snap
+			log.Infof("Using provided parent snapshot %s", parentSnapshot)
 		}
 	} else {
-		log.Info("Running full snapshot")
+		log.Info("No parent snapshot, running full snapshot")
 	}
 
+	var parentObject udmrepo.ID
+	changeID := ""
 	if previous != nil {
-		log.Infof("Using parent snapshot %s, start time %v, end time %v, description %s", parentSnapshot.ID, previous.StartTime, previous.EndTime, previous.Description)
+		log.Infof("Using parent snapshot %s, start time %v, end time %v, description %s", parentSnapshot, previous.StartTime, previous.EndTime, previous.Description)
+		parentObject = previous.RootObject
+
+		if previous.Tags == nil {
+			log.Warnf("No tag from parent snapshot %s, fallback to full backup", parentSnapshot)
+		} else if previous.Tags[uploader.CBTChangeIDTag] == "" {
+			log.Warnf("No ChangeID tag from parent snapshot %s, fallback to full backup", parentSnapshot)
+		} else {
+			changeID = previous.Tags[uploader.CBTChangeIDTag]
+		}
 	}
 
-	snap, backupSize, err := u.Backup(source, previous, cbt, uploaderCfg)
+	bitmap := cbt.NewBitmap(blockSize, source.size, cbtSource.Snapshot, changeID)
+
+	err := cbt.SetBitmapOrFull(ctx, cbtservice, bitmap)
+	if err != nil {
+		log.WithError(err).Warnf("Failed to create CBT with source %v and previous snapshot %v", cbtservice, previous)
+	}
+
+	snap, backupSize, err := u.Backup(source, parentObject, bitmap.Iterator(), uploaderCfg)
 	if err != nil {
 		return "", 0, errors.Wrapf(err, "Failed to run uploader backup for si %v", source)
 	}
 
+	snap.Tags = make(map[string]string)
+	snap.Tags[uploader.CBTChangeIDTag] = cbtSource.ChangeID
+	if snapshotTags != nil {
+		maps.Copy(snap.Tags, snapshotTags)
+	}
+
 	snap.Tags = snapshotTags
+	if snap.Tags == nil {
+		snap.Tags = make(map[string]string)
+	}
 	snap.Description = description
 
 	snapID, err := rep.SaveSnapshot(ctx, snap)
@@ -128,31 +158,6 @@ func SnapshotSource(
 	log.Infof("Created snapshot with root %v and ID %v in %v", snap.RootObject, snapID, time.Since(snapshotStartTime).Truncate(time.Second))
 
 	return string(snapID), backupSize, nil
-}
-
-func loadSnapshot(ctx context.Context, rep udmrepo.BackupRepo, snapInfo *uploader.SnapshotInfo) (*udmrepo.Snapshot, error) {
-	snap, err := rep.GetSnapshot(ctx, udmrepo.ID(snapInfo.ID))
-	if err != nil {
-		return nil, errors.Wrapf(err, "error loading snapshot %s", snapInfo.ID)
-	}
-
-	if snap.Tags == nil {
-		return nil, errors.Errorf("no tags from snapshot %s", snapInfo.ID)
-	}
-
-	if id, found := snap.Tags[uploader.SnapshotSourceIDTag]; !found {
-		return nil, errors.Errorf("no snapshot source from snapshot %s", snapInfo.ID)
-	} else if snapInfo.SourceID != id {
-		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", snapInfo.SourceID, id, snapInfo.ID)
-	}
-
-	if id, found := snap.Tags[uploader.SnapshotSnapshotIDTag]; !found {
-		return nil, errors.Errorf("no snapshot ID from snapshot %s", snapInfo.ID)
-	} else if snapInfo.SnapshotID != id {
-		return nil, errors.Errorf("snapshot ID is not expected (%s vs. %s) from snapshot %s", snapInfo.SnapshotID, id, snapInfo.ID)
-	}
-
-	return &snap, nil
 }
 
 // Restore restore specific sourcePath with given snapshotID and update progress
@@ -227,10 +232,10 @@ func findPreviousSnapshot(ctx context.Context, rep udmrepo.BackupRepo, path stri
 	return *previous, nil
 }
 
-func GetParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (*uploader.SnapshotInfo, error) {
+func GetParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (string, error) {
 	source, err := filepath.Abs(sourcePath)
 	if err != nil {
-		return nil, errors.Wrapf(err, "invalid source path '%s'", sourcePath)
+		return "", errors.Wrapf(err, "invalid source path '%s'", sourcePath)
 	}
 
 	source = filepath.Clean(source)
@@ -244,7 +249,7 @@ func GetParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, sourcePath s
 
 		snap, err := rep.GetSnapshot(ctx, udmrepo.ID(parentSnapshot))
 		if err != nil {
-			return nil, errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
+			return "", errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
 		}
 
 		previous = snap
@@ -253,20 +258,11 @@ func GetParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, sourcePath s
 
 		mani, err := findPreviousSnapshot(ctx, rep, source, requestor, nil, log)
 		if err != nil {
-			return nil, errors.Wrapf(err, "error finding previous snapshot for %s", source)
+			return "", errors.Wrapf(err, "error finding previous snapshot for %s", source)
 		}
 
 		previous = mani
 	}
 
-	info := &uploader.SnapshotInfo{
-		ID: string(previous.ID),
-	}
-
-	if previous.Tags != nil {
-		info.SourceID = previous.Tags[uploader.SnapshotSourceIDTag]
-		info.SnapshotID = previous.Tags[uploader.SnapshotSnapshotIDTag]
-	}
-
-	return info, nil
+	return string(previous.ID), nil
 }
