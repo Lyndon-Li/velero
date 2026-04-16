@@ -305,10 +305,10 @@ func loadParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, parent *
 		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", parent.SourceID, id, parent.ID)
 	}
 
-	if id, found := mani.Tags[uploader.SnapshotChangeIDTag]; !found {
-		return nil, errors.Errorf("no change ID from snapshot %s", parent.ID)
-	} else if parent.ChangeID != id {
-		return nil, errors.Errorf("change ID is not expected (%s vs. %s) from snapshot %s", parent.ChangeID, id, parent.ID)
+	if id, found := mani.Tags[uploader.SnapshotSnapshotIDTag]; !found {
+		return nil, errors.Errorf("no snapshot ID from snapshot %s", parent.ID)
+	} else if parent.SnapshotID != id {
+		return nil, errors.Errorf("snapshot ID is not expected (%s vs. %s) from snapshot %s", parent.SnapshotID, id, parent.ID)
 	}
 
 	return mani, nil
@@ -507,7 +507,7 @@ func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePat
 
 	if previous.Tags != nil {
 		info.SourceID = previous.Tags[uploader.SnapshotSourceIDTag]
-		info.ChangeID = previous.Tags[uploader.SnapshotChangeIDTag]
+		info.SnapshotID = previous.Tags[uploader.SnapshotSnapshotIDTag]
 	}
 
 	return info, nil

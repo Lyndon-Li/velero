@@ -146,10 +146,10 @@ func loadSnapshot(ctx context.Context, rep udmrepo.BackupRepo, snapInfo *uploade
 		return nil, errors.Errorf("source ID is not expected (%s vs. %s) from snapshot %s", snapInfo.SourceID, id, snapInfo.ID)
 	}
 
-	if id, found := snap.Tags[uploader.SnapshotChangeIDTag]; !found {
-		return nil, errors.Errorf("no change ID from snapshot %s", snapInfo.ID)
-	} else if snapInfo.ChangeID != id {
-		return nil, errors.Errorf("change ID is not expected (%s vs. %s) from snapshot %s", snapInfo.ChangeID, id, snapInfo.ID)
+	if id, found := snap.Tags[uploader.SnapshotSnapshotIDTag]; !found {
+		return nil, errors.Errorf("no snapshot ID from snapshot %s", snapInfo.ID)
+	} else if snapInfo.SnapshotID != id {
+		return nil, errors.Errorf("snapshot ID is not expected (%s vs. %s) from snapshot %s", snapInfo.SnapshotID, id, snapInfo.ID)
 	}
 
 	return &snap, nil
@@ -265,7 +265,7 @@ func GetParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, sourcePath s
 
 	if previous.Tags != nil {
 		info.SourceID = previous.Tags[uploader.SnapshotSourceIDTag]
-		info.ChangeID = previous.Tags[uploader.SnapshotChangeIDTag]
+		info.SnapshotID = previous.Tags[uploader.SnapshotSnapshotIDTag]
 	}
 
 	return info, nil
