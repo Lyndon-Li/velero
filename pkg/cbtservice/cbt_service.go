@@ -31,6 +31,9 @@ type SourceInfo struct {
 
 	// ChangeID is the identifier associated to the current snapshot that could be used as changeID for CBT service calls
 	ChangeID string
+
+	// VolumeID is the identifier uniquely identifier a volume in the storage to which the CBT is associated
+	VolumeID string
 }
 
 // Service defines the methods for CBT service which could be implemented by Kubernetes SnapshotMetadataService or other customized servicesCollapse commentComment on line R27kaovilai commented on Apr 14, 2026 kaovilaion Apr 14, 2026CollaboratorMore actionsAre there plans for non k8s CBT?ReactLyndon-Li replied on Apr 14, 2026 Lyndon-Lion Apr 14, 2026ContributorAuthorMore actionsNo plan for it, but leave a space for it in the interface design.ReactWrite a replyResolve comment

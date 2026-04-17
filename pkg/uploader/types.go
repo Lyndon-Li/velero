@@ -28,6 +28,7 @@ const (
 	SnapshotRequesterTag = "snapshot-requester"
 	SnapshotUploaderTag  = "snapshot-uploader"
 	CBTChangeIDTag       = "cbt-change-id"
+	CBTVolumeIDTag       = "cbt-volume-id"
 )
 
 type PersistentVolumeMode string
