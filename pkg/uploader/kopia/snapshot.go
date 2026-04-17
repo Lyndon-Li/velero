@@ -152,7 +152,7 @@ func setupPolicy(ctx context.Context, rep repo.RepositoryWriter, sourceInfo snap
 
 // Backup backup specific sourcePath and update progress
 func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.RepositoryWriter, sourcePath string, realSource string,
-	parentSnapshot string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
+	forceFull bool, parentSnapshot string, volMode uploader.PersistentVolumeMode, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
 	if fsUploader == nil {
 		return uploader.SnapshotInfo{}, false, errors.New("get empty kopia uploader")
 	}
@@ -188,7 +188,7 @@ func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.Re
 
 	kopiaCtx := kopia.SetupKopiaLog(ctx, log)
 
-	snapID, snapshotSize, err := SnapshotSource(kopiaCtx, repoWriter, fsUploader, sourceInfo, sourceEntry, parentSnapshot, tags, uploaderCfg, log, "Kopia Uploader")
+	snapID, snapshotSize, err := SnapshotSource(kopiaCtx, repoWriter, fsUploader, sourceInfo, sourceEntry, forceFull, parentSnapshot, tags, uploaderCfg, log, "Kopia Uploader")
 	snapshotInfo := uploader.SnapshotInfo{
 		ID:   snapID,
 		Size: snapshotSize,
@@ -232,6 +232,7 @@ func SnapshotSource(
 	u SnapshotUploader,
 	sourceInfo snapshot.SourceInfo,
 	rootDir fs.Entry,
+	forceFull bool,
 	parentSnapshot string,
 	snapshotTags map[string]string,
 	uploaderCfg map[string]string,
@@ -242,16 +243,28 @@ func SnapshotSource(
 	snapshotStartTime := time.Now()
 
 	var previous []*snapshot.Manifest
-	if parentSnapshot != "" {
-		mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
-		if err != nil {
-			log.WithError(err).Warn("Failed to load previous snapshot from kopia, fallback to full backup")
-		} else {
-			previous = append(previous, mani)
+	if !forceFull {
+		if parentSnapshot != "" {
 			log.Infof("Using provided parent snapshot %s", parentSnapshot)
+
+			mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
+			if err != nil {
+				log.WithError(err).Warnf("Failed to load previous snapshot %v from kopia, fallback to full backup", parentSnapshot)
+			} else {
+				previous = append(previous, mani)
+			}
+		} else {
+			log.Infof("Searching for parent snapshot")
+
+			pre, err := findPreviousSnapshotManifest(ctx, rep, sourceInfo, snapshotTags, nil, log)
+			if err != nil {
+				return "", 0, errors.Wrapf(err, "Failed to find previous kopia snapshot manifests for si %v", sourceInfo)
+			}
+
+			previous = pre
 		}
 	} else {
-		log.Info("No parent snapshot, running full snapshot")
+		log.Info("Forcing full snapshot")
 	}
 
 	for i := range previous {
@@ -316,13 +329,14 @@ func reportSnapshotStatus(manifest *snapshot.Manifest, policyTree *policy.Tree) 
 
 // findPreviousSnapshotManifest returns the list of previous snapshots for a given source, including
 // last complete snapshot following it.
-func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sourceInfo snapshot.SourceInfo, requestor string, noLaterThan *fs.UTCTimestamp, log logrus.FieldLogger) (*snapshot.Manifest, error) {
+func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sourceInfo snapshot.SourceInfo, snapshotTags map[string]string, noLaterThan *fs.UTCTimestamp, log logrus.FieldLogger) ([]*snapshot.Manifest, error) {
 	man, err := listSnapshotsFunc(ctx, rep, sourceInfo)
 	if err != nil {
 		return nil, err
 	}
 
 	var previousComplete *snapshot.Manifest
+	var result []*snapshot.Manifest
 
 	for _, p := range man {
 		log.Debugf("Found one snapshot %s, start time %v, incomplete %s, tags %v", p.ID, p.StartTime.ToTime(), p.IncompleteReason, p.Tags)
@@ -332,7 +346,7 @@ func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sour
 			continue
 		}
 
-		if requester != requestor {
+		if requester != snapshotTags[uploader.SnapshotRequesterTag] {
 			continue
 		}
 
@@ -341,7 +355,7 @@ func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sour
 			continue
 		}
 
-		if uploaderName != uploader.KopiaType {
+		if uploaderName != snapshotTags[uploader.SnapshotUploaderTag] {
 			continue
 		}
 
@@ -354,7 +368,11 @@ func findPreviousSnapshotManifest(ctx context.Context, rep repo.Repository, sour
 		}
 	}
 
-	return previousComplete, nil
+	if previousComplete != nil {
+		result = append(result, previousComplete)
+	}
+
+	return result, nil
 }
 
 // Restore restore specific sourcePath with given snapshotID and update progress
@@ -436,45 +454,4 @@ func Restore(ctx context.Context, rep repo.RepositoryWriter, progress *Progress,
 		return 0, 0, errors.Wrapf(err, "Failed to copy snapshot data to the target")
 	}
 	return stat.RestoredTotalFileSize, stat.RestoredFileCount, nil
-}
-
-func GetParentSnapshot(ctx context.Context, rep repo.RepositoryWriter, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (string, error) {
-	source, err := filepath.Abs(sourcePath)
-	if err != nil {
-		return "", errors.Wrapf(err, "invalid source path '%s'", sourcePath)
-	}
-
-	source = filepath.Clean(source)
-
-	sourceInfo := snapshot.SourceInfo{
-		UserName: udmrepo.GetRepoUser(),
-		Host:     udmrepo.GetRepoDomain(),
-		Path:     filepath.Clean(realSource),
-	}
-	if realSource == "" {
-		sourceInfo.Path = source
-	}
-
-	var previous *snapshot.Manifest
-	if parentSnapshot != "" {
-		log.Infof("Using provided parent snapshot %s", parentSnapshot)
-
-		mani, err := loadSnapshotFunc(ctx, rep, manifest.ID(parentSnapshot))
-		if err != nil {
-			return "", errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
-		}
-
-		previous = mani
-	} else {
-		log.Infof("Searching for parent snapshot")
-
-		mani, err := findPreviousSnapshotManifest(ctx, rep, sourceInfo, requestor, nil, log)
-		if err != nil {
-			return "", errors.Wrapf(err, "error finding previous kopia snapshot manifests for si %v", sourceInfo)
-		}
-
-		previous = mani
-	}
-
-	return string(previous.ID), nil
 }

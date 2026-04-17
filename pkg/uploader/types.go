@@ -67,3 +67,10 @@ type Progress struct {
 type ProgressUpdater interface {
 	UpdateProgress(p *Progress)
 }
+
+type BackupType string
+
+const (
+	BackupTypeFull        = "backup-type-full"
+	BackupTypeIncremental = "backup-type-incremental"
+)

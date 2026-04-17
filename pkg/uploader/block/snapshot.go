@@ -38,7 +38,7 @@ type parentBackupInfo struct {
 
 // Backup backup specific sourcePath and update progress
 func Backup(ctx context.Context, blkup Uploader, repoWriter udmrepo.BackupRepo, sourcePath string, realSource string, cbtSource cbtservice.SourceInfo,
-	parentSnapshot string, cbtservice cbtservice.Service, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
+	forceFull bool, parentSnapshot string, cbtservice cbtservice.Service, uploaderCfg map[string]string, tags map[string]string, log logrus.FieldLogger) (uploader.SnapshotInfo, bool, error) {
 	if blkup == nil {
 		return uploader.SnapshotInfo{}, false, errors.New("get empty block uploader")
 	}
@@ -73,7 +73,7 @@ func Backup(ctx context.Context, blkup Uploader, repoWriter udmrepo.BackupRepo, 
 		return uploader.SnapshotInfo{}, false, errors.Wrapf(err, "error reset pos of block device %s", source)
 	}
 
-	snapID, backupSize, err := SnapshotSource(ctx, repoWriter, blkup, sourceInfo, parentSnapshot, cbtSource, cbtservice, tags, uploaderCfg, log, "Block Uploader")
+	snapID, backupSize, err := SnapshotSource(ctx, repoWriter, blkup, sourceInfo, forceFull, parentSnapshot, cbtSource, cbtservice, tags, uploaderCfg, log, "Block Uploader")
 	snapshotInfo := uploader.SnapshotInfo{
 		ID:              snapID,
 		Size:            sourceInfo.size,
@@ -88,6 +88,7 @@ func SnapshotSource(
 	rep udmrepo.BackupRepo,
 	u Uploader,
 	source sourceInfo,
+	forceFull bool,
 	parentSnapshot string,
 	cbtSource cbtservice.SourceInfo,
 	cbtservice cbtservice.Service,
@@ -99,14 +100,14 @@ func SnapshotSource(
 	log.Info("Start to snapshot...")
 	snapshotStartTime := time.Now()
 
-	parentBackup := getParentBackupInfo(ctx, rep, parentSnapshot, cbtSource.VolumeID, log)
+	parentBackup := getParentBackupInfo(ctx, rep, forceFull, parentSnapshot, cbtSource.VolumeID, source.realSource, snapshotTags, log)
 
 	bitmap := cbt.NewBitmap(blockSize, source.size, cbtSource.Snapshot, parentBackup.changeID)
 
 	err := cbt.SetBitmapOrFull(ctx, cbtservice, bitmap)
 	if err != nil {
 		parentBackup.parentObject = ""
-		log.WithError(err).Warnf("Failed to create CBT with source %v, fallback to full backup", cbtSource)
+		log.WithError(err).Warnf("Failed to create CBT with source %v, fallback to real full backup", cbtSource)
 	}
 
 	snap, backupSize, err := u.Backup(source, parentBackup.parentObject, bitmap.Iterator(), uploaderCfg)
@@ -137,18 +138,30 @@ func SnapshotSource(
 	return string(snapID), backupSize, nil
 }
 
-func getParentBackupInfo(ctx context.Context, rep udmrepo.BackupRepo, parentSnapshot string, volumeID string, log logrus.FieldLogger) parentBackupInfo {
+func getParentBackupInfo(ctx context.Context, rep udmrepo.BackupRepo, forceFull bool, parentSnapshot string, volumeID string, realSource string, snapshotTags map[string]string, log logrus.FieldLogger) parentBackupInfo {
 	var previous *udmrepo.Snapshot
-	if parentSnapshot != "" {
-		snap, err := rep.GetSnapshot(ctx, udmrepo.ID(parentSnapshot))
-		if err != nil {
-			log.WithError(err).Warn("Failed to load previous snapshot, fallback to full backup")
+	if !forceFull {
+		if parentSnapshot != "" {
+			snap, err := rep.GetSnapshot(ctx, udmrepo.ID(parentSnapshot))
+			if err != nil {
+				log.WithError(err).Warn("Failed to load previous snapshot, fallback to full backup")
+			} else {
+				previous = &snap
+				log.Infof("Using provided parent snapshot %s", parentSnapshot)
+			}
 		} else {
-			previous = &snap
-			log.Infof("Using provided parent snapshot %s", parentSnapshot)
+			log.Infof("Searching for parent snapshot")
+
+			snap, err := findPreviousSnapshot(ctx, rep, realSource, snapshotTags, nil, log)
+			if err != nil {
+				log.WithError(err).Warn("Failed to search previous snapshot, fallback to full backup")
+			} else {
+				previous = &snap
+				log.Infof("Using previous snapshot %s", snap.ID)
+			}
 		}
 	} else {
-		log.Info("No parent snapshot, running full snapshot")
+		log.Info("Forcing full snapshot")
 	}
 
 	parentInfo := parentBackupInfo{}
@@ -203,7 +216,7 @@ func Restore(ctx context.Context, blkup Uploader, rep udmrepo.BackupRepo, snapsh
 	return size, nil
 }
 
-func findPreviousSnapshot(ctx context.Context, rep udmrepo.BackupRepo, path string, requestor string, noLaterThan *time.Time, log logrus.FieldLogger) (udmrepo.Snapshot, error) {
+func findPreviousSnapshot(ctx context.Context, rep udmrepo.BackupRepo, path string, snapshotTags map[string]string, noLaterThan *time.Time, log logrus.FieldLogger) (udmrepo.Snapshot, error) {
 	snaps, err := rep.ListSnapshot(ctx, path)
 	if err != nil {
 		return udmrepo.Snapshot{}, errors.Wrapf(err, "error list snapshots for %s", path)
@@ -219,7 +232,7 @@ func findPreviousSnapshot(ctx context.Context, rep udmrepo.BackupRepo, path stri
 			continue
 		}
 
-		if requester != requestor {
+		if requester != snapshotTags[uploader.SnapshotRequesterTag] {
 			continue
 		}
 
@@ -242,39 +255,4 @@ func findPreviousSnapshot(ctx context.Context, rep udmrepo.BackupRepo, path stri
 	}
 
 	return *previous, nil
-}
-
-func GetParentSnapshot(ctx context.Context, rep udmrepo.BackupRepo, sourcePath string, realSource string, parentSnapshot string, requestor string, log logrus.FieldLogger) (string, error) {
-	source, err := filepath.Abs(sourcePath)
-	if err != nil {
-		return "", errors.Wrapf(err, "invalid source path '%s'", sourcePath)
-	}
-
-	source = filepath.Clean(source)
-	if realSource != "" {
-		source = filepath.Clean(realSource)
-	}
-
-	var previous udmrepo.Snapshot
-	if parentSnapshot != "" {
-		log.Infof("Using provided parent snapshot %s", parentSnapshot)
-
-		snap, err := rep.GetSnapshot(ctx, udmrepo.ID(parentSnapshot))
-		if err != nil {
-			return "", errors.Wrapf(err, "error loading snapshot %v from kopia", parentSnapshot)
-		}
-
-		previous = snap
-	} else {
-		log.Infof("Searching for parent snapshot")
-
-		mani, err := findPreviousSnapshot(ctx, rep, source, requestor, nil, log)
-		if err != nil {
-			return "", errors.Wrapf(err, "error finding previous snapshot for %s", source)
-		}
-
-		previous = mani
-	}
-
-	return string(previous.ID), nil
 }

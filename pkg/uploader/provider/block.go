@@ -34,7 +34,6 @@ import (
 
 var blockBackupFunc = block.Backup
 var blockRestoreFunc = block.Restore
-var blockGetParentSnapshotFunc = block.GetParentSnapshot
 
 type blockProvider struct {
 	requestorType string
@@ -101,6 +100,7 @@ func (bp *blockProvider) RunBackup(
 	realSource string,
 	cbtSource cbtservice.SourceInfo,
 	tags map[string]string,
+	forceFull bool,
 	parentSnapshot string,
 	cbt cbtservice.Service,
 	volMode uploader.PersistentVolumeMode,
@@ -132,7 +132,7 @@ func (bp *blockProvider) RunBackup(
 		realSource = fmt.Sprintf("%s/%s/%s", bp.requestorType, uploader.BlockType, realSource)
 	}
 
-	snapshotInfo, _, err := blockBackupFunc(ctx, blkUploader, bp.bkRepo, path, realSource, cbtSource, parentSnapshot, cbt, uploaderCfg, tags, log)
+	snapshotInfo, _, err := blockBackupFunc(ctx, blkUploader, bp.bkRepo, path, realSource, cbtSource, forceFull, parentSnapshot, cbt, uploaderCfg, tags, log)
 
 	if err == block.ErrCanceled {
 		log.Warn("Block backup is canceled")
@@ -189,21 +189,4 @@ func (bp *blockProvider) RunRestore(
 	log.Info("Block restore finished, restore size %d", size)
 
 	return size, nil
-}
-
-func (bp *blockProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (string, error) {
-	if path == "" {
-		return "", errors.New("path is empty")
-	}
-
-	if realSource != "" {
-		realSource = fmt.Sprintf("%s/%s/%s", bp.requestorType, uploader.KopiaType, realSource)
-	}
-
-	snapshot, err := blockGetParentSnapshotFunc(ctx, bp.bkRepo, path, realSource, parentSnapshot, bp.requestorType, bp.log)
-	if err != nil {
-		return "", errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
-	}
-
-	return snapshot, nil
 }

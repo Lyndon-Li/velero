@@ -39,7 +39,6 @@ import (
 
 var kopiaBackupFunc = kopia.Backup
 var kopiaRestoreFunc = kopia.Restore
-var kopiaGetParentSnapshotFunc = kopia.GetParentSnapshot
 var BackupRepoServiceCreateFunc = service.Create
 
 // kopiaProvider recorded info related with kopiaProvider
@@ -118,6 +117,7 @@ func (kp *kopiaProvider) RunBackup(
 	realSource string,
 	cbtSource cbtservice.SourceInfo,
 	tags map[string]string,
+	forceFull bool,
 	parentSnapshot string,
 	cbt cbtservice.Service,
 	volMode uploader.PersistentVolumeMode,
@@ -166,7 +166,7 @@ func (kp *kopiaProvider) RunBackup(
 		uploaderCfg[kopia.UploaderConfigMultipartKey] = "true"
 	}
 
-	snapshotInfo, _, err := kopiaBackupFunc(ctx, kpUploader, repoWriter, path, realSource, parentSnapshot, volMode, uploaderCfg, tags, log)
+	snapshotInfo, _, err := kopiaBackupFunc(ctx, kpUploader, repoWriter, path, realSource, forceFull, parentSnapshot, volMode, uploaderCfg, tags, log)
 	if err != nil {
 		if snapshotInfo.ID == "" {
 			log.Infof("Kopia backup failed with %v and get empty snapshot ID", err)
@@ -255,21 +255,4 @@ func (kp *kopiaProvider) RunRestore(
 	log.Info(output)
 
 	return size, nil
-}
-
-func (kp *kopiaProvider) GetParentSnapshot(ctx context.Context, path string, realSource string, parentSnapshot string) (string, error) {
-	if path == "" {
-		return "", errors.New("path is empty")
-	}
-
-	if realSource != "" {
-		realSource = fmt.Sprintf("%s/%s/%s", kp.requestorType, uploader.KopiaType, realSource)
-	}
-
-	snapshot, err := kopiaGetParentSnapshotFunc(ctx, kopia.NewShimRepo(kp.bkRepo), path, realSource, parentSnapshot, kp.requestorType, kp.log)
-	if err != nil {
-		return "", errors.Wrapf(err, "error getting parent snapshot for path %s, realSource %s, snapshot ID %s", path, realSource, parentSnapshot)
-	}
-
-	return snapshot, nil
 }

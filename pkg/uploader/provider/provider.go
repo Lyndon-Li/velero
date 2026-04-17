@@ -48,6 +48,7 @@ type Provider interface {
 		realSource string,
 		cbtSource cbtservice.SourceInfo,
 		tags map[string]string,
+		forceFull bool,
 		parentSnapshot string,
 		cbt cbtservice.Service,
 		volMode uploader.PersistentVolumeMode,
@@ -63,14 +64,6 @@ type Provider interface {
 		volMode uploader.PersistentVolumeMode,
 		uploaderConfig map[string]string,
 		updater uploader.ProgressUpdater) (int64, error)
-
-	// GetParentSnapshot find the parent snapshot for the given source
-	GetParentSnapshot(
-		ctx context.Context,
-		path string,
-		realSource string,
-		parentSnapshot string,
-	) (string, error)
 
 	// Close which will close related repository
 	Close(ctx context.Context) error

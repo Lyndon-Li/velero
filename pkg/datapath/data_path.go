@@ -184,15 +184,8 @@ func (dp *genearalDataPath) StartBackup(source AccessPoint, uploaderConfig map[s
 			dp.wgDataPath.Done()
 		}()
 
-		parent, err := dp.uploaderProv.GetParentSnapshot(dp.ctx, source.ByPath, backupParam.RealSource, backupParam.ParentSnapshot)
-		if err != nil {
-			dp.log.Warnf("Failed to load parent snapshot for source %s (%s), run full backup", source.ByPath, backupParam.RealSource)
-		} else if parent == "" {
-			dp.log.Warnf("Parent snapshot is empty for source %s (%s), run full backup", source.ByPath, backupParam.RealSource)
-		}
-
 		snapshotInfo, emptySnapshot, err := dp.uploaderProv.RunBackup(dp.ctx, source.ByPath, backupParam.RealSource, backupParam.CBTSourceInfo, backupParam.Tags,
-			parent, backupParam.CBT, source.VolMode, uploaderConfig, dp)
+			false, backupParam.ParentSnapshot, backupParam.CBT, source.VolMode, uploaderConfig, dp)
 
 		if err == provider.ErrorCanceled {
 			dp.callbacks.OnCancelled(context.Background(), dp.namespace, dp.jobName)
