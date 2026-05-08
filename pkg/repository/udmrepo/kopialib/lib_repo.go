@@ -19,6 +19,7 @@ package kopialib
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -43,6 +44,7 @@ import (
 	"github.com/vmware-tanzu/velero/pkg/kopia"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/kopialib/backend"
+	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/kopialib/freelist"
 )
 
 type kopiaRepoService struct {
@@ -81,16 +83,21 @@ type kopiaObjectWriter struct {
 }
 
 type kopiaObjectWriterEx struct {
-	ctx           context.Context
-	rawRepoWriter repo.RepositoryWriter
-	parentEntries []object.IndirectObjectEntry
-	entries       []object.IndirectObjectEntry
-	entryLock     sync.Mutex
-	blockSize     int64
-	description   string
-	compressor    compression.Name
-	splitter      string
-	logger        logrus.FieldLogger
+	ctx              context.Context
+	rawRepoWriter    repo.RepositoryWriter
+	parentEntries    []object.IndirectObjectEntry
+	entries          []object.IndirectObjectEntry
+	entryLock        sync.Mutex
+	blockSize        int64
+	description      string
+	compressor       compression.Name
+	splitter         string
+	writeLock        sync.Mutex
+	asyncWritesSem   chan struct{}
+	asyncWritesGroup sync.WaitGroup
+	asyncBuffer      *freelist.FreeList
+	writeError       atomic.Value
+	logger           logrus.FieldLogger
 }
 
 type openOptions struct {
@@ -104,6 +111,7 @@ const (
 	overwriteQuickMaintainInterval = time.Duration(0)
 	repoBackend                    = "kopia"
 	fixedSplitter1M                = "FIXED-1M"
+	fixedSplitter128K              = "FIXED-128K"
 	fixedBlockSize                 = 1 << 20
 )
 
@@ -457,15 +465,24 @@ func (kr *kopiaRepository) NewObjectWriter(ctx context.Context, opt udmrepo.Obje
 			kr.logger.Infof("Write object %s in block mode without parent", opt.Description)
 		}
 
+		var asyncWritesSem chan struct{}
+		var asyncBuffer *freelist.FreeList
+		if opt.AsyncWrites > 0 {
+			asyncWritesSem = make(chan struct{}, opt.AsyncWrites)
+			asyncBuffer = freelist.New(opt.AsyncWrites*fixedBlockSize, fixedBlockSize)
+		}
+
 		return &kopiaObjectWriterEx{
-			ctx:           ctx,
-			rawRepoWriter: kr.rawWriter,
-			parentEntries: parentEntries,
-			description:   opt.Description,
-			compressor:    getCompressorForObject(opt),
-			blockSize:     fixedBlockSize,
-			splitter:      fixedSplitter1M,
-			logger:        kr.logger,
+			ctx:            ctx,
+			rawRepoWriter:  kr.rawWriter,
+			parentEntries:  parentEntries,
+			description:    opt.Description,
+			compressor:     getCompressorForObject(opt),
+			blockSize:      fixedBlockSize,
+			splitter:       fixedSplitter1M,
+			asyncWritesSem: asyncWritesSem,
+			asyncBuffer:    asyncBuffer,
+			logger:         kr.logger,
 		}, nil
 	} else {
 		if opt.ParentObject != "" {
@@ -820,9 +837,113 @@ func (kow *kopiaObjectWriter) Close() error {
 	return nil
 }
 
-// TODO add implementation in following PRs
 func (kow *kopiaObjectWriterEx) Write(p []byte) (int, error) {
-	return 0, nil
+	kow.writeLock.Lock()
+	defer kow.writeLock.Unlock()
+
+	if kow.rawRepoWriter == nil {
+		return 0, errors.New("object writer is closed or not open")
+	}
+
+	if err := kow.getWriteError(); err != nil {
+		return 0, errors.Wrapf(err, "error happened during writing object")
+	}
+
+	length := len(p)
+	if int64(length)%kow.blockSize != 0 {
+		return 0, errors.Errorf("invalid length %v", length)
+	}
+
+	kow.entryLock.Lock()
+	curPos := int64(len(kow.entries)) * kow.blockSize
+	kow.entryLock.Unlock()
+
+	offset := curPos
+	entryID := 0
+	for curPos < offset+int64(length) {
+		kow.entryLock.Lock()
+		entryID = len(kow.entries)
+		kow.entries = append(kow.entries, object.IndirectObjectEntry{
+			Start:  curPos,
+			Length: kow.blockSize,
+		})
+		kow.entryLock.Unlock()
+
+		buffOffset := curPos - offset
+		objName := fmt.Sprintf("%s-b%v", kow.description, entryID)
+		kow.writeObjectAsync(objName, entryID, p[buffOffset:buffOffset+kow.blockSize])
+
+		curPos += kow.blockSize
+	}
+
+	return length, nil
+}
+
+func (kow *kopiaObjectWriterEx) writeObject(objName string, p []byte) (object.ID, error) {
+	writer := kow.rawRepoWriter.NewObjectWriter(kopia.SetupKopiaLog(kow.ctx, kow.logger), object.WriterOptions{
+		Description: objName,
+		Compressor:  kow.compressor,
+		Splitter:    kow.splitter,
+	})
+
+	if writer == nil {
+		return object.EmptyID, errors.Errorf("error openning writer for %s", objName)
+	}
+
+	defer writer.Close()
+
+	written, err := writer.Write(p)
+	if err != nil {
+		return object.EmptyID, errors.Wrapf(err, "error writting for %s", objName)
+	}
+
+	if written != len(p) {
+		return object.EmptyID, errors.Errorf("short write for %s", objName)
+	}
+
+	objID, err := writer.Result()
+	if err != nil {
+		return object.EmptyID, errors.Wrapf(err, "error flushing data for %s", objName)
+	}
+
+	return objID, nil
+}
+
+func (kow *kopiaObjectWriterEx) writeObjectSync(objName string, entry int, p []byte) error {
+	objID, err := kow.writeObject(objName, p)
+	if err != nil {
+		return err
+	}
+
+	kow.entryLock.Lock()
+	kow.entries[entry].Object = objID
+	kow.entryLock.Unlock()
+
+	return nil
+}
+
+func (kow *kopiaObjectWriterEx) writeObjectAsync(objName string, entryID int, p []byte) {
+	if kow.asyncWritesSem == nil {
+		if err := kow.writeObjectSync(objName, entryID, p); err != nil {
+			kow.saveWriteError(errors.Wrapf(err, "error writting object for %s", objName))
+		}
+	} else {
+		kow.asyncWritesSem <- struct{}{}
+		kow.asyncWritesGroup.Add(1)
+
+		buffer := kow.asyncBuffer.Get()
+		copy(buffer, p)
+
+		kow.asyncWritesGroup.Go(func() {
+			if err := kow.writeObjectSync(objName, entryID, buffer); err != nil {
+				kow.saveWriteError(errors.Wrapf(err, "error writting object for %s", objName))
+			}
+
+			<-kow.asyncWritesSem
+			kow.asyncWritesGroup.Done()
+			kow.asyncBuffer.Return(buffer)
+		})
+	}
 }
 
 // TODO add implementation in following PRs
@@ -834,13 +955,77 @@ func (kow *kopiaObjectWriterEx) Checkpoint() (udmrepo.ID, error) {
 	return udmrepo.ID(""), errors.New("not supported")
 }
 
-// TODO add implementation in following PRs
-func (kow *kopiaObjectWriterEx) Result() (udmrepo.ID, error) {
-	return udmrepo.ID(""), nil
+type indirectObject struct {
+	StreamID string                       `json:"stream"`
+	Entries  []object.IndirectObjectEntry `json:"entries"`
 }
 
-// TODO add implementation in following PRs
+const kopiaIndirectStreamType = "kopia:indirect"
+
+func (kow *kopiaObjectWriterEx) writeIndirectObject() (object.ID, error) {
+	if kow.rawRepoWriter == nil {
+		return object.EmptyID, errors.New("object writer is closed or not open")
+	}
+
+	writer := kow.rawRepoWriter.NewObjectWriter(kopia.SetupKopiaLog(kow.ctx, kow.logger), object.WriterOptions{
+		Description: "LIST(" + kow.description + ")",
+		Prefix:      "x",
+		Compressor:  getMetadataCompressor(),
+		Splitter:    fixedSplitter128K,
+	})
+	defer writer.Close()
+
+	ind := indirectObject{
+		StreamID: kopiaIndirectStreamType,
+		Entries:  kow.entries,
+	}
+
+	if err := json.NewEncoder(writer).Encode(ind); err != nil {
+		return object.EmptyID, errors.Wrap(err, "unable to write indirect object index")
+	}
+
+	return writer.Result()
+}
+
+func (kow *kopiaObjectWriterEx) saveWriteError(err error) error {
+	if err != nil {
+		kow.writeError.Store(err)
+	}
+
+	return err
+}
+
+func (kow *kopiaObjectWriterEx) getWriteError() error {
+	if v := kow.writeError.Load(); v != nil {
+		return v.(error)
+	}
+
+	return nil
+}
+
+func (kow *kopiaObjectWriterEx) Result() (udmrepo.ID, error) {
+	kow.writeLock.Lock()
+	defer kow.writeLock.Unlock()
+
+	kow.asyncWritesGroup.Wait()
+
+	if err := kow.getWriteError(); err != nil {
+		return udmrepo.ID(""), errors.Wrap(err, "error happened during writing object")
+	}
+
+	id, err := kow.writeIndirectObject()
+	if err != nil {
+		return udmrepo.ID(""), errors.Wrap(err, "error to write indirect object")
+	}
+
+	objectID := "I" + udmrepo.ID(id.String())
+
+	return objectID, nil
+}
+
 func (kow *kopiaObjectWriterEx) Close() error {
+	kow.asyncWritesGroup.Wait()
+
 	return nil
 }
 
