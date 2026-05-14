@@ -15,8 +15,8 @@ import (
 
 	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo"
 	repomocks "github.com/vmware-tanzu/velero/pkg/repository/udmrepo/kopialib/backend/mocks"
-	"github.com/vmware-tanzu/velero/pkg/repository/udmrepo/kopialib/freelist"
 	velerotest "github.com/vmware-tanzu/velero/pkg/test"
+	"github.com/vmware-tanzu/velero/pkg/util/freelist"
 )
 
 type mockDirectRepository struct {
