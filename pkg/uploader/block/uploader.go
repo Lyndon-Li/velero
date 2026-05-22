@@ -95,7 +95,7 @@ func (bu *blockUploader) Backup(source sourceInfo, parentObject udmrepo.ID, bitm
 		AsyncWrites:  runtime.NumCPU(),
 	})
 	if err != nil {
-		return udmrepo.Snapshot{}, 0, errors.New("error creating object writer")
+		return udmrepo.Snapshot{}, 0, errors.Wrap(err, "error creating object writer")
 	}
 
 	defer destObj.Close()
@@ -524,4 +524,21 @@ func getSourceSize(snapshot udmrepo.Snapshot) (int64, error) {
 	}
 
 	return size, nil
+}
+
+func loadObjectFromSnapshot(ctx context.Context, rep udmrepo.BackupRepo, snapshot *udmrepo.Snapshot) (udmrepo.ID, error) {
+	if snapshot == nil {
+		return "", errors.New("snapshot is empty")
+	}
+
+	parentMeta, err := rep.ReadMetadata(ctx, snapshot.RootObject.ID)
+	if err != nil {
+		return "", errors.Wrapf(err, "error readding snapshot metadata for %s", snapshot.Description)
+	}
+
+	if len(parentMeta.SubObjects) != 1 {
+		return "", errors.Wrapf(err, "unexpected number of bdev object (%d) for snapshot %s", len(parentMeta.SubObjects), snapshot.Description)
+	}
+
+	return parentMeta.SubObjects[0].ID, nil
 }
