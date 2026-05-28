@@ -447,7 +447,7 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 				zeroLength = 0
 			}
 
-			n, err := dest.Write(result.buffer[:length])
+			n, err := dest.WriteAt(result.buffer[:length], written)
 			if err != nil {
 				writeErr = err
 				break
