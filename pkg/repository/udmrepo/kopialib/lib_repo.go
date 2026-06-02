@@ -629,6 +629,9 @@ func (kr *kopiaRepository) SaveSnapshot(ctx context.Context, snap udmrepo.Snapsh
 		Description: snap.Description,
 		StartTime:   fs.UTCTimestampFromTime(snap.StartTime),
 		EndTime:     fs.UTCTimestampFromTime(snap.EndTime),
+		Stats: snapshot.Stats{
+			TotalFileSize: snap.TotalSize,
+		},
 		RootEntry: &snapshot.DirEntry{
 			Type:        snapshot.EntryTypeDirectory,
 			ObjectID:    rootObj,
@@ -637,6 +640,9 @@ func (kr *kopiaRepository) SaveSnapshot(ctx context.Context, snap udmrepo.Snapsh
 			FileSize:    snap.RootObject.Size,
 			UserID:      snap.RootObject.UserID,
 			GroupID:     snap.RootObject.GroupID,
+			DirSummary: &fs.DirectorySummary{
+				TotalFileSize: snap.TotalSize,
+			},
 		},
 		Tags: snap.Tags,
 		Pins: []string{"velero-pin"},
@@ -666,6 +672,7 @@ func (kr *kopiaRepository) GetSnapshot(ctx context.Context, id udmrepo.ID) (udmr
 		StartTime:   snap.StartTime.ToTime(),
 		EndTime:     snap.EndTime.ToTime(),
 		Tags:        snap.Tags,
+		TotalSize:   snap.Stats.TotalFileSize,
 		RootObject: udmrepo.ObjectMetadata{
 			ID:          udmrepo.ID(snap.RootEntry.ObjectID.String()),
 			Type:        udmrepo.ObjectDataTypeMetadata,
