@@ -353,7 +353,8 @@ func copyTailData(source io.ReaderAt, writer udmrepo.ObjectWriter, totalLength i
 
 func getObjectName(source string) string {
 	s := strings.ReplaceAll(source, "/", "-")
-	return strings.ReplaceAll(s, "\\", "-")
+	s = strings.ReplaceAll(s, "\\", "-")
+	return strings.Trim(s, "-")
 }
 
 func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalLength int64, destPath string) (int64, error) {
