@@ -24,11 +24,13 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/cockroachdb/errors"
+	"github.com/gobwas/glob"
 	"github.com/sirupsen/logrus"
 	corev1api "k8s.io/api/core/v1"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	"github.com/vmware-tanzu/velero/pkg/util/wildcard"
 )
 
 type VolumeActionType string
@@ -259,6 +261,14 @@ func (p *Policies) Validate() error {
 		}
 	}
 
+	if err := p.validateClusterScopedFilterPolicy(); err != nil {
+		return errors.WithStack(err)
+	}
+
+	if err := p.validateNamespacedFilterPolicies(); err != nil {
+		return errors.WithStack(err)
+	}
+
 	return nil
 }
 
@@ -334,4 +344,118 @@ func getResourcePoliciesFromConfig(cm *corev1api.ConfigMap) (*Policies, error) {
 	}
 
 	return policies, nil
+}
+
+func (p *Policies) validateNamespacedFilterPolicies() error {
+	seenPatterns := make(map[string][]int) // pattern -> list of policy indices
+
+	// Rule 1-7: Basic validation rules
+	for i, nfp := range p.namespacedFilterPolicies {
+		if len(nfp.Namespaces) == 0 {
+			return fmt.Errorf("namespacedFilterPolicies[%d]: at least one namespace must be specified", i)
+		}
+		if len(nfp.ResourceFilters) == 0 {
+			return fmt.Errorf("namespacedFilterPolicies[%d]: at least one resourceFilter must be specified", i)
+		}
+
+		// Rule 8 & 9: Validate glob patterns and collect namespace patterns for duplicate check
+		for j, pattern := range nfp.Namespaces {
+			if err := wildcard.ValidateNamespaceName(pattern); err != nil {
+				return fmt.Errorf("namespacedFilterPolicies[%d].namespaces[%d]: %w", i, j, err)
+			}
+			seenPatterns[pattern] = append(seenPatterns[pattern], i)
+		}
+
+		seenKinds := make(map[string]int)
+		hasCatchAll := false
+		for j, rf := range nfp.ResourceFilters {
+			if rf.IsCatchAll() {
+				if hasCatchAll {
+					return fmt.Errorf("namespacedFilterPolicies[%d]: only one catch-all resource filter is allowed", i)
+				}
+				hasCatchAll = true
+				if len(rf.Names) > 0 || len(rf.ExcludedNames) > 0 {
+					return fmt.Errorf("namespacedFilterPolicies[%d].resourceFilters[%d]: names or excludedNames cannot be specified for catch-all filters", i, j)
+				}
+			}
+
+			for _, kind := range rf.Kinds {
+				if kind == "*" {
+					continue // "*" is handled by IsCatchAll, no need to check duplicates against other kinds
+				}
+				if prevJ, ok := seenKinds[kind]; ok {
+					return fmt.Errorf("namespacedFilterPolicies[%d]: kind %q appears in both resourceFilters[%d] and resourceFilters[%d]", i, kind, prevJ, j)
+				}
+				seenKinds[kind] = j
+			}
+
+			if len(rf.LabelSelector) > 0 && len(rf.OrLabelSelectors) > 0 {
+				return fmt.Errorf("namespacedFilterPolicies[%d].resourceFilters[%d]: labelSelector and orLabelSelectors cannot co-exist", i, j)
+			}
+
+			// Validate glob patterns for names and excludedNames using gobwas/glob
+			for k, pattern := range rf.Names {
+				if _, err := glob.Compile(pattern); err != nil {
+					return fmt.Errorf("namespacedFilterPolicies[%d].resourceFilters[%d].names[%d]: invalid glob pattern %q: %v", i, j, k, pattern, err)
+				}
+			}
+			for k, pattern := range rf.ExcludedNames {
+				if _, err := glob.Compile(pattern); err != nil {
+					return fmt.Errorf("namespacedFilterPolicies[%d].resourceFilters[%d].excludedNames[%d]: invalid glob pattern %q: %v", i, j, k, pattern, err)
+				}
+			}
+		}
+	}
+
+	// Rule 8: Report exact duplicates only
+	for pattern, policyIndices := range seenPatterns {
+		if len(policyIndices) > 1 {
+			return fmt.Errorf(
+				"namespacedFilterPolicies: duplicate namespace pattern '%s' found in policies %v",
+				pattern, policyIndices)
+		}
+	}
+
+	return nil
+}
+
+func (p *Policies) validateClusterScopedFilterPolicy() error {
+	if p.clusterScopedFilterPolicy == nil {
+		return nil
+	}
+
+	if len(p.clusterScopedFilterPolicy.ResourceFilters) == 0 {
+		return fmt.Errorf("clusterScopedFilterPolicy: resourceFilters cannot be empty; remove the policy block entirely if it is not needed")
+	}
+
+	seenKinds := make(map[string]int)
+	for j, rf := range p.clusterScopedFilterPolicy.ResourceFilters {
+		if rf.IsCatchAll() {
+			return fmt.Errorf("clusterScopedFilterPolicy.resourceFilters[%d]: kinds must be specified (catch-all is not supported)", j)
+		}
+
+		for _, kind := range rf.Kinds {
+			if prevJ, ok := seenKinds[kind]; ok {
+				return fmt.Errorf("clusterScopedFilterPolicy: kind %q appears in both resourceFilters[%d] and resourceFilters[%d]", kind, prevJ, j)
+			}
+			seenKinds[kind] = j
+		}
+
+		if len(rf.LabelSelector) > 0 && len(rf.OrLabelSelectors) > 0 {
+			return fmt.Errorf("clusterScopedFilterPolicy.resourceFilters[%d]: labelSelector and orLabelSelectors cannot co-exist", j)
+		}
+
+		for k, pattern := range rf.Names {
+			if _, err := glob.Compile(pattern); err != nil {
+				return fmt.Errorf("clusterScopedFilterPolicy.resourceFilters[%d].names[%d]: invalid glob pattern %q: %v", j, k, pattern, err)
+			}
+		}
+		for k, pattern := range rf.ExcludedNames {
+			if _, err := glob.Compile(pattern); err != nil {
+				return fmt.Errorf("clusterScopedFilterPolicy.resourceFilters[%d].excludedNames[%d]: invalid glob pattern %q: %v", j, k, pattern, err)
+			}
+		}
+	}
+
+	return nil
 }
