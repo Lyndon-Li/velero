@@ -306,7 +306,7 @@ func ResetPVBinding(ctx context.Context, pvGetter corev1client.CoreV1Interface, 
 }
 
 func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, source *corev1api.PersistentVolume,
-	pvc *corev1api.PersistentVolumeClaim, policy corev1api.PersistentVolumeReclaimPolicy) (*corev1api.PersistentVolume, error) {
+	pvc *corev1api.PersistentVolumeClaim, policy corev1api.PersistentVolumeReclaimPolicy, fsType string) (*corev1api.PersistentVolume, error) {
 	if source == nil {
 		return nil, errors.New("source PV is required to rebind PV")
 	}
@@ -338,7 +338,7 @@ func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName
 		},
 		Spec: corev1api.PersistentVolumeSpec{
 			Capacity:                      source.Spec.Capacity,
-			PersistentVolumeSource:        source.Spec.PersistentVolumeSource,
+			PersistentVolumeSource:        clonePVSource(&source.Spec.PersistentVolumeSource, fsType),
 			AccessModes:                   source.Spec.AccessModes,
 			PersistentVolumeReclaimPolicy: policy,
 			StorageClassName:              source.Spec.StorageClassName,
@@ -355,6 +355,38 @@ func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName
 	}
 
 	return pvGetter.PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
+}
+
+func clonePVSource(source *corev1api.PersistentVolumeSource, newFSType string) corev1api.PersistentVolumeSource {
+	newSource := source.DeepCopy()
+
+	if newFSType != "" {
+		if newSource.CSI != nil {
+			newSource.CSI.FSType = newFSType
+		} else if newSource.AWSElasticBlockStore != nil {
+			newSource.AWSElasticBlockStore.FSType = newFSType
+		} else if newSource.AzureDisk != nil {
+			newSource.AzureDisk.FSType = &newFSType
+		} else if newSource.VsphereVolume != nil {
+			newSource.VsphereVolume.FSType = newFSType
+		} else if newSource.GCEPersistentDisk != nil {
+			newSource.GCEPersistentDisk.FSType = newFSType
+		} else if newSource.Cinder != nil {
+			newSource.Cinder.FSType = newFSType
+		} else if newSource.ISCSI != nil {
+			newSource.ISCSI.FSType = newFSType
+		} else if newSource.RBD != nil {
+			newSource.RBD.FSType = newFSType
+		} else if newSource.FC != nil {
+			newSource.FC.FSType = newFSType
+		} else if newSource.Local != nil {
+			newSource.Local.FSType = &newFSType
+		} else if newSource.FlexVolume != nil {
+			newSource.FlexVolume.FSType = newFSType
+		}
+	}
+
+	return *newSource
 }
 
 // SetPVReclaimPolicy sets the specified reclaim policy to a PV
