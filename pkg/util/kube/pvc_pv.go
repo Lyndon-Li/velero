@@ -161,6 +161,42 @@ func EnsureDeletePVC(ctx context.Context, pvcGetter corev1client.CoreV1Interface
 	return nil
 }
 
+func EnsureDeletePV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, timeout time.Duration) error {
+	err := pvGetter.PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{})
+	if err != nil {
+		return errors.Wrapf(err, "error to delete pv %s", pvName)
+	}
+
+	if timeout == 0 {
+		return nil
+	}
+
+	var updated *corev1api.PersistentVolume
+	err = wait.PollUntilContextTimeout(ctx, waitInternal, timeout, true, func(ctx context.Context) (bool, error) {
+		pv, err := pvGetter.PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return true, nil
+			}
+
+			return false, errors.Wrapf(err, "error to get pv %s", pvName)
+		}
+
+		updated = pv
+		return false, nil
+	})
+
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return errors.Errorf("timeout to assure pv %s is deleted, finalizers in pv %v", pvName, updated.Finalizers)
+		} else {
+			return errors.Wrapf(err, "error to ensure pv deleted for %s", pvName)
+		}
+	}
+
+	return nil
+}
+
 // EnsurePVDeleted ensures a PV has been deleted. This function is supposed to be called after EnsureDeletePVC
 // If timeout is 0, it doesn't wait and return nil
 func EnsurePVDeleted(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, timeout time.Duration) error {
@@ -267,6 +303,58 @@ func ResetPVBinding(ctx context.Context, pvGetter corev1client.CoreV1Interface, 
 	}
 
 	return updated, nil
+}
+
+func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, source *corev1api.PersistentVolume,
+	pvc *corev1api.PersistentVolumeClaim, policy corev1api.PersistentVolumeReclaimPolicy) (*corev1api.PersistentVolume, error) {
+	if source == nil {
+		return nil, errors.New("source PV is required to rebind PV")
+	}
+
+	if pvc == nil {
+		return nil, errors.New("target PVC is required to rebind PV")
+	}
+
+	pvLabel := make(map[string]string)
+
+	for k, v := range source.Labels {
+		if _, ok := source.Labels[k]; !ok {
+			pvLabel[k] = v
+		}
+	}
+
+	if pvc.Spec.Selector != nil {
+		for k, v := range pvc.Spec.Selector.MatchLabels {
+			if _, ok := pvLabel[k]; !ok {
+				pvLabel[k] = v
+			}
+		}
+	}
+
+	pv := &corev1api.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   pvName,
+			Labels: pvLabel,
+		},
+		Spec: corev1api.PersistentVolumeSpec{
+			Capacity:                      source.Spec.Capacity,
+			PersistentVolumeSource:        source.Spec.PersistentVolumeSource,
+			AccessModes:                   source.Spec.AccessModes,
+			PersistentVolumeReclaimPolicy: policy,
+			StorageClassName:              source.Spec.StorageClassName,
+			VolumeMode:                    pvc.Spec.VolumeMode,
+			NodeAffinity:                  source.Spec.NodeAffinity,
+			VolumeAttributesClassName:     source.Spec.VolumeAttributesClassName,
+			MountOptions:                  source.Spec.MountOptions,
+			ClaimRef: &corev1api.ObjectReference{
+				Kind:      pvc.Kind,
+				Namespace: pvc.Namespace,
+				Name:      pvc.Name,
+			},
+		},
+	}
+
+	return pvGetter.PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
 }
 
 // SetPVReclaimPolicy sets the specified reclaim policy to a PV
