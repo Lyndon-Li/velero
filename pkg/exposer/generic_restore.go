@@ -92,6 +92,9 @@ type GenericRestoreRebindVolumeParam struct {
 
 	// OperationTimeout specifies the time wait for resources operations in Expose
 	OperationTimeout time.Duration
+
+	// TargetFSType is the file system type of the target volume
+	TargetFSType string
 }
 
 // GenericRestoreExposer is the interfaces for a generic restore exposer
@@ -449,7 +452,7 @@ func (e *genericRestoreExposer) RebindVolume(ctx context.Context, ownerObject co
 
 	curLog.WithField("restore PVC", restorePVCName).Info("Restore PVC is deleted")
 
-	rebindPV, err = kube.RebindPV(ctx, e.kubeClient.CoreV1(), uuid.NewString(), retained, targetPVC, orgReclaim)
+	rebindPV, err = kube.RebindPV(ctx, e.kubeClient.CoreV1(), uuid.NewString(), retained, targetPVC, orgReclaim, param.TargetFSType)
 	if err != nil {
 		return errors.Wrapf(err, "error rebinding PV for target PVC %s", param.TargetPVCName)
 	}
