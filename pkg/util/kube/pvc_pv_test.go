@@ -20,7 +20,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pkg/errors"
+	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -2269,7 +2269,7 @@ func TestRebindPV(t *testing.T) {
 			if test.expectedErr != "" {
 				assert.EqualError(t, err, test.expectedErr)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, test.expected, pv)
 			}
 		})
