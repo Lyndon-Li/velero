@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -317,18 +318,10 @@ func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName
 
 	pvLabel := make(map[string]string)
 
-	for k, v := range source.Labels {
-		if _, ok := source.Labels[k]; !ok {
-			pvLabel[k] = v
-		}
-	}
+	maps.Copy(pvLabel, source.Labels)
 
 	if pvc.Spec.Selector != nil {
-		for k, v := range pvc.Spec.Selector.MatchLabels {
-			if _, ok := pvLabel[k]; !ok {
-				pvLabel[k] = v
-			}
-		}
+		maps.Copy(pvLabel, pvc.Spec.Selector.MatchLabels)
 	}
 
 	pv := &corev1api.PersistentVolume{
