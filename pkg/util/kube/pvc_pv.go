@@ -324,10 +324,15 @@ func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName
 		maps.Copy(pvLabel, pvc.Spec.Selector.MatchLabels)
 	}
 
+	pvAnnotations := make(map[string]string)
+	maps.Copy(pvAnnotations, source.Annotations)
+	delete(pvAnnotations, KubeAnnBoundByController)
+
 	pv := &corev1api.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   pvName,
-			Labels: pvLabel,
+			Name:        pvName,
+			Labels:      pvLabel,
+			Annotations: pvAnnotations,
 		},
 		Spec: corev1api.PersistentVolumeSpec{
 			Capacity:                      source.Spec.Capacity,
