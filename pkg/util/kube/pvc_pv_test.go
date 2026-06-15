@@ -2159,6 +2159,10 @@ func TestRebindPV(t *testing.T) {
 			Labels: map[string]string{
 				"key1": "val1",
 			},
+			Annotations: map[string]string{
+				"anno1":                  "val1",
+				KubeAnnBoundByController: "true",
+			},
 		},
 		Spec: corev1api.PersistentVolumeSpec{
 			PersistentVolumeSource: corev1api.PersistentVolumeSource{
@@ -2235,8 +2239,12 @@ func TestRebindPV(t *testing.T) {
 						"key1": "val3",
 						"key2": "val2",
 					},
+					Annotations: map[string]string{
+						"anno1": "val1",
+					},
 				},
 				Spec: corev1api.PersistentVolumeSpec{
+					Capacity: sourcePV.Spec.Capacity,
 					PersistentVolumeSource: corev1api.PersistentVolumeSource{
 						CSI: &corev1api.CSIPersistentVolumeSource{
 							Driver:       "fake-driver",
@@ -2247,6 +2255,8 @@ func TestRebindPV(t *testing.T) {
 					AccessModes:                   sourcePV.Spec.AccessModes,
 					PersistentVolumeReclaimPolicy: corev1api.PersistentVolumeReclaimDelete,
 					StorageClassName:              sourcePV.Spec.StorageClassName,
+					VolumeMode:                    targetPVC.Spec.VolumeMode,
+					NodeAffinity:                  sourcePV.Spec.NodeAffinity,
 					ClaimRef: &corev1api.ObjectReference{
 						Kind:      targetPVC.Kind,
 						Namespace: "fake-ns",
