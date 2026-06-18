@@ -55,7 +55,7 @@ type destInfo struct {
 
 type Uploader interface {
 	Backup(sourceInfo, udmrepo.ID, cbt.Iterator, map[string]string) (udmrepo.Snapshot, int64, error)
-	Restore(udmrepo.Snapshot, destInfo, map[string]string) (int64, error)
+	Restore(udmrepo.Snapshot, destInfo, cbt.Iterator, map[string]string) (int64, error)
 }
 
 type blockUploader struct {
@@ -143,7 +143,11 @@ func (bu *blockUploader) Backup(source sourceInfo, parentObject udmrepo.ID, bitm
 	}, backupSize, nil
 }
 
-func (bu *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, configs map[string]string) (int64, error) {
+func (bu *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, bitmap cbt.Iterator, configs map[string]string) (int64, error) {
+	if bitmap == nil {
+		return 0, errors.New("bitmap is not available")
+	}
+
 	meta, err := bu.repoWriter.ReadMetadata(bu.ctx, snapshot.RootObject.ID)
 	if err != nil {
 		return 0, errors.Wrapf(err, "error readding snapshot metadata for %s", snapshot.Description)
@@ -173,7 +177,7 @@ func (bu *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, confi
 	}
 	defer reader.Close()
 
-	size, err := bu.restoreDataFull(reader, dest.dev, sourceSize, dest.path)
+	size, err := bu.restoreData(reader, dest.dev, bitmap, sourceSize, dest.path)
 	if err != nil {
 		return 0, errors.Wrapf(err, "error restoring bdev object %s to volume %s", meta.SubObjects[0].Name, dest.path)
 	}
@@ -357,10 +361,11 @@ func getObjectName(source string) string {
 	return strings.Trim(s, "-")
 }
 
-func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalLength int64, destPath string) (int64, error) {
+func (bu *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string) (int64, error) {
 	list := freelist.New(bufferSize, blockSize)
 	resultChan := make(chan readResult, list.Capacity())
 	zeroBlock := make([]byte, blockSize)
+	totalCount := bitmap.Count()
 
 	quit := make(chan struct{})
 	defer close(quit)
@@ -368,9 +373,10 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 	go func() {
 		defer close(resultChan)
 
-		for {
-			var buffer []byte
-
+		offset, valid := bitmap.Next()
+		var buffer []byte
+		var nextPos uint64 = uint64(0)
+		for valid {
 			select {
 			case <-bu.ctx.Done():
 				return
@@ -379,13 +385,23 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 			case buffer = <-list.Chunks():
 			}
 
-			length, err := io.ReadFull(reader, buffer)
-			if err == nil && length <= 0 {
-				err = io.ErrUnexpectedEOF
+			var err error
+
+			if nextPos != offset {
+				_, err = reader.Seek(int64(offset), io.SeekStart)
+			}
+
+			if err == nil {
+				var length int
+				length, err = io.ReadFull(reader, buffer)
+				if err == nil && length <= 0 {
+					err = io.ErrUnexpectedEOF
+				}
 			}
 
 			r := readResult{
 				buffer: buffer,
+				offset: int64(offset),
 				err:    err,
 			}
 
@@ -398,6 +414,9 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 			if r.err != nil {
 				return
 			}
+
+			nextPos = offset + uint64(blockSize)
+			offset, valid = bitmap.Next()
 		}
 	}()
 
@@ -407,8 +426,9 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 	var readerRunning bool
 	var zeroStart int64 = -1
 	var zeroLength int64
+	var curCount int64
 
-	for written < totalLength {
+	for curCount < int64(totalCount) {
 		select {
 		case <-bu.ctx.Done():
 			writeErr = ErrCanceled
@@ -431,13 +451,21 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 			break
 		}
 
-		length := min(int64(blockSize), totalLength-written)
+		length := min(int64(blockSize), totalLength-result.offset)
 		if bytes.Equal(result.buffer, zeroBlock) {
 			if zeroStart == -1 {
-				zeroStart = written
+				zeroStart = result.offset
+				zeroLength = length
+			} else if result.offset == zeroStart+zeroLength {
+				zeroLength += length
+			} else {
+				if err := bu.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
+					writeErr = errors.Wrapf(err, "error flushing zero blocks from %v, length %v", zeroStart, zeroLength)
+					break
+				}
+				zeroStart = result.offset
+				zeroLength = length
 			}
-
-			zeroLength += length
 		} else {
 			if zeroStart != -1 {
 				if err := bu.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
@@ -449,7 +477,7 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 				zeroLength = 0
 			}
 
-			n, err := dest.WriteAt(result.buffer[:length], written)
+			n, err := dest.WriteAt(result.buffer[:length], result.offset)
 			if err != nil {
 				writeErr = err
 				break
@@ -462,6 +490,7 @@ func (bu *blockUploader) restoreDataFull(reader io.Reader, dest *os.File, totalL
 		}
 
 		written += length
+		curCount++
 
 		result.resetBuffer(list)
 

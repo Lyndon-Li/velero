@@ -202,6 +202,9 @@ func Restore(ctx context.Context, blkup Uploader, rep udmrepo.BackupRepo, snapsh
 
 	log.Infof("Restore from snapshot %s, description %s, created time %v, tags %v", snapshotID, snapshot.Description, snapshot.EndTime, snapshot.Tags)
 
+	bitmap := cbt.NewBitmap(blockSize, uint64(snapshot.TotalSize), "", "", "")
+	bitmap.SetFull()
+
 	destPath, err := filepath.Abs(dest)
 	if err != nil {
 		return 0, errors.Wrapf(err, "invalid dest path '%s'", dest)
@@ -224,7 +227,7 @@ func Restore(ctx context.Context, blkup Uploader, rep udmrepo.BackupRepo, snapsh
 		return 0, errors.Wrapf(err, "error reset pos of block device %s", dest)
 	}
 
-	size, err := blkup.Restore(snapshot, destInfo{dev: destDev, path: destPath, size: destSize}, uploaderCfg)
+	size, err := blkup.Restore(snapshot, destInfo{dev: destDev, path: destPath, size: destSize}, bitmap.Iterator(), uploaderCfg)
 	if err != nil {
 		return 0, errors.Wrapf(err, "error restoring to block dev %s", destPath)
 	}

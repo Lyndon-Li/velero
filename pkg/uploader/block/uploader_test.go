@@ -75,7 +75,7 @@ func TestGetObjectName(t *testing.T) {
 		{
 			name:     "unix path",
 			source:   "/var/lib/kubelet/pods/uuid/volumes/test",
-			expected: "-var-lib-kubelet-pods-uuid-volumes-test",
+			expected: "var-lib-kubelet-pods-uuid-volumes-test",
 		},
 		{
 			name:     "windows path",
@@ -317,7 +317,7 @@ func TestBlockUploaderBackup(t *testing.T) {
 					} else if tc.cancelCtx {
 						iterMock.On("BlockSize").Return(uint(1048576))
 						iterMock.On("Count").Return(uint64(1))
-						iterMock.On("Next").Return(uint64(0), true)
+						iterMock.On("Next").Return(uint64(0), true).Maybe()
 
 						objWriter.On("Result").Return(udmrepo.ID(""), errors.New("write failed")).Maybe()
 					} else if tc.shortWrite {
@@ -357,7 +357,7 @@ func TestBlockUploaderBackup(t *testing.T) {
 				}
 
 				repoWriter.On("NewObjectWriter", mock.Anything, mock.MatchedBy(func(opt udmrepo.ObjectWriteOptions) bool {
-					return opt.Description == "BDEV:-data-volume1" && opt.BackupMode == backupMode
+					return opt.Description == "BDEV:data-volume1" && opt.BackupMode == backupMode
 				})).Return(objWriter, tc.createObjErr)
 			}
 
@@ -464,7 +464,11 @@ func (r *errReader) Read(p []byte) (n int, err error) {
 	return 0, r.err
 }
 
-func TestRestoreDataFull(t *testing.T) {
+func (r *errReader) Seek(offset int64, whence int) (int64, error) {
+	return 0, nil
+}
+
+func TestRestoreData(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
 		ctx := context.Background()
 		progress := &mockProgressUpdater{}
@@ -486,7 +490,12 @@ func TestRestoreDataFull(t *testing.T) {
 		}
 		reader := bytes.NewReader(data)
 
-		written, err := bu.restoreDataFull(reader, f, 1048576, f.Name())
+		iterMock := cbtmocks.NewIterator(t)
+		iterMock.On("Count").Return(uint64(1))
+		iterMock.On("Next").Return(uint64(0), true).Once()
+		iterMock.On("Next").Return(uint64(0), false)
+
+		written, err := bu.restoreData(reader, f, iterMock, 1048576, f.Name())
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1048576), written)
 		
@@ -510,7 +519,12 @@ func TestRestoreDataFull(t *testing.T) {
 
 		reader := &errReader{err: errors.New("read error")}
 
-		_, err = bu.restoreDataFull(reader, f, 1048576, f.Name())
+		iterMock := cbtmocks.NewIterator(t)
+		iterMock.On("Count").Return(uint64(1))
+		iterMock.On("Next").Return(uint64(0), true).Once()
+		iterMock.On("Next").Return(uint64(0), false)
+
+		_, err = bu.restoreData(reader, f, iterMock, 1048576, f.Name())
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "read error")
 	})
@@ -524,7 +538,8 @@ func TestBlockUploaderRestore(t *testing.T) {
 
 		repoWriter.On("ReadMetadata", mock.Anything, udmrepo.ID("root-id")).Return(nil, errors.New("meta not found"))
 
-		_, err := bu.Restore(udmrepo.Snapshot{RootObject: udmrepo.ObjectMetadata{ID: "root-id"}}, destInfo{}, nil)
+		iterMock := cbtmocks.NewIterator(t)
+		_, err := bu.Restore(udmrepo.Snapshot{RootObject: udmrepo.ObjectMetadata{ID: "root-id"}}, destInfo{}, iterMock, nil)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "meta not found")
 	})
@@ -580,7 +595,12 @@ func TestBlockUploaderRestore(t *testing.T) {
 			path: f.Name(),
 		}
 
-		written, err := bu.Restore(snap, dest, nil)
+		iterMock := cbtmocks.NewIterator(t)
+		iterMock.On("Count").Return(uint64(1))
+		iterMock.On("Next").Return(uint64(0), true).Once()
+		iterMock.On("Next").Return(uint64(0), false)
+
+		written, err := bu.Restore(snap, dest, iterMock, nil)
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1048576), written)
 	})
