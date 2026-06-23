@@ -473,13 +473,6 @@ func (e *genericRestoreExposer) rebindVolumeChangeMode(ctx context.Context, owne
 
 	curLog.WithField("restore PV", restorePV.Name).Info("Restore PV is detached")
 
-	rebindPV, err = kube.RebindPV(ctx, e.kubeClient.CoreV1(), uuid.NewString(), restorePV, targetPVC, orgReclaim, param.TargetFSType)
-	if err != nil {
-		return errors.Wrapf(err, "error rebinding PV for target PVC %s", param.TargetPVCName)
-	}
-
-	curLog.WithField("rebind PV", rebindPV.Name).Info("Rebind PV is created")
-
 	err = kube.EnsureDeletePV(ctx, e.kubeClient.CoreV1(), restorePV.Name, param.OperationTimeout)
 	if err != nil {
 		return errors.Wrapf(err, "error deleting restore PV %s", restorePV.Name)
@@ -488,6 +481,13 @@ func (e *genericRestoreExposer) rebindVolumeChangeMode(ctx context.Context, owne
 	curLog.WithField("restore PV", restorePV.Name).Info("Restore PV is deleted")
 
 	retained = nil
+
+	rebindPV, err = kube.RebindPV(ctx, e.kubeClient.CoreV1(), uuid.NewString(), restorePV, targetPVC, orgReclaim, param.TargetFSType)
+	if err != nil {
+		return errors.Wrapf(err, "error rebinding PV for target PVC %s", param.TargetPVCName)
+	}
+
+	curLog.WithField("rebind PV", rebindPV.Name).Info("Rebind PV is created")
 
 	_, err = kube.RebindPVC(ctx, e.kubeClient.CoreV1(), targetPVC, rebindPV.Name)
 	if err != nil {
