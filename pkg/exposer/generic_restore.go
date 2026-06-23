@@ -196,12 +196,7 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		}
 	}
 
-	volumeMode := kube.GetVolumeModeByPVC(targetPVC)
-	if param.DataMover == datamover.DataMoverTypeVeleroBlock {
-		volumeMode = corev1api.PersistentVolumeBlock
-	}
-
-	restorePVC, err := e.createRestorePVC(ctx, ownerObject, targetPVC, selectedNode, volumeMode)
+	restorePVC, err := e.createRestorePVC(ctx, ownerObject, targetPVC, selectedNode, param.DataMover)
 	if err != nil {
 		return errors.Wrap(err, "error to create restore pvc")
 	}
@@ -811,7 +806,7 @@ func (e *genericRestoreExposer) createRestorePod(
 	return e.kubeClient.CoreV1().Pods(ownerObject.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 }
 
-func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObject corev1api.ObjectReference, targetPVC *corev1api.PersistentVolumeClaim, selectedNode string, volumeMode corev1api.PersistentVolumeMode) (*corev1api.PersistentVolumeClaim, error) {
+func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObject corev1api.ObjectReference, targetPVC *corev1api.PersistentVolumeClaim, selectedNode string, dataMover string) (*corev1api.PersistentVolumeClaim, error) {
 	restorePVCName := ownerObject.Name
 
 	pvcObj := &corev1api.PersistentVolumeClaim{
@@ -833,7 +828,7 @@ func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObjec
 		Spec: corev1api.PersistentVolumeClaimSpec{
 			AccessModes:      targetPVC.Spec.AccessModes,
 			StorageClassName: targetPVC.Spec.StorageClassName,
-			VolumeMode:       &volumeMode,
+			VolumeMode:       targetPVC.Spec.VolumeMode,
 			Resources:        targetPVC.Spec.Resources,
 		},
 	}
@@ -842,6 +837,14 @@ func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObjec
 		pvcObj.Annotations = map[string]string{
 			kube.KubeAnnSelectedNode: selectedNode,
 		}
+	}
+
+	if dataMover == datamover.DataMoverTypeVeleroBlock {
+		if pvcObj.Spec.VolumeMode == nil {
+			pvcObj.Spec.VolumeMode = new(corev1api.PersistentVolumeMode)
+		}
+
+		*pvcObj.Spec.VolumeMode = corev1api.PersistentVolumeBlock
 	}
 
 	return e.kubeClient.CoreV1().PersistentVolumeClaims(pvcObj.Namespace).Create(ctx, pvcObj, metav1.CreateOptions{})
