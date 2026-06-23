@@ -112,6 +112,31 @@ func WaitPVCBound(ctx context.Context, pvcGetter corev1client.CoreV1Interface,
 	return pv, err
 }
 
+func WaitPVReleased(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, timeout time.Duration) error {
+	if timeout == 0 {
+		return nil
+	}
+
+	err := wait.PollUntilContextTimeout(ctx, waitInternal, timeout, true, func(ctx context.Context) (bool, error) {
+		pv, err := pvGetter.PersistentVolumes().Get(ctx, pvName, metav1.GetOptions{})
+		if err != nil {
+			return false, errors.Wrapf(err, "error to get pv %s", pvName)
+		}
+
+		if pv.Status.Phase == corev1api.VolumeReleased {
+			return true, nil
+		}
+
+		return false, nil
+	})
+
+	if err != nil {
+		return errors.Wrapf(err, "error to wait for pv %s to be released", pvName)
+	}
+
+	return nil
+}
+
 // DeletePVIfAny deletes a PV by name if it exists, and log an error when the deletion fails
 func DeletePVIfAny(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName string, log logrus.FieldLogger) {
 	err := pvGetter.PersistentVolumes().Delete(ctx, pvName, metav1.DeleteOptions{})
@@ -331,7 +356,7 @@ func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName
 		},
 		Spec: corev1api.PersistentVolumeSpec{
 			Capacity:                      source.Spec.Capacity,
-			PersistentVolumeSource:        clonePVSource(&source.Spec.PersistentVolumeSource, fsType),
+			PersistentVolumeSource:        clonePVSource(&source.Spec.PersistentVolumeSource, GetVolumeModeByPVC(pvc), fsType),
 			AccessModes:                   source.Spec.AccessModes,
 			PersistentVolumeReclaimPolicy: policy,
 			StorageClassName:              source.Spec.StorageClassName,
@@ -350,36 +375,43 @@ func RebindPV(ctx context.Context, pvGetter corev1client.CoreV1Interface, pvName
 	return pvGetter.PersistentVolumes().Create(ctx, pv, metav1.CreateOptions{})
 }
 
-func clonePVSource(source *corev1api.PersistentVolumeSource, newFSType string) corev1api.PersistentVolumeSource {
+func clonePVSource(source *corev1api.PersistentVolumeSource, volumeMode corev1api.PersistentVolumeMode, newFSType string) corev1api.PersistentVolumeSource {
 	newSource := source.DeepCopy()
 
 	if newSource.CSI != nil && newSource.CSI.VolumeAttributes != nil {
 		delete(newSource.CSI.VolumeAttributes, "storage.kubernetes.io/csiProvisionerIdentity")
 	}
 
-	if newFSType != "" {
+	var setFsType *string
+	if volumeMode == corev1api.PersistentVolumeBlock {
+		setFsType = new(string)
+	} else if newFSType != "" {
+		setFsType = &newFSType
+	}
+
+	if setFsType != nil {
 		if newSource.CSI != nil {
-			newSource.CSI.FSType = newFSType
+			newSource.CSI.FSType = *setFsType
 		} else if newSource.AWSElasticBlockStore != nil {
-			newSource.AWSElasticBlockStore.FSType = newFSType
+			newSource.AWSElasticBlockStore.FSType = *setFsType
 		} else if newSource.AzureDisk != nil {
-			newSource.AzureDisk.FSType = &newFSType
+			newSource.AzureDisk.FSType = setFsType
 		} else if newSource.VsphereVolume != nil {
-			newSource.VsphereVolume.FSType = newFSType
+			newSource.VsphereVolume.FSType = *setFsType
 		} else if newSource.GCEPersistentDisk != nil {
-			newSource.GCEPersistentDisk.FSType = newFSType
+			newSource.GCEPersistentDisk.FSType = *setFsType
 		} else if newSource.Cinder != nil {
-			newSource.Cinder.FSType = newFSType
+			newSource.Cinder.FSType = *setFsType
 		} else if newSource.ISCSI != nil {
-			newSource.ISCSI.FSType = newFSType
+			newSource.ISCSI.FSType = *setFsType
 		} else if newSource.RBD != nil {
-			newSource.RBD.FSType = newFSType
+			newSource.RBD.FSType = *setFsType
 		} else if newSource.FC != nil {
-			newSource.FC.FSType = newFSType
+			newSource.FC.FSType = *setFsType
 		} else if newSource.Local != nil {
-			newSource.Local.FSType = &newFSType
+			newSource.Local.FSType = setFsType
 		} else if newSource.FlexVolume != nil {
-			newSource.FlexVolume.FSType = newFSType
+			newSource.FlexVolume.FSType = *setFsType
 		}
 	}
 

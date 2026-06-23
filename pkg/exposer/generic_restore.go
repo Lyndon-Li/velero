@@ -80,6 +80,9 @@ type GenericRestoreExposeParam struct {
 
 	// CacheVolume specifies the info for cache volumes
 	CacheVolume *CacheConfigs
+
+	// DataMover is the data mover type, e.g., velero-fs, velero-block
+	DataMover string
 }
 
 // GenericRestoreRebindVolumeParam define the input param for Generic Restore Rebind Volume
@@ -163,12 +166,12 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 	}
 
 	// Data mover allows the StorageClass name not set for PVC.
-	storageClassName := ""
-	if targetPVC.Spec.StorageClassName != nil {
-		storageClassName = *targetPVC.Spec.StorageClassName
-	}
+	// storageClassName := ""
+	// if targetPVC.Spec.StorageClassName != nil {
+	// 	storageClassName = *targetPVC.Spec.StorageClassName
+	// }
 
-	affinity := kube.GetLoadAffinityByStorageClass(param.LoadAffinity, storageClassName, curLog)
+	//affinity := kube.GetLoadAffinityByStorageClass(param.LoadAffinity, storageClassName, curLog)
 
 	var cachePVC *corev1api.PersistentVolumeClaim
 	if param.CacheVolume != nil {
@@ -192,34 +195,7 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		}
 	}
 
-	restorePod, err := e.createRestorePod(
-		ctx,
-		ownerObject,
-		targetPVC,
-		param.OperationTimeout,
-		param.HostingPodLabels,
-		param.HostingPodAnnotations,
-		param.HostingPodTolerations,
-		selectedNode,
-		param.Resources,
-		param.NodeOS,
-		affinity,
-		param.PriorityClassName,
-		cachePVC,
-	)
-	if err != nil {
-		return errors.Wrapf(err, "error to create restore pod")
-	}
-
-	curLog.WithField("pod name", restorePod.Name).Info("Restore pod is created")
-
-	defer func() {
-		if err != nil {
-			kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePod.Name, restorePod.Namespace, curLog)
-		}
-	}()
-
-	restorePVC, err := e.createRestorePVC(ctx, ownerObject, targetPVC, selectedNode)
+	restorePVC, err := e.createRestoreVolume(ctx, ownerObject, param, targetPVC, selectedNode, curLog)
 	if err != nil {
 		return errors.Wrap(err, "error to create restore pvc")
 	}
@@ -232,7 +208,138 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		}
 	}()
 
+	// restorePod, err := e.createRestorePod(
+	// 	ctx,
+	// 	ownerObject,
+	// 	restorePVC,
+	// 	param.OperationTimeout,
+	// 	param.HostingPodLabels,
+	// 	param.HostingPodAnnotations,
+	// 	param.HostingPodTolerations,
+	// 	selectedNode,
+	// 	param.Resources,
+	// 	param.NodeOS,
+	// 	affinity,
+	// 	param.PriorityClassName,
+	// 	cachePVC,
+	// )
+	// if err != nil {
+	// 	return errors.Wrapf(err, "error to create restore pod")
+	// }
+
+	// curLog.WithField("pod name", restorePod.Name).Info("Restore pod is created")
+
+	// defer func() {
+	// 	if err != nil {
+	// 		kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePod.Name, restorePod.Namespace, curLog)
+	// 	}
+	// }()
+
 	return nil
+}
+
+func (e *genericRestoreExposer) createRestoreVolume(ctx context.Context, ownerObject corev1api.ObjectReference, param GenericRestoreExposeParam,
+	targetPVC *corev1api.PersistentVolumeClaim, selectedNode string, curLog logrus.FieldLogger) (*corev1api.PersistentVolumeClaim, error) {
+	restorePVC, err := e.createRestorePVC(ctx, ownerObject, targetPVC, selectedNode)
+	if err != nil {
+		return nil, errors.Wrap(err, "error to create restore pvc")
+	}
+
+	curLog.WithField("pvc name", restorePVC.Name).Info("Restore PVC is created")
+
+	defer func() {
+		if err != nil {
+			kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVC.Name, restorePVC.Namespace, 0, curLog)
+		}
+	}()
+
+	accessMode := corev1api.PersistentVolumeBlock
+
+	//accessMode := kube.GetVolumeModeByPVC(targetPVC)
+	// if param.DataMover == datamover.DataMoverTypeVeleroBlock {
+	// 	accessMode = corev1api.PersistentVolumeBlock
+	// }
+
+	if kube.GetVolumeModeByPVC(restorePVC) == accessMode {
+		return restorePVC, nil
+	}
+
+	curLog.WithField("restore PVC", restorePVC.Name).Infof("Need to tranform restore volume to %s mode", accessMode)
+
+	restorePV, err := kube.WaitPVCBound(ctx, e.kubeClient.CoreV1(), e.kubeClient.CoreV1(), restorePVC.Name, ownerObject.Namespace, param.OperationTimeout)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error to get PV from restore PVC %s", restorePVC.Name)
+	}
+
+	curLog.WithField("restore PV", restorePV.Name).WithField("restore PVC", restorePVC.Name).Info("Restore PVC is bound")
+
+	orgReclaim := restorePV.Spec.PersistentVolumeReclaimPolicy
+
+	retained, err := kube.SetPVReclaimPolicy(ctx, e.kubeClient.CoreV1(), restorePV, corev1api.PersistentVolumeReclaimRetain)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error to retain PV %s", restorePV.Name)
+	}
+
+	curLog.WithField("restore PV", restorePV.Name).WithField("retained", (retained != nil)).Info("Restore PV is retained")
+
+	var rebindPV *corev1api.PersistentVolume
+
+	defer func() {
+		if retained != nil {
+			curLog.WithField("retained PV", retained.Name).Info("Deleting retained PV on error")
+			kube.DeletePVIfAny(ctx, e.kubeClient.CoreV1(), retained.Name, curLog)
+		}
+
+		if rebindPV != nil {
+			curLog.WithField("rebind PV", rebindPV.Name).Info("Deleting rebind PV on error")
+			kube.DeletePVIfAny(ctx, e.kubeClient.CoreV1(), rebindPV.Name, curLog)
+		}
+	}()
+
+	if retained != nil {
+		restorePV = retained
+	}
+
+	err = kube.EnsureDeletePVC(ctx, e.kubeClient.CoreV1(), restorePVC.Name, ownerObject.Namespace, param.OperationTimeout)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error to delete restore PVC %s", restorePVC.Name)
+	}
+
+	curLog.WithField("restore PVC", restorePVC.Name).Info("Restore PVC is deleted")
+
+	// err = kube.WaitPVReleased(ctx, e.kubeClient.CoreV1(), restorePV.Name, param.OperationTimeout)
+	// if err != nil {
+	// 	return nil, errors.Wrapf(err, "error waiting for restore PV %s to detach", restorePV.Name)
+	// }
+
+	// curLog.WithField("restore PV", restorePV.Name).Info("Restore PV is released")
+
+	err = kube.EnsureDeletePV(ctx, e.kubeClient.CoreV1(), restorePV.Name, param.OperationTimeout)
+	if err != nil {
+		return nil, errors.Wrapf(err, "error deleting restore PV %s", restorePV.Name)
+	}
+
+	curLog.WithField("restore PV", restorePV.Name).Info("Restore PV is deleted")
+
+	retained = nil
+
+	e.updateRestorePVC(restorePVC, accessMode)
+
+	rebindPV, err = kube.RebindPV(ctx, e.kubeClient.CoreV1(), restorePVC.Spec.VolumeName, restorePV, restorePVC, orgReclaim, "")
+	if err != nil {
+		return nil, errors.Wrapf(err, "error rebinding PV for target PVC %s", param.TargetPVCName)
+	}
+
+	curLog.WithField("rebind PV", rebindPV.Name).Info("Rebind PV is created")
+
+	restorePVC, err = e.createRestorePVC(ctx, ownerObject, restorePVC, selectedNode)
+	if err != nil {
+		return nil, errors.Wrap(err, "error to recreate restore pvc")
+	}
+
+	rebindPV = nil
+
+	return restorePVC, nil
 }
 
 func (e *genericRestoreExposer) GetExposed(ctx context.Context, ownerObject corev1api.ObjectReference, nodeClient client.Client, nodeName string, timeout time.Duration) (*ExposeResult, error) {
@@ -836,4 +943,16 @@ func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObjec
 	}
 
 	return e.kubeClient.CoreV1().PersistentVolumeClaims(pvcObj.Namespace).Create(ctx, pvcObj, metav1.CreateOptions{})
+}
+
+func (e *genericRestoreExposer) updateRestorePVC(restorePVC *corev1api.PersistentVolumeClaim, accessMode corev1api.PersistentVolumeMode) {
+	if restorePVC.Spec.VolumeMode == nil {
+		restorePVC.Spec.VolumeMode = new(corev1api.PersistentVolumeMode)
+	}
+
+	*restorePVC.Spec.VolumeMode = accessMode
+
+	restorePVC.Spec.VolumeName = uuid.NewString()
+	delete(restorePVC.Annotations, kube.KubeAnnBindCompleted)
+	delete(restorePVC.Annotations, kube.KubeAnnBoundByController)
 }

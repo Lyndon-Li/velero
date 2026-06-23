@@ -2358,7 +2358,7 @@ func TestClonePVSource(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			actual := clonePVSource(test.source, test.newFSType)
+			actual := clonePVSource(test.source, "", test.newFSType)
 			assert.Equal(t, test.expected, actual)
 		})
 	}
