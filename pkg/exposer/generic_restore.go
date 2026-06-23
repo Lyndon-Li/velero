@@ -31,6 +31,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/vmware-tanzu/velero/pkg/datamover"
 	"github.com/vmware-tanzu/velero/pkg/nodeagent"
 	velerotypes "github.com/vmware-tanzu/velero/pkg/types"
 	"github.com/vmware-tanzu/velero/pkg/util/boolptr"
@@ -80,6 +81,9 @@ type GenericRestoreExposeParam struct {
 
 	// CacheVolume specifies the info for cache volumes
 	CacheVolume *CacheConfigs
+
+	// DataMover is the data mover type, e.g., velero-fs, velero-block
+	DataMover string
 }
 
 // GenericRestoreRebindVolumeParam define the input param for Generic Restore Rebind Volume
@@ -192,10 +196,28 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 		}
 	}
 
+	volumeMode := kube.GetVolumeModeByPVC(targetPVC)
+	if param.DataMover == datamover.DataMoverTypeVeleroBlock {
+		volumeMode = corev1api.PersistentVolumeBlock
+	}
+
+	restorePVC, err := e.createRestorePVC(ctx, ownerObject, targetPVC, selectedNode, volumeMode)
+	if err != nil {
+		return errors.Wrap(err, "error to create restore pvc")
+	}
+
+	curLog.WithField("pvc name", restorePVC.Name).Info("Restore PVC is created")
+
+	defer func() {
+		if err != nil {
+			kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVC.Name, restorePVC.Namespace, 0, curLog)
+		}
+	}()
+
 	restorePod, err := e.createRestorePod(
 		ctx,
 		ownerObject,
-		targetPVC,
+		restorePVC,
 		param.OperationTimeout,
 		param.HostingPodLabels,
 		param.HostingPodAnnotations,
@@ -216,19 +238,6 @@ func (e *genericRestoreExposer) Expose(ctx context.Context, ownerObject corev1ap
 	defer func() {
 		if err != nil {
 			kube.DeletePodIfAny(ctx, e.kubeClient.CoreV1(), restorePod.Name, restorePod.Namespace, curLog)
-		}
-	}()
-
-	restorePVC, err := e.createRestorePVC(ctx, ownerObject, targetPVC, selectedNode)
-	if err != nil {
-		return errors.Wrap(err, "error to create restore pvc")
-	}
-
-	curLog.WithField("pvc name", restorePVC.Name).Info("Restore PVC is created")
-
-	defer func() {
-		if err != nil {
-			kube.DeletePVAndPVCIfAny(ctx, e.kubeClient.CoreV1(), restorePVC.Name, restorePVC.Namespace, 0, curLog)
 		}
 	}()
 
@@ -802,7 +811,7 @@ func (e *genericRestoreExposer) createRestorePod(
 	return e.kubeClient.CoreV1().Pods(ownerObject.Namespace).Create(ctx, pod, metav1.CreateOptions{})
 }
 
-func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObject corev1api.ObjectReference, targetPVC *corev1api.PersistentVolumeClaim, selectedNode string) (*corev1api.PersistentVolumeClaim, error) {
+func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObject corev1api.ObjectReference, targetPVC *corev1api.PersistentVolumeClaim, selectedNode string, volumeMode corev1api.PersistentVolumeMode) (*corev1api.PersistentVolumeClaim, error) {
 	restorePVCName := ownerObject.Name
 
 	pvcObj := &corev1api.PersistentVolumeClaim{
@@ -824,7 +833,7 @@ func (e *genericRestoreExposer) createRestorePVC(ctx context.Context, ownerObjec
 		Spec: corev1api.PersistentVolumeClaimSpec{
 			AccessModes:      targetPVC.Spec.AccessModes,
 			StorageClassName: targetPVC.Spec.StorageClassName,
-			VolumeMode:       targetPVC.Spec.VolumeMode,
+			VolumeMode:       &volumeMode,
 			Resources:        targetPVC.Spec.Resources,
 		},
 	}
