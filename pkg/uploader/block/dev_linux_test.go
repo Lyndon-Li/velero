@@ -52,6 +52,7 @@ func TestResolveSymlink(t *testing.T) {
 		{
 			name: "path does not exist returns error",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				return filepath.Join(t.TempDir(), "nonexistent")
 			},
 			expectError: true,
@@ -60,27 +61,32 @@ func TestResolveSymlink(t *testing.T) {
 		{
 			name: "regular file returns same path",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				f, err := os.CreateTemp(t.TempDir(), "regular-*")
 				require.NoError(t, err)
 				f.Close()
 				return f.Name()
 			},
 			checkResult: func(t *testing.T, input, result string) {
+				t.Helper()
 				assert.Equal(t, input, result)
 			},
 		},
 		{
 			name: "directory returns same path",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				return t.TempDir()
 			},
 			checkResult: func(t *testing.T, input, result string) {
+				t.Helper()
 				assert.Equal(t, input, result)
 			},
 		},
 		{
 			name: "symlink to existing file returns target real path",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				dir := t.TempDir()
 				target, err := os.CreateTemp(dir, "target-*")
 				require.NoError(t, err)
@@ -90,6 +96,7 @@ func TestResolveSymlink(t *testing.T) {
 				return linkPath
 			},
 			checkResult: func(t *testing.T, input, result string) {
+				t.Helper()
 				assert.NotEqual(t, input, result)
 				fi, err := os.Lstat(result)
 				require.NoError(t, err)
@@ -99,6 +106,7 @@ func TestResolveSymlink(t *testing.T) {
 		{
 			name: "symlink to existing directory returns resolved path",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				outer := t.TempDir()
 				inner := t.TempDir()
 				linkPath := filepath.Join(outer, "dirlink")
@@ -106,6 +114,7 @@ func TestResolveSymlink(t *testing.T) {
 				return linkPath
 			},
 			checkResult: func(t *testing.T, input, result string) {
+				t.Helper()
 				assert.NotEqual(t, input, result)
 				fi, err := os.Lstat(result)
 				require.NoError(t, err)
@@ -115,6 +124,7 @@ func TestResolveSymlink(t *testing.T) {
 		{
 			name: "broken symlink — target does not exist — returns error",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				dir := t.TempDir()
 				linkPath := filepath.Join(dir, "broken-link")
 				require.NoError(t, os.Symlink(filepath.Join(dir, "nonexistent-target"), linkPath))
@@ -126,6 +136,7 @@ func TestResolveSymlink(t *testing.T) {
 		{
 			name: "chain of symlinks is fully resolved",
 			setupPath: func(t *testing.T) string {
+				t.Helper()
 				dir := t.TempDir()
 				// real → link1 → link2 (two-hop chain)
 				real, err := os.CreateTemp(dir, "real-*")
@@ -138,6 +149,7 @@ func TestResolveSymlink(t *testing.T) {
 				return link2
 			},
 			checkResult: func(t *testing.T, input, result string) {
+				t.Helper()
 				assert.NotEqual(t, input, result)
 				fi, err := os.Lstat(result)
 				require.NoError(t, err)
@@ -154,7 +166,7 @@ func TestResolveSymlink(t *testing.T) {
 			if tc.expectError {
 				require.Error(t, err)
 				if tc.errContains != "" {
-					assert.ErrorContains(t, err, tc.errContains)
+					require.ErrorContains(t, err, tc.errContains)
 				}
 				assert.Empty(t, result)
 			} else {
@@ -321,7 +333,7 @@ func TestOpenBlockDevice(t *testing.T) {
 			if tc.expectError {
 				require.Error(t, err)
 				if tc.errContains != "" {
-					assert.ErrorContains(t, err, tc.errContains)
+					require.ErrorContains(t, err, tc.errContains)
 				}
 				assert.Nil(t, f)
 			} else {
