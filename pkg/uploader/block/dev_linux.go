@@ -30,6 +30,7 @@ import (
 var lstatFunc = os.Lstat
 var openFileFunc = os.OpenFile
 
+// openBlockDevice opens a block device for read/write, caller needs to close the returned handle
 func openBlockDevice(path string, read bool) (*os.File, error) {
 	devPath, err := resolveSymlink(path)
 	if err != nil {
