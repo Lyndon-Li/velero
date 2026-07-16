@@ -155,8 +155,33 @@ func unmarshalResourcePolicies(yamlData *string) (*ResourcePolicies, error) {
 				return nil, fmt.Errorf("pvcLabels must be a map of string to string, got %T", raw)
 			}
 		}
+		if raw, ok := vp.Conditions["pvcVolumeMode"]; ok {
+			if _, ok := raw.(string); !ok {
+				return nil, fmt.Errorf("pvcVolumeMode must be a string, got %T", raw)
+			}
+		}
+		if raw, ok := vp.Conditions["pvcAccessModes"]; ok {
+			if err := validateStringSliceCondition("pvcAccessModes", raw); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return resPolicies, nil
+}
+
+func validateStringSliceCondition(name string, raw any) error {
+	switch values := raw.(type) {
+	case []any:
+		for _, value := range values {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("%s must be a list of strings, got element %T", name, value)
+			}
+		}
+	case []string:
+	default:
+		return fmt.Errorf("%s must be a list of strings, got %T", name, raw)
+	}
+	return nil
 }
 
 func (p *Policies) BuildPolicy(resPolicies *ResourcePolicies) error {
@@ -181,6 +206,12 @@ func (p *Policies) BuildPolicy(resPolicies *ResourcePolicies) error {
 		}
 		if len(con.PVCPhase) > 0 {
 			volP.conditions = append(volP.conditions, &pvcPhaseCondition{phases: con.PVCPhase})
+		}
+		if con.PVCVolumeMode != "" {
+			volP.conditions = append(volP.conditions, &pvcVolumeModeCondition{volumeMode: con.PVCVolumeMode})
+		}
+		if len(con.PVCAccessModes) > 0 {
+			volP.conditions = append(volP.conditions, &pvcAccessModesCondition{accessModes: con.PVCAccessModes})
 		}
 		p.volumePolicies = append(p.volumePolicies, volP)
 	}
@@ -318,6 +349,80 @@ func GetResourcePoliciesFromBackup(
 	}
 
 	return resourcePolicies, nil
+}
+
+// GetGlobalResourcePolicies loads and validates the cluster-wide global backup volume
+// policies from a ConfigMap in the Velero install namespace. Only the volumePolicies
+// section is honored globally; any include/exclude or fine-grained filter policies are
+// ignored (a warning is logged), as those are tied to a specific backup use case.
+func GetGlobalResourcePolicies(
+	client crclient.Client,
+	namespace string,
+	configMapName string,
+	logger logrus.FieldLogger,
+) (*Policies, error) {
+	cm := &corev1api.ConfigMap{}
+	if err := client.Get(context.Background(), crclient.ObjectKey{Namespace: namespace, Name: configMapName}, cm); err != nil {
+		return nil, fmt.Errorf("fail to get global backup volume policies ConfigMap %s/%s: %w", namespace, configMapName, err)
+	}
+
+	policies, err := getResourcePoliciesFromConfig(cm)
+	if err != nil {
+		return nil, fmt.Errorf("fail to read global backup volume policies from ConfigMap %s/%s: %w", namespace, configMapName, err)
+	}
+	if err := policies.Validate(); err != nil {
+		return nil, fmt.Errorf("fail to validate global backup volume policies in ConfigMap %s/%s: %w", namespace, configMapName, err)
+	}
+
+	// Only volumePolicies apply globally; warn about any other filter policies that will be ignored.
+	if policies.includeExcludePolicy != nil ||
+		policies.clusterScopedFilterPolicy != nil ||
+		len(policies.namespacedFilterPolicies) > 0 {
+		logger.Warnf("Global backup volume policies ConfigMap %s/%s contains include/exclude or fine-grained "+
+			"filter policies; these are ignored, only volumePolicies apply globally.", namespace, configMapName)
+	}
+
+	// Return a fresh Policies carrying only the globally-applicable fields. Using an allowlist here
+	// (rather than nil-ing out the ignored fields) means any filter field added to Policies in the
+	// future is excluded from the global policies by default, without needing to update this code.
+	return &Policies{
+		version:        policies.version,
+		volumePolicies: policies.volumePolicies,
+	}, nil
+}
+
+// GetResourcePoliciesFromBackupWithGlobal builds the effective resource policies for a backup
+// by merging the backup-referenced resource policies with the global backup volume policies
+// (when globalConfigMapName is set). The merged volumePolicies list is the backup-level
+// policies followed by the global ones, so the first match wins and a backup can override the
+// global baseline for a specific volume while still inheriting the rest of the global rules.
+func GetResourcePoliciesFromBackupWithGlobal(
+	backup velerov1api.Backup,
+	client crclient.Client,
+	globalConfigMapName string,
+	installNamespace string,
+	logger logrus.FieldLogger,
+) (*Policies, error) {
+	backupPolicies, err := GetResourcePoliciesFromBackup(backup, client, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	if globalConfigMapName == "" {
+		return backupPolicies, nil
+	}
+
+	globalPolicies, err := GetGlobalResourcePolicies(client, installNamespace, globalConfigMapName, logger)
+	if err != nil {
+		return nil, err
+	}
+
+	if backupPolicies == nil {
+		return globalPolicies, nil
+	}
+	// Backup-level policies first, then global, so backups can override the global baseline.
+	backupPolicies.volumePolicies = append(backupPolicies.volumePolicies, globalPolicies.volumePolicies...)
+	return backupPolicies, nil
 }
 
 func getResourcePoliciesFromConfig(cm *corev1api.ConfigMap) (*Policies, error) {

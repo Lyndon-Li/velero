@@ -18,12 +18,20 @@ package resourcepolicies
 import (
 	"testing"
 
+	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1api "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
+	velerotest "github.com/vmware-tanzu/velero/pkg/test"
 )
+
+func pvcVolumeMode(mode corev1api.PersistentVolumeMode) *corev1api.PersistentVolumeMode {
+	return &mode
+}
 
 func TestLoadResourcePolicies(t *testing.T) {
 	testCases := []struct {
@@ -157,6 +165,52 @@ volumePolicies:
       type: skip
 `,
 			wantErr: false,
+		},
+		{
+			name: "supported format pvcVolumeMode",
+			yamlData: `version: v1
+volumePolicies:
+  - conditions:
+      pvcVolumeMode: Block
+    action:
+      type: skip
+`,
+			wantErr: false,
+		},
+		{
+			name: "error format of pvcVolumeMode (not a string)",
+			yamlData: `version: v1
+volumePolicies:
+  - conditions:
+      pvcVolumeMode:
+        - Block
+    action:
+      type: skip
+`,
+			wantErr: true,
+		},
+		{
+			name: "supported format pvcAccessModes",
+			yamlData: `version: v1
+volumePolicies:
+  - conditions:
+      pvcAccessModes:
+        - ReadWriteOnce
+    action:
+      type: skip
+`,
+			wantErr: false,
+		},
+		{
+			name: "error format of pvcAccessModes (not a list)",
+			yamlData: `version: v1
+volumePolicies:
+  - conditions:
+      pvcAccessModes: ReadWriteOnce
+    action:
+      type: skip
+`,
+			wantErr: true,
 		},
 	}
 	for _, tc := range testCases {
@@ -1046,6 +1100,271 @@ volumePolicies:
 			},
 			skip: true,
 		},
+		{
+			name: "PVC volume mode matching - Block volume mode should skip",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcVolumeMode: Block
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-block",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode: pvcVolumeMode(corev1api.PersistentVolumeBlock),
+				},
+			},
+			skip: true,
+		},
+		{
+			name: "PVC volume mode matching - Filesystem volume mode should not skip",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcVolumeMode: Block
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-filesystem",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode: pvcVolumeMode(corev1api.PersistentVolumeFilesystem),
+				},
+			},
+			skip: false,
+		},
+		{
+			name: "PVC volume mode matching - nil volume mode should not match Filesystem",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcVolumeMode: Filesystem
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-without-volume-mode",
+				},
+			},
+			skip: false,
+		},
+		{
+			name: "PVC volume mode matching - unknown condition value should not match empty volume mode",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcVolumeMode: foo
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-without-volume-mode",
+				},
+			},
+			skip: false,
+		},
+		{
+			name: "PVC volume mode matching - omitted condition should not restrict volume mode",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadWriteOnce"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-block-rwo",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode:  pvcVolumeMode(corev1api.PersistentVolumeBlock),
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteOnce},
+				},
+			},
+			skip: true,
+		},
+		{
+			name: "PVC volume mode matching - non-PVC volume should not match",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcVolumeMode: Filesystem
+  action:
+    type: skip`,
+			vol: nil,
+			podVol: &corev1api.Volume{
+				Name: "empty-dir-volume",
+				VolumeSource: corev1api.VolumeSource{
+					EmptyDir: &corev1api.EmptyDirVolumeSource{},
+				},
+			},
+			pvc:  nil,
+			skip: false,
+		},
+		{
+			name: "PVC access modes matching - non-PVC volume should not match",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadWriteOnce"]
+  action:
+    type: skip`,
+			vol: nil,
+			podVol: &corev1api.Volume{
+				Name: "configmap-volume",
+				VolumeSource: corev1api.VolumeSource{
+					ConfigMap: &corev1api.ConfigMapVolumeSource{},
+				},
+			},
+			pvc:  nil,
+			skip: false,
+		},
+
+		{
+			name: "PVC access modes matching - ReadWriteOnce should skip",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadWriteOnce"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-rwo",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteOnce},
+				},
+			},
+			skip: true,
+		},
+		{
+			name: "PVC access modes matching - extra PVC access mode should not skip",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadWriteOnce"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-rwo-rom",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteOnce, corev1api.ReadOnlyMany},
+				},
+			},
+			skip: false,
+		},
+		{
+			name: "PVC access modes matching - ReadWriteMany should not skip",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadWriteOnce"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-rwx",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteMany},
+				},
+			},
+			skip: false,
+		},
+		{
+			name: "PVC access modes matching - exact access mode set should match regardless of order",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadWriteMany", "ReadOnlyMany"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-rom-rwx",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadOnlyMany, corev1api.ReadWriteMany},
+				},
+			},
+			skip: true,
+		},
+		{
+			name: "PVC access modes matching - missing one configured access mode should not skip",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcAccessModes: ["ReadOnlyMany", "ReadWriteMany"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-rwx",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteMany},
+				},
+			},
+			skip: false,
+		},
+		{
+			name: "PVC access modes matching - Combined with volume mode",
+			yamlData: `version: v1
+volumePolicies:
+- conditions:
+   pvcVolumeMode: Block
+   pvcAccessModes: ["ReadWriteOnce"]
+  action:
+    type: skip`,
+			vol:    nil,
+			podVol: nil,
+			pvc: &corev1api.PersistentVolumeClaim{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: "default",
+					Name:      "pvc-block-rwo",
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode:  pvcVolumeMode(corev1api.PersistentVolumeBlock),
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteOnce},
+				},
+			},
+			skip: true,
+		},
 	}
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1119,28 +1438,36 @@ func TestGetMatchAction_Errors(t *testing.T) {
 
 func TestParsePVC(t *testing.T) {
 	tests := []struct {
-		name           string
-		pvc            *corev1api.PersistentVolumeClaim
-		expectedLabels map[string]string
-		expectedPhase  string
-		expectErr      bool
+		name                string
+		pvc                 *corev1api.PersistentVolumeClaim
+		expectedLabels      map[string]string
+		expectedPhase       string
+		expectedVolumeMode  string
+		expectedAccessModes []string
+		expectErr           bool
 	}{
 		{
-			name: "valid PVC with labels and Pending phase",
+			name: "valid PVC with labels, Pending phase, Block volume mode, and access modes",
 			pvc: &corev1api.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{"env": "prod"},
+				},
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode:  pvcVolumeMode(corev1api.PersistentVolumeBlock),
+					AccessModes: []corev1api.PersistentVolumeAccessMode{corev1api.ReadWriteOnce, corev1api.ReadOnlyMany},
 				},
 				Status: corev1api.PersistentVolumeClaimStatus{
 					Phase: corev1api.ClaimPending,
 				},
 			},
-			expectedLabels: map[string]string{"env": "prod"},
-			expectedPhase:  "Pending",
-			expectErr:      false,
+			expectedLabels:      map[string]string{"env": "prod"},
+			expectedPhase:       "Pending",
+			expectedVolumeMode:  "Block",
+			expectedAccessModes: []string{"ReadWriteOnce", "ReadOnlyMany"},
+			expectErr:           false,
 		},
 		{
-			name: "valid PVC with Bound phase",
+			name: "valid PVC with Bound phase and nil volume mode",
 			pvc: &corev1api.PersistentVolumeClaim{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{},
@@ -1149,27 +1476,52 @@ func TestParsePVC(t *testing.T) {
 					Phase: corev1api.ClaimBound,
 				},
 			},
-			expectedLabels: nil,
-			expectedPhase:  "Bound",
-			expectErr:      false,
+			expectedLabels:      nil,
+			expectedPhase:       "Bound",
+			expectedVolumeMode:  "",
+			expectedAccessModes: nil,
+			expectErr:           false,
 		},
 		{
-			name: "valid PVC with Lost phase",
+			name: "valid PVC with Lost phase and Filesystem volume mode",
 			pvc: &corev1api.PersistentVolumeClaim{
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode: pvcVolumeMode(corev1api.PersistentVolumeFilesystem),
+				},
 				Status: corev1api.PersistentVolumeClaimStatus{
 					Phase: corev1api.ClaimLost,
 				},
 			},
-			expectedLabels: nil,
-			expectedPhase:  "Lost",
-			expectErr:      false,
+			expectedLabels:      nil,
+			expectedPhase:       "Lost",
+			expectedVolumeMode:  "Filesystem",
+			expectedAccessModes: nil,
+			expectErr:           false,
 		},
 		{
-			name:           "nil PVC pointer",
-			pvc:            (*corev1api.PersistentVolumeClaim)(nil),
-			expectedLabels: nil,
-			expectedPhase:  "",
-			expectErr:      false,
+			name: "valid PVC with unknown non-nil volume mode",
+			pvc: &corev1api.PersistentVolumeClaim{
+				Spec: corev1api.PersistentVolumeClaimSpec{
+					VolumeMode: pvcVolumeMode(corev1api.PersistentVolumeMode("foo")),
+				},
+				Status: corev1api.PersistentVolumeClaimStatus{
+					Phase: corev1api.ClaimBound,
+				},
+			},
+			expectedLabels:      nil,
+			expectedPhase:       "Bound",
+			expectedVolumeMode:  "foo",
+			expectedAccessModes: nil,
+			expectErr:           false,
+		},
+		{
+			name:                "nil PVC pointer",
+			pvc:                 (*corev1api.PersistentVolumeClaim)(nil),
+			expectedLabels:      nil,
+			expectedPhase:       "",
+			expectedVolumeMode:  "",
+			expectedAccessModes: nil,
+			expectErr:           false,
 		},
 	}
 
@@ -1180,6 +1532,8 @@ func TestParsePVC(t *testing.T) {
 
 			assert.Equal(t, tc.expectedLabels, s.pvcLabels)
 			assert.Equal(t, tc.expectedPhase, s.pvcPhase)
+			assert.Equal(t, tc.expectedVolumeMode, s.pvcVolumeMode)
+			assert.Equal(t, tc.expectedAccessModes, s.pvcAccessModes)
 		})
 	}
 }
@@ -1509,7 +1863,7 @@ namespacedFilterPolicies:
 - namespaces: ["team-frontend-*", "specific-ns"]
   resourceFilters:
   - kinds: ["Pod", "ConfigMap", "Secret"]
-- namespaces: ["team-*", "another-pattern"] 
+- namespaces: ["team-*", "another-pattern"]
   resourceFilters:
   - kinds: ["Deployment", "Service"]`
 
@@ -1679,4 +2033,335 @@ clusterScopedFilterPolicy:
 			}
 		})
 	}
+}
+
+func TestPVCVolumeModeMatch(t *testing.T) {
+	tests := []struct {
+		name          string
+		condition     *pvcVolumeModeCondition
+		volume        *structuredVolume
+		expectedMatch bool
+	}{
+		{
+			name:          "match Block volume mode",
+			condition:     &pvcVolumeModeCondition{volumeMode: "Block"},
+			volume:        &structuredVolume{pvcVolumeMode: "Block"},
+			expectedMatch: true,
+		},
+		{
+			name:          "match Filesystem volume mode",
+			condition:     &pvcVolumeModeCondition{volumeMode: "Filesystem"},
+			volume:        &structuredVolume{pvcVolumeMode: "Filesystem"},
+			expectedMatch: true,
+		},
+		{
+			name:          "no match for different volume mode",
+			condition:     &pvcVolumeModeCondition{volumeMode: "Block"},
+			volume:        &structuredVolume{pvcVolumeMode: "Filesystem"},
+			expectedMatch: false,
+		},
+		{
+			name:          "case-sensitive no match for lowercase volume mode",
+			condition:     &pvcVolumeModeCondition{volumeMode: "block"},
+			volume:        &structuredVolume{pvcVolumeMode: "Block"},
+			expectedMatch: false,
+		},
+		{
+			name:          "no match for unknown condition value against Filesystem",
+			condition:     &pvcVolumeModeCondition{volumeMode: "foo"},
+			volume:        &structuredVolume{pvcVolumeMode: "Filesystem"},
+			expectedMatch: false,
+		},
+		{
+			name:          "match unknown condition value only when volume has same value",
+			condition:     &pvcVolumeModeCondition{volumeMode: "foo"},
+			volume:        &structuredVolume{pvcVolumeMode: "foo"},
+			expectedMatch: true,
+		},
+		{
+			name:          "no match for empty volume mode",
+			condition:     &pvcVolumeModeCondition{volumeMode: "Block"},
+			volume:        &structuredVolume{pvcVolumeMode: ""},
+			expectedMatch: false,
+		},
+		{
+			name:          "match with empty volume mode condition (always match)",
+			condition:     &pvcVolumeModeCondition{volumeMode: ""},
+			volume:        &structuredVolume{pvcVolumeMode: "Block"},
+			expectedMatch: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.condition.match(tc.volume)
+			assert.Equal(t, tc.expectedMatch, result)
+		})
+	}
+}
+
+func TestPVCAccessModesMatch(t *testing.T) {
+	tests := []struct {
+		name          string
+		condition     *pvcAccessModesCondition
+		volume        *structuredVolume
+		expectedMatch bool
+	}{
+		{
+			name:          "match ReadWriteOnce access mode",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadWriteOnce"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce"}},
+			expectedMatch: true,
+		},
+		{
+			name:          "match exact multiple access modes",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadWriteOnce", "ReadOnlyMany"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce", "ReadOnlyMany"}},
+			expectedMatch: true,
+		},
+		{
+			name:          "match exact multiple access modes regardless of order",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadOnlyMany", "ReadWriteOnce"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce", "ReadOnlyMany"}},
+			expectedMatch: true,
+		},
+		{
+			name:          "no match when one of multiple access modes is missing",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadWriteOnce", "ReadOnlyMany"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadOnlyMany"}},
+			expectedMatch: false,
+		},
+		{
+			name:          "no match when PVC has extra access modes",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadWriteMany"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce", "ReadWriteMany"}},
+			expectedMatch: false,
+		},
+		{
+			name:          "no match for different access mode",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadWriteOnce"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteMany"}},
+			expectedMatch: false,
+		},
+		{
+			name:          "case-sensitive no match for lowercase access mode",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"readwriteonce"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce"}},
+			expectedMatch: false,
+		},
+		{
+			name:          "no match for empty PVC access modes",
+			condition:     &pvcAccessModesCondition{accessModes: []string{"ReadWriteOnce"}},
+			volume:        &structuredVolume{pvcAccessModes: []string{}},
+			expectedMatch: false,
+		},
+		{
+			name:          "match with empty access modes list (always match)",
+			condition:     &pvcAccessModesCondition{accessModes: []string{}},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce"}},
+			expectedMatch: true,
+		},
+		{
+			name:          "match with nil access modes list (always match)",
+			condition:     &pvcAccessModesCondition{accessModes: nil},
+			volume:        &structuredVolume{pvcAccessModes: []string{"ReadWriteOnce"}},
+			expectedMatch: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tc.condition.match(tc.volume)
+			assert.Equal(t, tc.expectedMatch, result)
+		})
+	}
+}
+
+// ---- Global backup volume policies ----
+
+func globalPolicyConfigMap(name, data string) *corev1api.ConfigMap {
+	return &corev1api.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "velero", Name: name},
+		Data:       map[string]string{"policies.yaml": data},
+	}
+}
+
+func backupWithPolicy(ref string) velerov1api.Backup {
+	b := velerov1api.Backup{ObjectMeta: metav1.ObjectMeta{Namespace: "velero", Name: "backup"}}
+	if ref != "" {
+		b.Spec.ResourcePolicy = &corev1api.TypedLocalObjectReference{Kind: ConfigmapRefType, Name: ref}
+	}
+	return b
+}
+
+// firstActionFor returns the action type the policies select for a PV with the given storage
+// class, or "" when nothing matches. It exercises the compiled match logic so the tests verify
+// merge ordering rather than internal field layout.
+func firstActionFor(p *Policies, storageClass string) VolumeActionType {
+	pv := &corev1api.PersistentVolume{Spec: corev1api.PersistentVolumeSpec{StorageClassName: storageClass}}
+	vol := &structuredVolume{}
+	vol.parsePV(pv)
+	if a := p.match(vol); a != nil {
+		return a.Type
+	}
+	return ""
+}
+
+func TestGetResourcePoliciesFromBackupWithGlobal(t *testing.T) {
+	gp2Skip := `version: v1
+volumePolicies:
+  - conditions:
+      storageClass:
+        - gp2
+    action:
+      type: skip
+`
+	gp2Snapshot := `version: v1
+volumePolicies:
+  - conditions:
+      storageClass:
+        - gp2
+    action:
+      type: snapshot
+`
+	otherFsBackup := `version: v1
+volumePolicies:
+  - conditions:
+      storageClass:
+        - other
+    action:
+      type: fs-backup
+`
+
+	tests := []struct {
+		name                string
+		backupCM            *corev1api.ConfigMap
+		globalCMName        string
+		globalCM            *corev1api.ConfigMap
+		backupRef           string
+		expectErr           bool
+		expectedGp2Action   VolumeActionType
+		expectedNumPolicies int
+	}{
+		{
+			name:                "no global, backup only - unchanged behavior",
+			backupRef:           "backup01",
+			backupCM:            globalPolicyConfigMap("backup01", gp2Snapshot),
+			expectedGp2Action:   Snapshot,
+			expectedNumPolicies: 1,
+		},
+		{
+			name:                "global only, backup has no policy",
+			globalCMName:        "global",
+			globalCM:            globalPolicyConfigMap("global", gp2Skip),
+			expectedGp2Action:   Skip,
+			expectedNumPolicies: 1,
+		},
+		{
+			name:                "no global configured and no backup policy",
+			expectedGp2Action:   "",
+			expectedNumPolicies: 0,
+		},
+		{
+			name:                "merge - backup policy overrides global for gp2",
+			backupRef:           "backup01",
+			backupCM:            globalPolicyConfigMap("backup01", gp2Snapshot),
+			globalCMName:        "global",
+			globalCM:            globalPolicyConfigMap("global", gp2Skip),
+			expectedGp2Action:   Snapshot, // backup-level wins (evaluated first)
+			expectedNumPolicies: 2,
+		},
+		{
+			name:                "merge - backup inherits non-overlapping global rule",
+			backupRef:           "backup01",
+			backupCM:            globalPolicyConfigMap("backup01", otherFsBackup),
+			globalCMName:        "global",
+			globalCM:            globalPolicyConfigMap("global", gp2Skip),
+			expectedGp2Action:   Skip, // only global matches gp2
+			expectedNumPolicies: 2,
+		},
+		{
+			name:         "global configmap missing - error",
+			globalCMName: "global",
+			expectErr:    true,
+		},
+		{
+			name:         "global configmap invalid - error",
+			globalCMName: "global",
+			globalCM:     globalPolicyConfigMap("global", "not: [valid"),
+			expectErr:    true,
+		},
+		{
+			// Parses cleanly but fails Policies.Validate() due to the unsupported version.
+			name:         "global configmap fails validation - error",
+			globalCMName: "global",
+			globalCM:     globalPolicyConfigMap("global", "version: v2\nvolumePolicies: []\n"),
+			expectErr:    true,
+		},
+		{
+			// Backup references a ResourcePolicy ConfigMap that does not exist, so resolving the
+			// backup-level policies fails before the global ones are consulted.
+			name:         "backup configmap missing - error",
+			backupRef:    "missing-backup-cm",
+			globalCMName: "global",
+			globalCM:     globalPolicyConfigMap("global", gp2Skip),
+			expectErr:    true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			client := velerotest.NewFakeControllerRuntimeClient(t)
+			if tc.backupCM != nil {
+				require.NoError(t, client.Create(t.Context(), tc.backupCM))
+			}
+			if tc.globalCM != nil {
+				require.NoError(t, client.Create(t.Context(), tc.globalCM))
+			}
+
+			b := backupWithPolicy(tc.backupRef)
+
+			p, err := GetResourcePoliciesFromBackupWithGlobal(b, client, tc.globalCMName, "velero", logrus.New())
+			if tc.expectErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+
+			if tc.expectedNumPolicies == 0 {
+				assert.Nil(t, p)
+				return
+			}
+			require.NotNil(t, p)
+			assert.Len(t, p.volumePolicies, tc.expectedNumPolicies)
+			assert.Equal(t, tc.expectedGp2Action, firstActionFor(p, "gp2"))
+		})
+	}
+}
+
+func TestGetGlobalResourcePoliciesIgnoresNonVolumePolicies(t *testing.T) {
+	data := `version: v1
+volumePolicies:
+  - conditions:
+      storageClass:
+        - gp2
+    action:
+      type: skip
+namespacedFilterPolicies:
+- namespaces: ["frontend"]
+  resourceFilters:
+  - kinds: ["Pod"]
+`
+	client := velerotest.NewFakeControllerRuntimeClient(t)
+	require.NoError(t, client.Create(t.Context(), globalPolicyConfigMap("global", data)))
+
+	p, err := GetGlobalResourcePolicies(client, "velero", "global", logrus.New())
+	require.NoError(t, err)
+	require.NotNil(t, p)
+
+	// Only volumePolicies are kept; the namespaced filter policy is dropped.
+	assert.Len(t, p.volumePolicies, 1)
+	assert.Empty(t, p.GetNamespacedFilterPolicies())
+	assert.Nil(t, p.GetIncludeExcludePolicy())
+	assert.Nil(t, p.GetClusterScopedFilterPolicy())
 }
