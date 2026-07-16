@@ -88,17 +88,17 @@ func blkZeroOut(dest *os.File, start int64, length int64) error {
 		return errors.Wrap(err, "error getting raw connection")
 	}
 
-	var ioctlErr syscall.Errno = 0
+	ioctlErr := syscall.Errno(0)
 	if err := rawConn.Control(func(fd uintptr) {
 		if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, BLKZEROOUT, uintptr(unsafe.Pointer(&zeroRange[0]))); errno != 0 {
 			ioctlErr = errno
 		}
 	}); err != nil {
-		return errors.Wrap(err, "error control block dev")
+		return errors.Wrap(err, "error controlling block dev")
 	}
 
 	if ioctlErr != 0 {
-		return errors.Errorf("error calling ioctl on block dev, err %v", ioctlErr)
+		return errors.Wrapf(ioctlErr, "error calling ioctl on block dev")
 	}
 
 	return nil
