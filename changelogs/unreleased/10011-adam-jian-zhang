@@ -1,1 +1,1 @@
-Cherry pick fine grained filters PRs: #9783, #9821, #9840, #9847, #9848, #9880, #9881, #9908
+Add fine-grained filters for backup via resource policy, introduced ClusterScopedFilterPolicy and NamespacedFilterPolicy section for resource policy
