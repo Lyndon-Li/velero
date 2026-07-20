@@ -18,6 +18,7 @@ package block
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"runtime"
@@ -84,7 +85,7 @@ func (blkup *blockUploader) Backup(source sourceInfo, parentObject udmrepo.ID, b
 	}
 
 	destObj, err := blkup.repoWriter.NewObjectWriter(blkup.ctx, udmrepo.ObjectWriteOptions{
-		Description:  "BDEV:" + getObjectName(source.realSource),
+		Description:  fmt.Sprintf("BDEV:%s-%s", getObjectName(source.realSource), snapStart.Format("2006-01-02-15-04-05")),
 		DataType:     udmrepo.ObjectDataTypeData,
 		AccessMode:   udmrepo.ObjectDataAccessModeBlock,
 		ParentObject: parentObject,
