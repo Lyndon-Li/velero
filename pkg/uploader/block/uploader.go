@@ -143,9 +143,46 @@ func (blkup *blockUploader) Backup(source sourceInfo, parentObject udmrepo.ID, b
 	}, backupSize, nil
 }
 
-// TODO implement in following PRs
 func (blkup *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, bitmap cbt.Iterator, configs map[string]string) (int64, error) {
-	return 0, errors.New("not implemented")
+	if bitmap == nil {
+		return 0, errors.New("bitmap is not available")
+	}
+
+	meta, err := blkup.repoWriter.ReadMetadata(blkup.ctx, snapshot.RootObject.ID)
+	if err != nil {
+		return 0, errors.Wrapf(err, "error readding snapshot metadata for %s", snapshot.Description)
+	}
+
+	if len(meta.SubObjects) != 1 {
+		return 0, errors.Wrapf(err, "unexpected number of bdev object (%d) for snapshot %s", len(meta.SubObjects), snapshot.Description)
+	}
+
+	sourceSize, err := getSourceSize(snapshot)
+	if err != nil {
+		sourceSize = meta.SubObjects[0].Size
+		blkup.log.Warnf("Failed to get source size from snapshot %s, use backup size %v", snapshot.Description, sourceSize)
+	}
+
+	if sourceSize > meta.SubObjects[0].Size {
+		return 0, errors.Wrapf(err, "unexpected size (%v vs. %v) for bdev object %s", meta.SubObjects[0].Size, sourceSize, meta.SubObjects[0].Name)
+	}
+
+	if sourceSize > dest.size {
+		return 0, errors.Wrapf(err, "dest dev(%s) size is too small (%v vs. %v)", dest.path, dest.size, sourceSize)
+	}
+
+	reader, err := blkup.repoWriter.OpenObject(blkup.ctx, meta.SubObjects[0].ID)
+	if err != nil {
+		return 0, errors.Wrapf(err, "error opening bdev object %v", meta.SubObjects[0].Name)
+	}
+	defer reader.Close()
+
+	size, err := blkup.restoreData(reader, dest.dev, bitmap, sourceSize, dest.path)
+	if err != nil {
+		return 0, errors.Wrapf(err, "error restoring bdev object %s to volume %s", meta.SubObjects[0].Name, dest.path)
+	}
+
+	return size, nil
 }
 
 func (blkup *blockUploader) backupObject(dev *os.File, dest udmrepo.ObjectWriter, bitmap cbt.Iterator, totalLength int64) (udmrepo.ID, int64, int64, error) {
@@ -322,6 +359,28 @@ func getObjectName(source string) string {
 	s := strings.ReplaceAll(source, "/", "-")
 	s = strings.ReplaceAll(s, "\\", "-")
 	return strings.Trim(s, "-")
+}
+
+func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string) (int64, error) {
+	return 0, nil
+}
+
+func getSourceSize(snapshot udmrepo.Snapshot) (int64, error) {
+	if snapshot.Tags == nil {
+		return 0, errors.New("source size tag is empty")
+	}
+
+	s, found := snapshot.Tags[bdevSourceSizeTag]
+	if !found {
+		return 0, errors.New("source size tag is missing")
+	}
+
+	size, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return 0, errors.Wrapf(err, "error parsing size from %s", s)
+	}
+
+	return size, nil
 }
 
 func loadObjectFromSnapshot(ctx context.Context, rep udmrepo.BackupRepo, snapshot *udmrepo.Snapshot) (udmrepo.ID, error) {
