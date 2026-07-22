@@ -514,6 +514,29 @@ func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bit
 }
 
 func (bu *blockUploader) flushZeroBlocks(dest *os.File, start int64, length int64, zeroBlock []byte, destPath string) error {
+	err := blkZeroOut(dest, start, length)
+	if err == nil {
+		return nil
+	}
+
+	bu.log.WithError(err).Warnf("Failed to call zero out from dev %s, start %v, length %v. Fallback to conservative way", destPath, start, length)
+
+	var written int64
+	for written < length {
+		writeSize := min(len(zeroBlock), int(length-written))
+
+		n, err := dest.WriteAt(zeroBlock[:writeSize], start+written)
+		if err != nil {
+			return errors.Wrapf(err, "error writing zero buffer at %v, length %v", start+written, writeSize)
+		}
+
+		if writeSize != n {
+			return errors.Wrapf(err, "short write zero buffer at %v, length %v", start+written, writeSize)
+		}
+
+		written += int64(writeSize)
+	}
+
 	return nil
 }
 
