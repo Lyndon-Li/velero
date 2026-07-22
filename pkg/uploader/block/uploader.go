@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/cockroachdb/errors"
@@ -35,8 +36,9 @@ import (
 var ErrCanceled = errors.New("uploader is canceled")
 
 const (
-	blockSize  = (1 << 20)
-	bufferSize = 100 << 20
+	blockSize         = (1 << 20)
+	bufferSize        = 100 << 20
+	bdevSourceSizeTag = "bdev-source-size"
 )
 
 type sourceInfo struct {
@@ -48,6 +50,7 @@ type sourceInfo struct {
 type destInfo struct {
 	dev  *os.File
 	path string
+	size int64
 }
 
 type Uploader interface {
@@ -133,6 +136,9 @@ func (blkup *blockUploader) Backup(source sourceInfo, parentObject udmrepo.ID, b
 			Name:        "bdev-root",
 			Type:        udmrepo.ObjectDataTypeMetadata,
 			Permissions: 0o777,
+		},
+		Tags: map[string]string{
+			bdevSourceSizeTag: strconv.FormatInt(source.size, 10),
 		},
 	}, backupSize, nil
 }
