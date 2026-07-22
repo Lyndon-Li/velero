@@ -17,6 +17,7 @@ limitations under the License.
 package block
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -362,7 +363,158 @@ func getObjectName(source string) string {
 }
 
 func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string) (int64, error) {
-	return 0, nil
+	list := freelist.New(bufferSize, blockSize)
+	resultChan := make(chan readResult, list.Capacity())
+	zeroBlock := make([]byte, blockSize)
+	totalCount := bitmap.Count()
+
+	quit := make(chan struct{})
+	defer close(quit)
+
+	go func() {
+		defer close(resultChan)
+
+		offset, valid := bitmap.Next()
+		var buffer []byte
+		var nextPos uint64 = uint64(0)
+		for valid {
+			select {
+			case <-blkup.ctx.Done():
+				return
+			case <-quit:
+				return
+			case buffer = <-list.Chunks():
+			}
+
+			var err error
+
+			if nextPos != offset {
+				_, err = reader.Seek(int64(offset), io.SeekStart)
+			}
+
+			if err == nil {
+				var length int
+				length, err = io.ReadFull(reader, buffer)
+				if err == nil && length <= 0 {
+					err = io.ErrUnexpectedEOF
+				}
+			}
+
+			r := readResult{
+				buffer: buffer,
+				offset: int64(offset),
+				err:    err,
+			}
+
+			if r.err != nil {
+				r.resetBuffer(list)
+			}
+
+			resultChan <- r
+
+			if r.err != nil {
+				return
+			}
+
+			nextPos = offset + uint64(blockSize)
+			offset, valid = bitmap.Next()
+		}
+	}()
+
+	var written int64
+	var result readResult
+	var writeErr error
+	var readerRunning bool
+	var zeroStart int64 = -1
+	var zeroLength int64
+	var curCount int64
+
+	for curCount < int64(totalCount) {
+		select {
+		case <-blkup.ctx.Done():
+			writeErr = ErrCanceled
+		case result, readerRunning = <-resultChan:
+			if !readerRunning {
+				if blkup.ctx.Err() != nil {
+					writeErr = ErrCanceled
+				} else {
+					writeErr = io.ErrUnexpectedEOF
+				}
+			}
+		}
+
+		if writeErr != nil {
+			break
+		}
+
+		if result.err != nil {
+			writeErr = result.err
+			break
+		}
+
+		length := min(int64(blockSize), totalLength-result.offset)
+		if bytes.Equal(result.buffer, zeroBlock) {
+			if zeroStart == -1 {
+				zeroStart = result.offset
+				zeroLength = length
+			} else if result.offset == zeroStart+zeroLength {
+				zeroLength += length
+			} else {
+				if err := blkup.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
+					writeErr = errors.Wrapf(err, "error flushing zero blocks from %v, length %v", zeroStart, zeroLength)
+					break
+				}
+				zeroStart = result.offset
+				zeroLength = length
+			}
+		} else {
+			if zeroStart != -1 {
+				if err := blkup.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
+					writeErr = errors.Wrapf(err, "error flushing zero blocks from %v, length %v", zeroStart, zeroLength)
+					break
+				}
+
+				zeroStart = -1
+				zeroLength = 0
+			}
+
+			n, err := dest.WriteAt(result.buffer[:length], result.offset)
+			if err != nil {
+				writeErr = err
+				break
+			}
+
+			if length != int64(n) {
+				writeErr = io.ErrShortWrite
+				break
+			}
+		}
+
+		written += length
+		curCount++
+
+		result.resetBuffer(list)
+
+		blkup.progress.UpdateProgress(&uploader.Progress{BytesDone: written, TotalBytes: totalLength})
+	}
+
+	result.resetBuffer(list)
+
+	if writeErr != nil {
+		return written, writeErr
+	}
+
+	if zeroStart != -1 {
+		if err := blkup.flushZeroBlocks(dest, zeroStart, zeroLength, zeroBlock, destPath); err != nil {
+			return written, errors.Wrapf(err, "error flushing zero blocks from %v, length %v", zeroStart, zeroLength)
+		}
+	}
+
+	return written, nil
+}
+
+func (bu *blockUploader) flushZeroBlocks(dest *os.File, start int64, length int64, zeroBlock []byte, destPath string) error {
+	return nil
 }
 
 func getSourceSize(snapshot udmrepo.Snapshot) (int64, error) {
