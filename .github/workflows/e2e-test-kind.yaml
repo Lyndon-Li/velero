@@ -33,14 +33,14 @@ jobs:
       # Look for a CLI that's made for this PR
       - name: Fetch built CLI
         id: cli-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ./_output/bin/linux/amd64/velero
           # The cache key a combination of the current PR number and the commit SHA
           key: velero-cli-${{ github.event.pull_request.number }}-${{ github.sha }}
       - name: Fetch built image
         id: image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ./velero.tar
           # The cache key a combination of the current PR number and the commit SHA
@@ -85,7 +85,7 @@ jobs:
 
           echo "dockerfile_sha=${DOCKERFILE_SHA}" >> "$GITHUB_OUTPUT"
       - name: Cache MinIO Image
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: minio-cache
         with:
           path: ./minio-image.tar
@@ -145,7 +145,7 @@ jobs:
 
       # Fetch the pre-built MinIO image from the build job
       - name: Fetch built MinIO Image
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: minio-cache
         with:
           path: ./minio-image.tar
@@ -164,13 +164,13 @@ jobs:
           node_image: "kindest/node:v${{ matrix.k8s }}"
       - name: Fetch built CLI
         id: cli-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ./_output/bin/linux/amd64/velero
           key: velero-cli-${{ github.event.pull_request.number }}-${{ github.sha }}
       - name: Fetch built Image
         id: image-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ./velero.tar
           key: velero-image-${{ github.event.pull_request.number }}-${{ github.sha }}
