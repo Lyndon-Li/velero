@@ -506,7 +506,7 @@ func TestGetSourceSize(t *testing.T) {
 			if tc.expectErr {
 				assert.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Equal(t, tc.expected, size)
 			}
 		})
@@ -515,22 +515,22 @@ func TestGetSourceSize(t *testing.T) {
 
 func TestFlushZeroBlocks(t *testing.T) {
 	t.Run("success via write fallback", func(t *testing.T) {
-		f, err := os.CreateTemp("", "zerotest-*")
+		f, err := os.CreateTemp(t.TempDir(), "zerotest-*")
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
 		defer f.Close()
 
 		require.NoError(t, f.Truncate(2048))
 
-		bu := &blockUploader{
+		blkup := &blockUploader{
 			log: logrus.New(),
 		}
-		bu.log.(*logrus.Logger).Out = io.Discard
+		blkup.log.(*logrus.Logger).Out = io.Discard
 
 		zeroBlock := make([]byte, 1024)
-		err = bu.flushZeroBlocks(f, 0, 2048, zeroBlock, f.Name())
+		err = blkup.flushZeroBlocks(f, 0, 2048, zeroBlock, f.Name())
 
-		assert.NoError(t, err)
+		require.NoError(t, err)
 
 		data, err := os.ReadFile(f.Name())
 		require.NoError(t, err)
@@ -555,13 +555,13 @@ func TestRestoreData(t *testing.T) {
 		ctx := context.Background()
 		progress := &mockProgressUpdater{}
 		progress.On("UpdateProgress", mock.Anything).Return()
-		bu := &blockUploader{
+		blkup := &blockUploader{
 			ctx:      ctx,
 			progress: progress,
 			log:      logrus.New(),
 		}
 
-		f, err := os.CreateTemp("", "restoretest-*")
+		f, err := os.CreateTemp(t.TempDir(), "restoretest-*")
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
 		defer f.Close()
@@ -577,8 +577,8 @@ func TestRestoreData(t *testing.T) {
 		iterMock.On("Next").Return(uint64(0), true).Once()
 		iterMock.On("Next").Return(uint64(0), false)
 
-		written, err := bu.restoreData(reader, f, iterMock, 1048576, f.Name())
-		assert.NoError(t, err)
+		written, err := blkup.restoreData(reader, f, iterMock, 1048576, f.Name())
+		require.NoError(t, err)
 		assert.Equal(t, int64(1048576), written)
 
 		f.Seek(0, 0)
@@ -589,12 +589,12 @@ func TestRestoreData(t *testing.T) {
 
 	t.Run("read err", func(t *testing.T) {
 		ctx := context.Background()
-		bu := &blockUploader{
+		blkup := &blockUploader{
 			ctx: ctx,
 			log: logrus.New(),
 		}
 
-		f, err := os.CreateTemp("", "restoretest-*")
+		f, err := os.CreateTemp(t.TempDir(), "restoretest-*")
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
 		defer f.Close()
@@ -606,8 +606,8 @@ func TestRestoreData(t *testing.T) {
 		iterMock.On("Next").Return(uint64(0), true).Once()
 		iterMock.On("Next").Return(uint64(0), false)
 
-		_, err = bu.restoreData(reader, f, iterMock, 1048576, f.Name())
-		assert.Error(t, err)
+		_, err = blkup.restoreData(reader, f, iterMock, 1048576, f.Name())
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "read error")
 	})
 }
@@ -616,13 +616,13 @@ func TestBlockUploaderRestore(t *testing.T) {
 	t.Run("missing metadata", func(t *testing.T) {
 		ctx := context.Background()
 		repoWriter := udmrepomocks.NewBackupRepo(t)
-		bu := NewUploader(ctx, repoWriter, nil, logrus.New())
+		blkup := NewUploader(ctx, repoWriter, nil, logrus.New())
 
 		repoWriter.On("ReadMetadata", mock.Anything, udmrepo.ID("root-id")).Return(nil, errors.New("meta not found"))
 
 		iterMock := cbtmocks.NewIterator(t)
-		_, err := bu.Restore(udmrepo.Snapshot{RootObject: udmrepo.ObjectMetadata{ID: "root-id"}}, destInfo{}, iterMock, nil)
-		assert.Error(t, err)
+		_, err := blkup.Restore(udmrepo.Snapshot{RootObject: udmrepo.ObjectMetadata{ID: "root-id"}}, destInfo{}, iterMock, nil)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "meta not found")
 	})
 
@@ -632,9 +632,9 @@ func TestBlockUploaderRestore(t *testing.T) {
 		progress := &mockProgressUpdater{}
 		progress.On("UpdateProgress", mock.Anything).Return()
 
-		bu := NewUploader(ctx, repoWriter, progress, logrus.New())
+		blkup := NewUploader(ctx, repoWriter, progress, logrus.New())
 
-		f, err := os.CreateTemp("", "restoretest-*")
+		f, err := os.CreateTemp(t.TempDir(), "restoretest-*")
 		require.NoError(t, err)
 		defer os.Remove(f.Name())
 		defer f.Close()
@@ -682,8 +682,8 @@ func TestBlockUploaderRestore(t *testing.T) {
 		iterMock.On("Next").Return(uint64(0), true).Once()
 		iterMock.On("Next").Return(uint64(0), false)
 
-		written, err := bu.Restore(snap, dest, iterMock, nil)
-		assert.NoError(t, err)
+		written, err := blkup.Restore(snap, dest, iterMock, nil)
+		require.NoError(t, err)
 		assert.Equal(t, int64(1048576), written)
 	})
 }

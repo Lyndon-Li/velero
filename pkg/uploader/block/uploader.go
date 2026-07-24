@@ -151,7 +151,7 @@ func (blkup *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, bi
 
 	meta, err := blkup.repoWriter.ReadMetadata(blkup.ctx, snapshot.RootObject.ID)
 	if err != nil {
-		return 0, errors.Wrapf(err, "error readding snapshot metadata for %s", snapshot.Description)
+		return 0, errors.Wrapf(err, "error reading snapshot metadata for %s", snapshot.Description)
 	}
 
 	if len(meta.SubObjects) != 1 {
@@ -376,7 +376,7 @@ func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bit
 
 		offset, valid := bitmap.Next()
 		var buffer []byte
-		var nextPos uint64 = uint64(0)
+		var nextPos = uint64(0)
 		for valid {
 			select {
 			case <-blkup.ctx.Done():
@@ -513,13 +513,13 @@ func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bit
 	return written, nil
 }
 
-func (bu *blockUploader) flushZeroBlocks(dest *os.File, start int64, length int64, zeroBlock []byte, destPath string) error {
+func (blkup *blockUploader) flushZeroBlocks(dest *os.File, start int64, length int64, zeroBlock []byte, destPath string) error {
 	err := blkZeroOut(dest, start, length)
 	if err == nil {
 		return nil
 	}
 
-	bu.log.WithError(err).Warnf("Failed to call zero out from dev %s, start %v, length %v. Fallback to conservative way", destPath, start, length)
+	blkup.log.WithError(err).Warnf("Failed to call zero out from dev %s, start %v, length %v. Fallback to conservative way", destPath, start, length)
 
 	var written int64
 	for written < length {
