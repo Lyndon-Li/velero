@@ -20,13 +20,14 @@ import (
 	"context"
 
 	"github.com/cockroachdb/errors"
+	"github.com/sirupsen/logrus"
 
 	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	"github.com/vmware-tanzu/velero/pkg/uploader/cbt/types"
 )
 
 // SetBitmapOrFull translates the allocated/changed blocks from CBT service to the given bitmap or set the bitmap to full when error happens
-func SetBitmapOrFull(ctx context.Context, service cbtservice.Service, bitmap types.Bitmap) (err error) {
+func SetBitmapOrFull(ctx context.Context, service cbtservice.Service, bitmap types.Bitmap, log logrus.FieldLogger) (err error) {
 	defer func() {
 		if err != nil {
 			bitmap.SetFull()
@@ -42,20 +43,30 @@ func SetBitmapOrFull(ctx context.Context, service cbtservice.Service, bitmap typ
 	}
 
 	if bitmap.ChangeID() == "" {
-		return errors.Wrapf(service.GetAllocatedBlocks(ctx, bitmap.Snapshot(), func(blocks []cbtservice.Range) error {
+		log.Info("Begin CBT iteration for allocated blocks")
+		err := errors.Wrapf(service.GetAllocatedBlocks(ctx, bitmap.Snapshot(), func(blocks []cbtservice.Range) error {
 			for _, b := range blocks {
 				bitmap.Set(b.Offset, b.Length)
+				log.Infof("CBT range: offset %v, length %v", b.Offset, b.Length)
 			}
 
 			return nil
 		}), "error getting allocated blocks from CBT service")
+		log.Info("End CBT iteration for allocated blocks")
+
+		return err
 	}
 
-	return errors.Wrapf(service.GetChangedBlocks(ctx, bitmap.Snapshot(), bitmap.ChangeID(), func(blocks []cbtservice.Range) error {
+	log.Info("Begin CBT iteration for changed blocks")
+	err = errors.Wrapf(service.GetChangedBlocks(ctx, bitmap.Snapshot(), bitmap.ChangeID(), func(blocks []cbtservice.Range) error {
 		for _, b := range blocks {
 			bitmap.Set(b.Offset, b.Length)
+			log.Infof("CBT range: offset %v, length %v", b.Offset, b.Length)
 		}
 
 		return nil
 	}), "error getting changed blocks from CBT service")
+	log.Info("End CBT iteration for changed blocks")
+
+	return err
 }
