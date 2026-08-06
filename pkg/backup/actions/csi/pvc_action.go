@@ -539,7 +539,7 @@ func newDataUpload(
 	parentSnapshot := ""
 
 	if backup.Spec.BackupType == velerov1api.BackupTypeFull {
-		parentSnapshot = veleroshared.DataUploadParentSnapshotNone
+		parentSnapshot = veleroshared.ParentSnapshotNone
 	}
 
 	dataUpload := &velerov2alpha1.DataUpload{
