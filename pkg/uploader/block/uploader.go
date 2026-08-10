@@ -182,7 +182,7 @@ func (blkup *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, bi
 	}
 	defer reader.Close()
 
-	size, err := blkup.restoreData(reader, dest.dev, bitmap, sourceSize, dest.path)
+	size, err := blkup.restoreData(reader, dest.dev, bitmap, sourceSize, dest.path, meta.SubObjects[0].ID)
 	if err != nil {
 		return 0, errors.Wrapf(err, "error restoring bdev object %s to volume %s", meta.SubObjects[0].Name, dest.path)
 	}
@@ -411,7 +411,7 @@ func getObjectName(source string) string {
 	return strings.Trim(s, "-")
 }
 
-func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string) (int64, error) {
+func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string, objID udmrepo.ID) (int64, error) {
 	blockSize := bitmap.BlockSize()
 	totalCount := int64(bitmap.Count())
 	list := freelist.New(bufferSize, int(blockSize))
@@ -422,10 +422,21 @@ func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bit
 
 	wg := &sync.WaitGroup{}
 
+	prefetchCtx, cancelPrefetch := context.WithCancel(blkup.ctx)
+	defer cancelPrefetch()
+
+	go func() {
+		err := blkup.repoWriter.PrefetchObject(prefetchCtx, objID)
+		if err != nil && !errors.Is(err, context.Canceled) {
+			blkup.log.WithError(err).Warnf("Prefetch failed for %v", objID)
+		}
+	}()
+
 	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
+		time.Sleep(time.Second * 30)
 		restoreReadProc(blkup.ctx, reader, resultChan, quit, bitmap, list)
 	}()
 

@@ -148,6 +148,8 @@ type BackupRepo interface {
 	// return: A unified identifier of the object on success.
 	NewObjectWriter(ctx context.Context, opt ObjectWriteOptions) (ObjectWriter, error)
 
+	PrefetchObject(ctx context.Context, id ID) error
+
 	// WriteMetadata writes metadata to the repo, metadata is used to describe data, e.g., file system
 	// dirs are saved as metadata
 	WriteMetadata(ctx context.Context, meta *Metadata, opt ObjectWriteOptions) (ID, error)

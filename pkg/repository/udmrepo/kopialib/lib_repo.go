@@ -508,6 +508,17 @@ func (kr *kopiaRepository) NewObjectWriter(ctx context.Context, opt udmrepo.Obje
 	}
 }
 
+func (kr *kopiaRepository) PrefetchObject(ctx context.Context, id udmrepo.ID) error {
+	objID, err := object.ParseID(string(id))
+	if err != nil {
+		return errors.Wrapf(err, "error to parse object ID from %v", id)
+	}
+
+	_, err = kr.rawRepo.PrefetchObjects(ctx, []object.ID{objID}, "")
+
+	return err
+}
+
 const kopiaDirStreamType = "kopia:directory"
 
 func (kr *kopiaRepository) WriteMetadata(ctx context.Context, meta *udmrepo.Metadata, opt udmrepo.ObjectWriteOptions) (udmrepo.ID, error) {
