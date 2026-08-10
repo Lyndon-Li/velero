@@ -108,6 +108,24 @@ func (c *bitmapIterator) Next() (uint64, bool) {
 	return uint64(c.iterator.Next()) << c.blockSizeLog, true
 }
 
+func (c *bitmapIterator) NextRun(maxCount uint32) (uint64, uint64, bool) {
+	if !c.iterator.HasNext() {
+		return InvalidOffset64, 0, false
+	}
+
+	startBlock := c.iterator.Next()
+	blockCount := uint32(1)
+	for blockCount < maxCount && c.iterator.HasNext() && c.iterator.PeekNext() == startBlock+blockCount {
+		c.iterator.Next()
+		blockCount++
+	}
+
+	offset := uint64(startBlock) << c.blockSizeLog
+	length := uint64(blockCount) << c.blockSizeLog
+
+	return offset, length, true
+}
+
 func (c *bitmapIterator) Count() uint64 {
 	return c.bitmap.GetCardinality()
 }

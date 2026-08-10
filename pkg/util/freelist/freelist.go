@@ -65,3 +65,7 @@ func (f *FreeList) Return(chunk []byte) {
 func (f *FreeList) Capacity() int {
 	return len(f.chunks)
 }
+
+func (f *FreeList) ChunkSize() int {
+	return f.chunkSize
+}

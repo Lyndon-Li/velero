@@ -41,7 +41,7 @@ var ErrCanceled = errors.New("uploader is canceled")
 
 const (
 	blockSize         = (1 << 20)
-	bufferSize        = 100 << 20
+	bufferSize        = 500 << 20
 	bdevSourceSizeTag = "bdev-source-size"
 )
 
@@ -214,6 +214,7 @@ func (blkup *blockUploader) UpdateProgress(p *uploader.Progress) {
 type readResult struct {
 	buffer []byte
 	offset int64
+	length int
 	err    error
 }
 
@@ -448,7 +449,8 @@ func restoreReadProc(ctx context.Context, reader io.ReadSeeker, resultChan chan 
 	defer close(resultChan)
 
 	blockSize := bitmap.BlockSize()
-	offset, valid := bitmap.Next()
+	maxCBTCount := list.ChunkSize() / int(blockSize)
+	offset, length, valid := bitmap.NextRun(uint32(maxCBTCount))
 	var buffer []byte
 	var nextPos = uint64(0)
 	for valid {
@@ -467,9 +469,9 @@ func restoreReadProc(ctx context.Context, reader io.ReadSeeker, resultChan chan 
 		}
 
 		if err == nil {
-			var length int
-			length, err = io.ReadFull(reader, buffer)
-			if err == nil && length <= 0 {
+			var readLen int
+			readLen, err = io.ReadFull(reader, buffer[:length])
+			if err == nil && readLen <= 0 {
 				err = io.ErrUnexpectedEOF
 			}
 		}
@@ -477,6 +479,7 @@ func restoreReadProc(ctx context.Context, reader io.ReadSeeker, resultChan chan 
 		r := readResult{
 			buffer: buffer,
 			offset: int64(offset),
+			length: int(length),
 			err:    err,
 		}
 
@@ -490,14 +493,14 @@ func restoreReadProc(ctx context.Context, reader io.ReadSeeker, resultChan chan 
 			return
 		}
 
-		nextPos = offset + uint64(blockSize)
-		offset, valid = bitmap.Next()
+		nextPos = offset + length
+		offset, length, valid = bitmap.NextRun(uint32(maxCBTCount))
 	}
 }
 
 func restoreWriteProc(ctx context.Context, dest *os.File, resultChan chan readResult, list *freelist.FreeList, totalLength int64, totalCount int64,
 	blockSize int, destPath string, progress uploader.ProgressUpdater, log logrus.FieldLogger) (int64, error) {
-	zeroBlock := make([]byte, blockSize)
+	zeroBlock := make([]byte, list.ChunkSize())
 
 	var written int64
 	var result readResult
@@ -533,8 +536,8 @@ func restoreWriteProc(ctx context.Context, dest *os.File, resultChan chan readRe
 			break
 		}
 
-		length := min(int64(blockSize), totalLength-result.offset)
-		if bytes.Equal(result.buffer, zeroBlock) {
+		length := min(int64(result.length), totalLength-result.offset)
+		if bytes.Equal(result.buffer[:length], zeroBlock[:length]) {
 			if zeroStart == -1 {
 				zeroStart = result.offset
 				zeroLength = length
@@ -572,7 +575,7 @@ func restoreWriteProc(ctx context.Context, dest *os.File, resultChan chan readRe
 		}
 
 		written += length
-		curCount++
+		curCount += int64(result.length) / int64(blockSize)
 
 		result.resetBuffer(list)
 
@@ -599,6 +602,8 @@ func restoreWriteProc(ctx context.Context, dest *os.File, resultChan chan readRe
 }
 
 func flushZeroBlocks(dest *os.File, start int64, length int64, zeroBlock []byte, destPath string, log logrus.FieldLogger) error {
+	log.Infof("Flushing zero blocks to dev %s, offset %v, length %v", destPath, start, length)
+
 	err := blkZeroOut(dest, start, length)
 	if err == nil {
 		return nil

@@ -56,4 +56,7 @@ type Iterator interface {
 
 	// Next returns the offset of the next set block and whether it comes to the end of the iteration
 	Next() (uint64, bool)
+
+	// NextRun returns the next run of set blocks and whether it comes to the end of the iteration
+	NextRun(maxCount uint32) (uint64, uint64, bool)
 }
