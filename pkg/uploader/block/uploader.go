@@ -176,13 +176,7 @@ func (blkup *blockUploader) Restore(snapshot udmrepo.Snapshot, dest destInfo, bi
 		return 0, errors.Wrapf(err, "dest dev(%s) size is too small (%v vs. %v)", dest.path, dest.size, sourceSize)
 	}
 
-	reader, err := blkup.repoWriter.OpenObject(blkup.ctx, meta.SubObjects[0].ID)
-	if err != nil {
-		return 0, errors.Wrapf(err, "error opening bdev object %v", meta.SubObjects[0].Name)
-	}
-	defer reader.Close()
-
-	size, err := blkup.restoreData(reader, dest.dev, bitmap, sourceSize, dest.path)
+	size, err := blkup.restoreData(meta.SubObjects[0].ID, dest.dev, bitmap, sourceSize, dest.path)
 	if err != nil {
 		return 0, errors.Wrapf(err, "error restoring bdev object %s to volume %s", meta.SubObjects[0].Name, dest.path)
 	}
@@ -211,10 +205,16 @@ func (blkup *blockUploader) UpdateProgress(p *uploader.Progress) {
 	}
 }
 
+type readJob struct {
+	sequence int
+	offset   uint64
+}
+
 type readResult struct {
-	buffer []byte
-	offset int64
-	err    error
+	buffer   []byte
+	offset   int64
+	err      error
+	sequence int
 }
 
 func (r *readResult) resetBuffer(list *freelist.FreeList) {
@@ -411,24 +411,68 @@ func getObjectName(source string) string {
 	return strings.Trim(s, "-")
 }
 
-func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string) (int64, error) {
+func (blkup *blockUploader) restoreData(objectID udmrepo.ID, dest *os.File, bitmap cbt.Iterator, totalLength int64, destPath string) (int64, error) {
 	blockSize := bitmap.BlockSize()
 	totalCount := int64(bitmap.Count())
 	list := freelist.New(bufferSize, int(blockSize))
+	
+	numWorkers := runtime.NumCPU()
+	if numWorkers < 1 {
+		numWorkers = 1
+	}
+	if numWorkers > 16 {
+		numWorkers = 16
+	}
+
+	jobChan := make(chan readJob, numWorkers*2)
+	outOfOrderChan := make(chan readResult, list.Capacity())
 	resultChan := make(chan readResult, list.Capacity())
 	quit := make(chan struct{})
+
 	var writeErr error
 	var written int64
 
 	wg := &sync.WaitGroup{}
 
-	wg.Add(2)
-
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		restoreReadProc(blkup.ctx, reader, resultChan, quit, bitmap, list)
+		dispatchJobs(blkup.ctx, bitmap, jobChan, quit)
 	}()
 
+	var workerWg sync.WaitGroup
+	for i := 0; i < numWorkers; i++ {
+		workerWg.Add(1)
+		go func() {
+			defer workerWg.Done()
+			reader, err := blkup.repoWriter.OpenObject(blkup.ctx, objectID)
+			if err != nil {
+				select {
+				case <-blkup.ctx.Done():
+				case <-quit:
+				case outOfOrderChan <- readResult{err: errors.Wrap(err, "error opening bdev object")}:
+				}
+				return
+			}
+			defer reader.Close()
+			restoreWorkerProc(blkup.ctx, reader, list, jobChan, outOfOrderChan, quit)
+		}()
+	}
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		workerWg.Wait()
+		close(outOfOrderChan)
+	}()
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		sequencerProc(blkup.ctx, outOfOrderChan, resultChan, quit)
+	}()
+
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		defer close(quit)
@@ -444,54 +488,135 @@ func (blkup *blockUploader) restoreData(reader io.ReadSeeker, dest *os.File, bit
 	return written, nil
 }
 
-func restoreReadProc(ctx context.Context, reader io.ReadSeeker, resultChan chan readResult, quit chan struct{}, bitmap cbt.Iterator, list *freelist.FreeList) {
-	defer close(resultChan)
+func dispatchJobs(ctx context.Context, bitmap cbt.Iterator, jobChan chan<- readJob, quit <-chan struct{}) {
+	defer close(jobChan)
 
-	blockSize := bitmap.BlockSize()
+	seq := 0
 	offset, valid := bitmap.Next()
-	var buffer []byte
-	var nextPos = uint64(0)
 	for valid {
 		select {
 		case <-ctx.Done():
 			return
 		case <-quit:
 			return
-		case buffer = <-list.Chunks():
+		case jobChan <- readJob{sequence: seq, offset: offset}:
+			seq++
+			offset, valid = bitmap.Next()
 		}
+	}
+}
 
-		var err error
+func restoreWorkerProc(ctx context.Context, reader io.ReadSeeker, list *freelist.FreeList, jobChan <-chan readJob, outOfOrderChan chan<- readResult, quit <-chan struct{}) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-quit:
+			return
+		case job, ok := <-jobChan:
+			if !ok {
+				return
+			}
 
-		if nextPos != offset {
-			_, err = reader.Seek(int64(offset), io.SeekStart)
-		}
+			var buffer []byte
+			select {
+			case <-ctx.Done():
+				return
+			case <-quit:
+				return
+			case buffer = <-list.Chunks():
+			}
 
-		if err == nil {
-			var length int
-			length, err = io.ReadFull(reader, buffer)
-			if err == nil && length <= 0 {
-				err = io.ErrUnexpectedEOF
+			_, err := reader.Seek(int64(job.offset), io.SeekStart)
+			if err == nil {
+				var length int
+				length, err = io.ReadFull(reader, buffer)
+				if err == nil && length <= 0 {
+					err = io.ErrUnexpectedEOF
+				}
+			}
+
+			r := readResult{
+				buffer:   buffer,
+				offset:   int64(job.offset),
+				err:      err,
+				sequence: job.sequence,
+			}
+
+			if r.err != nil {
+				r.resetBuffer(list)
+			}
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-quit:
+				return
+			case outOfOrderChan <- r:
+			}
+
+			if r.err != nil {
+				return
 			}
 		}
+	}
+}
 
-		r := readResult{
-			buffer: buffer,
-			offset: int64(offset),
-			err:    err,
-		}
+func sequencerProc(ctx context.Context, outOfOrderChan <-chan readResult, resultChan chan<- readResult, quit <-chan struct{}) {
+	defer close(resultChan)
 
-		if r.err != nil {
-			r.resetBuffer(list)
-		}
+	expectedSequence := 0
+	bufferMap := make(map[int]readResult)
 
-		resultChan <- r
-
-		if r.err != nil {
+	for {
+		select {
+		case <-ctx.Done():
 			return
-		}
+		case <-quit:
+			return
+		case r, ok := <-outOfOrderChan:
+			if !ok {
+				return
+			}
 
-		nextPos = offset + uint64(blockSize)
-		offset, valid = bitmap.Next()
+			if r.err != nil {
+				select {
+				case <-ctx.Done():
+				case <-quit:
+				case resultChan <- r:
+				}
+				return
+			}
+
+			if r.sequence == expectedSequence {
+				select {
+				case <-ctx.Done():
+					return
+				case <-quit:
+					return
+				case resultChan <- r:
+				}
+				expectedSequence++
+
+				for {
+					if nextR, found := bufferMap[expectedSequence]; found {
+						select {
+						case <-ctx.Done():
+							return
+						case <-quit:
+							return
+						case resultChan <- nextR:
+						}
+						delete(bufferMap, expectedSequence)
+						expectedSequence++
+					} else {
+						break
+					}
+				}
+			} else {
+				bufferMap[r.sequence] = r
+			}
+		}
 	}
 }
 
