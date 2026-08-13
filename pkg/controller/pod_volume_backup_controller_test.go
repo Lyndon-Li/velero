@@ -19,8 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
@@ -1313,4 +1316,51 @@ func TestPodVolumeBackupSetupExposeParam(t *testing.T) {
 			assert.Equal(t, tt.want.annotations, got.HostingPodAnnotations)
 		})
 	}
+}
+
+type pvbSequenceClock struct {
+	*clocktesting.FakeClock
+	mu sync.Mutex
+}
+
+func (c *pvbSequenceClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.FakeClock.Step(time.Second)
+	return c.FakeClock.Now()
+}
+
+func TestPodVolumeBackupCancelConcurrency(t *testing.T) {
+	ctx := t.Context()
+	pvb := builder.ForPodVolumeBackup(velerov1api.DefaultNamespace, "pvb-1").Cancel(true).Phase(velerov1api.PodVolumeBackupPhaseInProgress).Result()
+
+	r, err := initPVBReconciler()
+	require.NoError(t, err)
+
+	err = r.client.Create(ctx, pvb)
+	require.NoError(t, err)
+
+	firstTime := time.Now()
+	// manually store the initial time
+	r.cancelledPVB.Store(pvb.Name, firstTime)
+
+	// Custom clock that returns a different time each call
+	r.clock = &pvbSequenceClock{FakeClock: clocktesting.NewFakeClock(firstTime)}
+
+	var wg sync.WaitGroup
+	routines := 50
+	wg.Add(routines)
+
+	for i := 0; i < routines; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pvb.Name, Namespace: pvb.Namespace}})
+		}()
+	}
+
+	wg.Wait()
+
+	v, ok := r.cancelledPVB.Load(pvb.Name)
+	assert.True(t, ok)
+	assert.Equal(t, firstTime, v.(time.Time), "The initially recorded timestamp should be preserved")
 }

@@ -232,10 +232,8 @@ func (r *DataUploadReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if du.Spec.Cancel {
-		v, found := r.cancelledDataUpload.Load(du.Name)
-		if !found {
-			r.cancelledDataUpload.Store(du.Name, r.Clock.Now())
-		} else {
+		v, loaded := r.cancelledDataUpload.LoadOrStore(du.Name, r.Clock.Now())
+		if loaded {
 			spotted := v.(time.Time)
 			delay := cancelDelayOthers
 			if du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {

@@ -223,10 +223,8 @@ func (r *DataDownloadReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if dd.Spec.Cancel {
-		v, found := r.cancelledDataDownload.Load(dd.Name)
-		if !found {
-			r.cancelledDataDownload.Store(dd.Name, r.Clock.Now())
-		} else {
+		v, loaded := r.cancelledDataDownload.LoadOrStore(dd.Name, r.Clock.Now())
+		if loaded {
 			spotted := v.(time.Time)
 			delay := cancelDelayOthers
 			if dd.Status.Phase == velerov2alpha1api.DataDownloadPhaseInProgress {

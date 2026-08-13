@@ -19,8 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	clocktesting "k8s.io/utils/clock/testing"
 
 	"github.com/cockroachdb/errors"
 	"github.com/sirupsen/logrus"
@@ -1930,4 +1933,48 @@ func TestResumeCancellablePodVolumeRestore(t *testing.T) {
 			}
 		})
 	}
+}
+
+type pvrSequenceClock struct {
+	*clocktesting.FakeClock
+	mu sync.Mutex
+}
+
+func (c *pvrSequenceClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.FakeClock.Step(time.Second)
+	return c.FakeClock.Now()
+}
+
+func TestPodVolumeRestoreCancelConcurrency(t *testing.T) {
+	ctx := t.Context()
+	pvr := builder.ForPodVolumeRestore(velerov1api.DefaultNamespace, "pvr-1").Cancel(true).Phase(velerov1api.PodVolumeRestorePhaseInProgress).Result()
+
+	r, err := initPodVolumeRestoreReconciler(nil, []client.Object{pvr})
+	require.NoError(t, err)
+
+	firstTime := time.Now()
+	// manually store the initial time
+	r.cancelledPVR.Store(pvr.Name, firstTime)
+
+	// Custom clock that returns a different time each call
+	r.clock = &pvrSequenceClock{FakeClock: clocktesting.NewFakeClock(firstTime)}
+
+	var wg sync.WaitGroup
+	routines := 50
+	wg.Add(routines)
+
+	for i := 0; i < routines; i++ {
+		go func() {
+			defer wg.Done()
+			_, _ = r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: pvr.Name, Namespace: pvr.Namespace}})
+		}()
+	}
+
+	wg.Wait()
+
+	v, ok := r.cancelledPVR.Load(pvr.Name)
+	assert.True(t, ok)
+	assert.Equal(t, firstTime, v.(time.Time), "The initially recorded timestamp should be preserved")
 }

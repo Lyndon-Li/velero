@@ -209,10 +209,8 @@ func (r *PodVolumeRestoreReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if pvr.Spec.Cancel {
-		v, found := r.cancelledPVR.Load(pvr.Name)
-		if !found {
-			r.cancelledPVR.Store(pvr.Name, r.clock.Now())
-		} else {
+		v, loaded := r.cancelledPVR.LoadOrStore(pvr.Name, r.clock.Now())
+		if loaded {
 			spotted := v.(time.Time)
 			delay := cancelDelayOthers
 			if pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseInProgress {

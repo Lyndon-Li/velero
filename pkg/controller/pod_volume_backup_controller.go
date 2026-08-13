@@ -204,10 +204,8 @@ func (r *PodVolumeBackupReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	if pvb.Spec.Cancel {
-		v, found := r.cancelledPVB.Load(pvb.Name)
-		if !found {
-			r.cancelledPVB.Store(pvb.Name, r.clock.Now())
-		} else {
+		v, loaded := r.cancelledPVB.LoadOrStore(pvb.Name, r.clock.Now())
+		if loaded {
 			spotted := v.(time.Time)
 			delay := cancelDelayOthers
 			if pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress {
