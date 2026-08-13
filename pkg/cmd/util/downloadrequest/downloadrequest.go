@@ -202,7 +202,7 @@ func download(
 		return errors.Errorf("request failed: %v", string(body))
 	}
 
-	reader := resp.Body
+	var r io.Reader = resp.Body
 	if kind != veleroV1api.DownloadTargetKindBackupContents {
 		// need to decompress logs
 		gzipReader, err := gzip.NewReader(resp.Body)
@@ -210,9 +210,10 @@ func download(
 			return err
 		}
 		defer gzipReader.Close()
-		reader = gzipReader
+
+		r = io.LimitReader(gzipReader, 1024*1024*1024) // 1GB limit
 	}
 
-	_, err = io.Copy(w, reader)
+	_, err = io.Copy(w, r)
 	return err
 }
