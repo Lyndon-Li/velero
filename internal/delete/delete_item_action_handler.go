@@ -37,13 +37,14 @@ import (
 
 // Context provides the necessary environment to run DeleteItemAction plugins
 type Context struct {
-	Backup          *velerov1api.Backup
-	BackupReader    io.Reader
-	Actions         []velero.DeleteItemAction
-	Filesystem      filesystem.Interface
-	Log             logrus.FieldLogger
-	DiscoveryHelper discovery.Helper
-	resolvedActions []framework.DeleteItemResolvedAction
+	Backup            *velerov1api.Backup
+	BackupReader      io.Reader
+	Actions           []velero.DeleteItemAction
+	Filesystem        filesystem.Interface
+	Log               logrus.FieldLogger
+	DiscoveryHelper   discovery.Helper
+	resolvedActions   []framework.DeleteItemResolvedAction
+	MaxExtractionSize int64
 }
 
 func InvokeDeleteActions(ctx *Context) error {
@@ -60,7 +61,7 @@ func InvokeDeleteActions(ctx *Context) error {
 	}
 
 	// get items out of backup tarball into a temp directory
-	dir, err := archive.NewExtractor(ctx.Log, ctx.Filesystem).UnzipAndExtractBackup(ctx.BackupReader)
+	dir, err := archive.NewExtractor(ctx.Log, ctx.Filesystem, ctx.MaxExtractionSize).UnzipAndExtractBackup(ctx.BackupReader)
 	if err != nil {
 		return errors.Wrapf(err, "error extracting backup")
 	}

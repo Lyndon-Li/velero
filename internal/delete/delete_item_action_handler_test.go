@@ -166,12 +166,13 @@ func TestInvokeDeleteItemActionsRunForCorrectItems(t *testing.T) {
 			}
 
 			c := &Context{
-				Backup:          tc.backup,
-				BackupReader:    tc.tarball,
-				Filesystem:      fs,
-				DiscoveryHelper: h.discoveryHelper,
-				Actions:         actions,
-				Log:             log,
+				Backup:            tc.backup,
+				BackupReader:      tc.tarball,
+				Filesystem:        fs,
+				DiscoveryHelper:   h.discoveryHelper,
+				Actions:           actions,
+				Log:               log,
+				MaxExtractionSize: 1024 * 1024 * 1024,
 			}
 
 			err := InvokeDeleteActions(c)
@@ -310,12 +311,13 @@ func TestInvokeDeleteActionsReturnsPluginErrors(t *testing.T) {
 	h.addResource(t, test.Pods())
 
 	c := &Context{
-		Backup:          builder.ForBackup("velero", "velero").Result(),
-		BackupReader:    tarball,
-		Filesystem:      fs,
-		DiscoveryHelper: h.discoveryHelper,
-		Actions:         []velero.DeleteItemAction{action},
-		Log:             log,
+		Backup:            builder.ForBackup("velero", "velero").Result(),
+		BackupReader:      tarball,
+		Filesystem:        fs,
+		DiscoveryHelper:   h.discoveryHelper,
+		Actions:           []velero.DeleteItemAction{action},
+		Log:               log,
+		MaxExtractionSize: 1024 * 1024 * 1024,
 	}
 
 	err := InvokeDeleteActions(c)

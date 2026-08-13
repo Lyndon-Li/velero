@@ -76,6 +76,7 @@ type backupDeletionReconciler struct {
 	backupStoreGetter persistence.ObjectBackupStoreGetter
 	credentialStore   credentials.FileStore
 	repoEnsurer       *repository.Ensurer
+	maxExtractionSize int64
 }
 
 // NewBackupDeletionReconciler creates a new backup deletion reconciler.
@@ -90,6 +91,7 @@ func NewBackupDeletionReconciler(
 	backupStoreGetter persistence.ObjectBackupStoreGetter,
 	credentialStore credentials.FileStore,
 	repoEnsurer *repository.Ensurer,
+	maxExtractionSize int64,
 ) *backupDeletionReconciler {
 	return &backupDeletionReconciler{
 		Client:            client,
@@ -103,6 +105,7 @@ func NewBackupDeletionReconciler(
 		backupStoreGetter: backupStoreGetter,
 		credentialStore:   credentialStore,
 		repoEnsurer:       repoEnsurer,
+		maxExtractionSize: maxExtractionSize,
 	}
 }
 
@@ -282,12 +285,13 @@ func (r *backupDeletionReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		} else {
 			defer closeAndRemoveFile(backupFile, r.logger)
 			deleteCtx := &delete.Context{
-				Backup:          backup,
-				BackupReader:    backupFile,
-				Actions:         actions,
-				Log:             r.logger,
-				DiscoveryHelper: r.discoveryHelper,
-				Filesystem:      filesystem.NewFileSystem(),
+				Backup:            backup,
+				BackupReader:      backupFile,
+				Actions:           actions,
+				Log:               r.logger,
+				DiscoveryHelper:   r.discoveryHelper,
+				Filesystem:        filesystem.NewFileSystem(),
+				MaxExtractionSize: r.maxExtractionSize,
 			}
 
 			// Optimization: wrap in a gofunc? Would be useful for large backups with lots of objects.

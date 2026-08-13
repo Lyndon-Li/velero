@@ -698,6 +698,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			backupStoreGetter,
 			s.credentialFileStore,
 			s.repoEnsurer,
+			int64(s.config.MaxBackupExtractionSize)*1024*1024,
 		).SetupWithManager(s.mgr); err != nil {
 			s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerBackupDeletion)
 		}
@@ -882,6 +883,7 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			s.crClient,
 			s.config.ResourceTimeout,
 			s.config.DefaultResourceModifierConfigMap,
+			int64(s.config.MaxBackupExtractionSize)*1024*1024,
 		)
 
 		if err = r.SetupWithManager(s.mgr); err != nil {

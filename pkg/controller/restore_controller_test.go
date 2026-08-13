@@ -117,6 +117,7 @@ func TestFetchBackupInfo(t *testing.T) {
 				fakeGlobalClient,
 				10*time.Minute,
 				"",
+				16*1024*1024*1024,
 			)
 
 			if test.backupStoreError == nil {
@@ -199,6 +200,7 @@ func TestProcessQueueItemSkips(t *testing.T) {
 				fakeGlobalClient,
 				10*time.Minute,
 				"",
+				16*1024*1024*1024,
 			)
 
 			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{
@@ -582,6 +584,7 @@ func TestRestoreReconcile(t *testing.T) {
 				fakeGlobalClient,
 				10*time.Minute,
 				"",
+				16*1024*1024*1024,
 			)
 
 			r.clock = clocktesting.NewFakeClock(now)
@@ -771,6 +774,7 @@ func TestValidateAndCompleteWhenScheduleNameSpecified(t *testing.T) {
 		fakeGlobalClient,
 		10*time.Minute,
 		"",
+		16*1024*1024*1024,
 	)
 
 	restore := &velerov1api.Restore{
@@ -868,6 +872,7 @@ func TestValidateAndCompleteWithResourcePolicySpecified(t *testing.T) {
 		fakeGlobalClient,
 		10*time.Minute,
 		"",
+		16*1024*1024*1024,
 	)
 
 	restore := &velerov1api.Restore{
@@ -998,6 +1003,7 @@ func TestValidateAndCompleteWithResourceModifierSpecified(t *testing.T) {
 		fakeGlobalClient,
 		10*time.Minute,
 		"",
+		16*1024*1024*1024,
 	)
 
 	restore := &velerov1api.Restore{
@@ -1146,6 +1152,7 @@ func TestValidateAndCompleteWithDefaultResourceModifier(t *testing.T) {
 			fakeGlobalClient,
 			10*time.Minute,
 			defaultCM,
+			16*1024*1024*1024,
 		)
 
 		location := builder.ForBackupStorageLocation("velero", "default").Provider("myCloud").Bucket("bucket").Phase(velerov1api.BackupStorageLocationPhaseAvailable).Result()

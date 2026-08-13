@@ -266,13 +266,14 @@ clusterScopedFilterPolicy:
 			}
 
 			data := &Request{
-				Log:              h.log,
-				Restore:          tc.restore,
-				Backup:           tc.backup,
-				PodVolumeBackups: nil,
-				VolumeSnapshots:  nil,
-				BackupReader:     tc.tarball,
-				ResPolicies:      resPolicies,
+				Log:               h.log,
+				Restore:           tc.restore,
+				Backup:            tc.backup,
+				PodVolumeBackups:  nil,
+				VolumeSnapshots:   nil,
+				BackupReader:      tc.tarball,
+				ResPolicies:       resPolicies,
+				MaxExtractionSize: 16 * 1024 * 1024 * 1024,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,

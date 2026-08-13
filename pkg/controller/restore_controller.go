@@ -115,6 +115,7 @@ type restoreReconciler struct {
 	globalCrClient                   client.Client
 	resourceTimeout                  time.Duration
 	defaultResourceModifierConfigMap string
+	maxExtractionSize                int64
 }
 
 type backupInfo struct {
@@ -138,6 +139,7 @@ func NewRestoreReconciler(
 	globalCrClient client.Client,
 	resourceTimeout time.Duration,
 	defaultResourceModifierConfigMap string,
+	maxExtractionSize int64,
 ) *restoreReconciler {
 	r := &restoreReconciler{
 		ctx:                         ctx,
@@ -160,6 +162,7 @@ func NewRestoreReconciler(
 		globalCrClient:                   globalCrClient,
 		resourceTimeout:                  resourceTimeout,
 		defaultResourceModifierConfigMap: defaultResourceModifierConfigMap,
+		maxExtractionSize:                maxExtractionSize,
 	}
 
 	// Move the periodical backup and restore metrics computing logic from controllers to here.
@@ -656,6 +659,7 @@ func (r *restoreReconciler) runValidatedRestore(restore *api.Restore, info backu
 		BackupVolumeInfoMap:           backupVolumeInfoMap,
 		RestoreVolumeInfoTracker:      volume.NewRestoreVolInfoTracker(restore, restoreLog, r.globalCrClient),
 		ResourceDeletionStatusTracker: kubeutil.NewResourceDeletionStatusTracker(),
+		MaxExtractionSize:             r.maxExtractionSize,
 	}
 	restoreWarnings, restoreErrors := r.restorer.RestoreWithResolvers(restoreReq, actionsResolver, pluginManager)
 

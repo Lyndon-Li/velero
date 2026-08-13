@@ -46,8 +46,9 @@ const (
 	defaultMaxConcurrentK8SConnections = 30
 	defaultDisableInformerCache        = false
 
-	DefaultItemBlockWorkerCount = 1
-	DefaultConcurrentBackups    = 1
+	DefaultItemBlockWorkerCount    = 1
+	DefaultConcurrentBackups       = 1
+	DefaultMaxBackupExtractionSize = 16384 // 16GB in MB
 )
 
 var (
@@ -183,6 +184,7 @@ type Config struct {
 	ConcurrentBackups                   int
 	GlobalBackupVolumePoliciesConfigMap string
 	DefaultResourceModifierConfigMap    string
+	MaxBackupExtractionSize             int
 }
 
 func GetDefaultConfig() *Config {
@@ -216,6 +218,7 @@ func GetDefaultConfig() *Config {
 		CredentialsDirectory:           credentials.DefaultStoreDirectory(),
 		ItemBlockWorkerCount:           DefaultItemBlockWorkerCount,
 		ConcurrentBackups:              DefaultConcurrentBackups,
+		MaxBackupExtractionSize:        DefaultMaxBackupExtractionSize,
 	}
 
 	return config
@@ -288,5 +291,11 @@ func (c *Config) BindFlags(flags *pflag.FlagSet) {
 		"default-resource-modifier-configmap",
 		c.DefaultResourceModifierConfigMap,
 		"The name of a ConfigMap in the Velero namespace containing default resource modifier rules applied to all restores. Ignored when a per-restore resource modifier is specified.",
+	)
+	flags.IntVar(
+		&c.MaxBackupExtractionSize,
+		"max-backup-extraction-size",
+		c.MaxBackupExtractionSize,
+		"Maximum size of a backup extraction in megabytes. Default is 16384 (16GB).",
 	)
 }
