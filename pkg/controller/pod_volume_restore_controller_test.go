@@ -1077,7 +1077,7 @@ func TestPodVolumeRestoreReconcile(t *testing.T) {
 			}
 
 			if test.sportTime != nil {
-				r.cancelledPVR[test.pvr.Name] = test.sportTime.Time
+				r.cancelledPVR.Store(test.pvr.Name, test.sportTime.Time)
 			}
 
 			if test.constrained {
@@ -1198,9 +1198,15 @@ func TestPodVolumeRestoreReconcile(t *testing.T) {
 			}
 
 			if test.expectCancelRecord {
-				assert.Contains(t, r.cancelledPVR, test.pvr.Name)
+				_, ok := r.cancelledPVR.Load(test.pvr.Name)
+				assert.True(t, ok)
 			} else {
-				assert.Empty(t, r.cancelledPVR)
+				empty := true
+				r.cancelledPVR.Range(func(key, value any) bool {
+					empty = false
+					return false
+				})
+				assert.True(t, empty)
 			}
 
 			if isPVRInFinalState(&pvr) || pvr.Status.Phase == velerov1api.PodVolumeRestorePhaseInProgress {

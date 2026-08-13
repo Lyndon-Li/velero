@@ -672,7 +672,7 @@ func TestReconcile(t *testing.T) {
 			}
 
 			if test.sportTime != nil {
-				r.cancelledDataUpload[test.du.Name] = test.sportTime.Time
+				r.cancelledDataUpload.Store(test.du.Name, test.sportTime.Time)
 			}
 
 			if test.constrained {
@@ -752,9 +752,15 @@ func TestReconcile(t *testing.T) {
 			}
 
 			if test.expectCancelRecord {
-				assert.Contains(t, r.cancelledDataUpload, test.du.Name)
+				_, ok := r.cancelledDataUpload.Load(test.du.Name)
+				assert.True(t, ok)
 			} else {
-				assert.Empty(t, r.cancelledDataUpload)
+				empty := true
+				r.cancelledDataUpload.Range(func(key, value any) bool {
+					empty = false
+					return false
+				})
+				assert.True(t, empty)
 			}
 
 			if isDataUploadInFinalState(&du) || du.Status.Phase == velerov2alpha1api.DataUploadPhaseInProgress {

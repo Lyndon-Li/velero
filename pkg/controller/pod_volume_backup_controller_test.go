@@ -489,7 +489,7 @@ func TestPVBReconcile(t *testing.T) {
 			}
 
 			if test.sportTime != nil {
-				r.cancelledPVB[test.pvb.Name] = test.sportTime.Time
+				r.cancelledPVB.Store(test.pvb.Name, test.sportTime.Time)
 			}
 
 			if test.constrained {
@@ -567,9 +567,15 @@ func TestPVBReconcile(t *testing.T) {
 			}
 
 			if test.expectCancelRecord {
-				assert.Contains(t, r.cancelledPVB, test.pvb.Name)
+				_, ok := r.cancelledPVB.Load(test.pvb.Name)
+				assert.True(t, ok)
 			} else {
-				assert.Empty(t, r.cancelledPVB)
+				empty := true
+				r.cancelledPVB.Range(func(key, value any) bool {
+					empty = false
+					return false
+				})
+				assert.True(t, empty)
 			}
 
 			if isPVBInFinalState(&pvb) || pvb.Status.Phase == velerov1api.PodVolumeBackupPhaseInProgress {
