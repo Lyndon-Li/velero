@@ -171,7 +171,7 @@ func TestUnzipAndExtractBackupRejectsManySmallFiles(t *testing.T) {
 
 	_, err := ext.UnzipAndExtractBackup(&buf)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "total decompressed backup size exceeds maximum allowed size")
+	require.Contains(t, err.Error(), "decompressed backup exceeds maximum allowed size")
 }
 
 func createArchive(files []string, fs filesystem.Interface) (string, error) {
