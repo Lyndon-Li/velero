@@ -46,9 +46,8 @@ const (
 	defaultMaxConcurrentK8SConnections = 30
 	defaultDisableInformerCache        = false
 
-	DefaultItemBlockWorkerCount    = 1
-	DefaultConcurrentBackups       = 1
-	DefaultMaxBackupExtractionSize = 16384 // 16GB in MB
+	DefaultItemBlockWorkerCount = 1
+	DefaultConcurrentBackups    = 1
 )
 
 var (
@@ -218,7 +217,6 @@ func GetDefaultConfig() *Config {
 		CredentialsDirectory:           credentials.DefaultStoreDirectory(),
 		ItemBlockWorkerCount:           DefaultItemBlockWorkerCount,
 		ConcurrentBackups:              DefaultConcurrentBackups,
-		MaxBackupExtractionSize:        DefaultMaxBackupExtractionSize,
 	}
 
 	return config
@@ -296,6 +294,6 @@ func (c *Config) BindFlags(flags *pflag.FlagSet) {
 		&c.MaxBackupExtractionSize,
 		"max-backup-extraction-size",
 		c.MaxBackupExtractionSize,
-		"Maximum size of a backup extraction in megabytes. Default is 16384 (16GB).",
+		"Maximum size of a backup extraction in megabytes. If not set, default value (16GB) will be used.",
 	)
 }

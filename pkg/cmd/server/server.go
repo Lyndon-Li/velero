@@ -61,6 +61,7 @@ import (
 	"github.com/vmware-tanzu/velero/internal/storage"
 	velerov1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v1"
 	velerov2alpha1api "github.com/vmware-tanzu/velero/pkg/apis/velero/v2alpha1"
+	"github.com/vmware-tanzu/velero/pkg/archive"
 	"github.com/vmware-tanzu/velero/pkg/backup"
 	"github.com/vmware-tanzu/velero/pkg/buildinfo"
 	"github.com/vmware-tanzu/velero/pkg/client"
@@ -698,7 +699,6 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			backupStoreGetter,
 			s.credentialFileStore,
 			s.repoEnsurer,
-			int64(s.config.MaxBackupExtractionSize)*1024*1024,
 		).SetupWithManager(s.mgr); err != nil {
 			s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerBackupDeletion)
 		}
@@ -883,7 +883,6 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 			s.crClient,
 			s.config.ResourceTimeout,
 			s.config.DefaultResourceModifierConfigMap,
-			int64(s.config.MaxBackupExtractionSize)*1024*1024,
 		)
 
 		if err = r.SetupWithManager(s.mgr); err != nil {
@@ -935,6 +934,11 @@ func (s *server) runControllers(defaultVolumeSnapshotLocations map[string]string
 		).SetupWithManager(s.mgr); err != nil {
 			s.logger.Fatal(err, "unable to create controller", "controller", constant.ControllerBackupQueue)
 		}
+	}
+
+	if s.config.MaxBackupExtractionSize > 0 {
+		s.logger.Infof("Setting backup data extraction cap as %v MB", s.config.MaxBackupExtractionSize)
+		archive.SetMaxExtractionSize(int64(s.config.MaxBackupExtractionSize) * 1024 * 1024)
 	}
 
 	s.logger.Info("Server starting...")

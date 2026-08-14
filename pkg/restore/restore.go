@@ -371,7 +371,6 @@ func (kr *kubernetesRestorer) RestoreWithResolvers(
 		restoreVolumeInfoTracker:       req.RestoreVolumeInfoTracker,
 		hooksWaitExecutor:              hooksWaitExecutor,
 		resourceDeletionStatusTracker:  req.ResourceDeletionStatusTracker,
-		maxExtractionSize:              req.MaxExtractionSize,
 		clusterScopedFilterMap:         clusterScopedFilterMap,
 		namespacedFilterMap:            namespacedFilterMap,
 		namespacedFilterPatterns:       namespacedFilterPatterns,
@@ -425,7 +424,6 @@ type restoreContext struct {
 	restoreVolumeInfoTracker       *volume.RestoreVolumeInfoTracker
 	hooksWaitExecutor              *hooksWaitExecutor
 	resourceDeletionStatusTracker  kube.ResourceDeletionStatusTracker
-	maxExtractionSize              int64
 
 	// clusterScopedFilterMap holds resolved per-kind filters for cluster-scoped resources.
 	// Key is the resolved group-resource string.
@@ -720,7 +718,7 @@ func (ctx *restoreContext) execute() (results.Result, results.Result) {
 
 	ctx.log.Infof("Starting restore of backup %s", kube.NamespaceAndName(ctx.backup))
 
-	dir, err := archive.NewExtractor(ctx.log, ctx.fileSystem, ctx.maxExtractionSize).UnzipAndExtractBackup(ctx.backupReader)
+	dir, err := archive.NewExtractor(ctx.log, ctx.fileSystem).UnzipAndExtractBackup(ctx.backupReader)
 	if err != nil {
 		ctx.log.Infof("error unzipping and extracting: %v", err)
 		errs.AddVeleroError(err)

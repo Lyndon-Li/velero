@@ -64,7 +64,7 @@ func TestUnzipAndExtractBackup(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem(), 16*1024*1024*1024)
+			ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem())
 			var fileName string
 			var err error
 			if tc.IsTarball {
@@ -90,7 +90,7 @@ func TestUnzipAndExtractBackup(t *testing.T) {
 }
 
 func TestUnzipAndExtractBackupRejectsPathTraversal(t *testing.T) {
-	ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem(), 16*1024*1024*1024)
+	ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem())
 
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
@@ -115,7 +115,9 @@ func TestUnzipAndExtractBackupRejectsPathTraversal(t *testing.T) {
 }
 
 func TestUnzipAndExtractBackupRejectsLargeFile(t *testing.T) {
-	ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem(), 1024)
+	SetMaxExtractionSize(1024)
+	defer SetMaxExtractionSize(16 * 1024 * 1024 * 1024)
+	ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem())
 
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)
@@ -141,7 +143,9 @@ func TestUnzipAndExtractBackupRejectsLargeFile(t *testing.T) {
 }
 
 func TestUnzipAndExtractBackupRejectsManySmallFiles(t *testing.T) {
-	ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem(), 1024)
+	SetMaxExtractionSize(1024)
+	defer SetMaxExtractionSize(16 * 1024 * 1024 * 1024)
+	ext := NewExtractor(test.NewLogger(), test.NewFakeFileSystem())
 
 	var buf bytes.Buffer
 	gzw := gzip.NewWriter(&buf)

@@ -242,7 +242,6 @@ func TestRestorePVWithVolumeInfo(t *testing.T) {
 				PodVolumeBackups:    nil,
 				VolumeSnapshots:     nil,
 				BackupReader:        tc.tarball,
-				MaxExtractionSize:   8 * 1024 * 1024 * 1024,
 				BackupVolumeInfoMap: tc.volumeInfoMap,
 			}
 			warnings, errs := h.restorer.Restore(
@@ -794,14 +793,13 @@ func TestRestoreResourceFiltering(t *testing.T) {
 			require.NoError(t, err)
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
-				ResPolicies:       resPolicies,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
+				ResPolicies:      resPolicies,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -876,13 +874,12 @@ func TestRestoreNamespaceMapping(t *testing.T) {
 			require.NoError(t, h.restorer.discoveryHelper.Refresh())
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -961,13 +958,12 @@ func TestRestoreResourcePriorities(t *testing.T) {
 		require.NoError(t, h.restorer.discoveryHelper.Refresh())
 
 		data := &Request{
-			Log:               h.log,
-			Restore:           tc.restore,
-			Backup:            tc.backup,
-			PodVolumeBackups:  nil,
-			VolumeSnapshots:   nil,
-			BackupReader:      tc.tarball,
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+			Log:              h.log,
+			Restore:          tc.restore,
+			Backup:           tc.backup,
+			PodVolumeBackups: nil,
+			VolumeSnapshots:  nil,
+			BackupReader:     tc.tarball,
 		}
 		warnings, errs := h.restorer.Restore(
 			data,
@@ -1039,13 +1035,12 @@ func TestInvalidTarballContents(t *testing.T) {
 			require.NoError(t, h.restorer.discoveryHelper.Refresh())
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -1480,7 +1475,6 @@ func TestRestoreItems(t *testing.T) {
 				PodVolumeBackups:     nil,
 				VolumeSnapshots:      nil,
 				BackupReader:         tc.tarball,
-				MaxExtractionSize:    8 * 1024 * 1024 * 1024,
 				RestoredItems:        map[itemKey]restoredItemStatus{},
 				DisableInformerCache: tc.disableInformer,
 			}
@@ -1731,13 +1725,12 @@ func TestRestoreActionsRunForCorrectItems(t *testing.T) {
 			}
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -1912,13 +1905,12 @@ func TestRestoreActionModifications(t *testing.T) {
 			}
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -2073,13 +2065,12 @@ func TestRestoreWithAsyncOperations(t *testing.T) {
 			}
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -2341,13 +2332,12 @@ func TestRestoreActionAdditionalItems(t *testing.T) {
 			}
 
 			data := &Request{
-				Log:               h.log,
-				Restore:           tc.restore,
-				Backup:            tc.backup,
-				PodVolumeBackups:  nil,
-				VolumeSnapshots:   nil,
-				BackupReader:      tc.tarball,
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+				Log:              h.log,
+				Restore:          tc.restore,
+				Backup:           tc.backup,
+				PodVolumeBackups: nil,
+				VolumeSnapshots:  nil,
+				BackupReader:     tc.tarball,
 			}
 			warnings, errs := h.restorer.Restore(
 				data,
@@ -2394,11 +2384,10 @@ func TestRestoreActionAdditionalItemsInvalidJSON(t *testing.T) {
 	}
 
 	data := &Request{
-		Log:               h.log,
-		Restore:           defaultRestore().Result(),
-		Backup:            defaultBackup().Result(),
-		BackupReader:      tarball,
-		MaxExtractionSize: 8 * 1024 * 1024 * 1024,
+		Log:          h.log,
+		Restore:      defaultRestore().Result(),
+		Backup:       defaultBackup().Result(),
+		BackupReader: tarball,
 	}
 
 	// A nil additional item passed on to restoreItem panics here rather than failing.
@@ -2432,8 +2421,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 			BackupReader: test.NewTarWriter(t).
 				AddItems("pods", builder.ForPod("ns-1", "pod-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -2476,8 +2464,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 				AddItems("pods", builder.ForPod("ns-1", "pod-1").Result()).
 				AddItems("persistentvolumes", builder.ForPersistentVolume("pv-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -2529,8 +2516,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 				AddItems("pods", builder.ForPod("ns-1", "pod-1").Result()).
 				AddItems("persistentvolumes", builder.ForPersistentVolume("pv-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -2575,8 +2561,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 			BackupReader: test.NewTarWriter(t).
 				AddItems("pods", builder.ForPod("ns-1", "pod-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -2624,8 +2609,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 				AddItems("persistentvolumes", builder.ForPersistentVolume("pv-1").Result()).
 				AddItems("persistentvolumeclaims", builder.ForPersistentVolumeClaim("ns-2", "pvc-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -2694,8 +2678,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 				AddItems("persistentvolumes", builder.ForPersistentVolume("pv-1").Result()).
 				AddItems("persistentvolumeclaims", builder.ForPersistentVolumeClaim("ns-2", "pvc-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -2754,8 +2737,7 @@ func TestRestoreMustIncludeAdditionalItems(t *testing.T) {
 				AddItems("volumesnapshots.snapshot.storage.k8s.io", builder.ForVolumeSnapshot("ns-1", "vs-1").Result()).
 				AddItems("volumesnapshotcontents.snapshot.storage.k8s.io", builder.ForVolumeSnapshotContent("vsc-1").Result()).
 				Done(),
-
-			MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+		}
 		warnings, errs := h.restorer.Restore(
 			data,
 			[]riav2.RestoreItemAction{
@@ -3849,7 +3831,6 @@ func TestRestorePersistentVolumes(t *testing.T) {
 				Backup:                   tc.backup,
 				VolumeSnapshots:          tc.volumeSnapshots,
 				BackupReader:             tc.tarball,
-				MaxExtractionSize:        8 * 1024 * 1024 * 1024,
 				CSIVolumeSnapshots:       tc.csiVolumeSnapshots,
 				RestoreVolumeInfoTracker: volume.NewRestoreVolInfoTracker(tc.restore, h.log, test.NewFakeControllerRuntimeClient(t)),
 			}
@@ -3986,8 +3967,7 @@ func TestRestoreWithPodVolume(t *testing.T) {
 				Backup:           tc.backup,
 				PodVolumeBackups: tc.podVolumeBackups,
 				BackupReader:     tarball.Done(),
-
-				MaxExtractionSize: 8 * 1024 * 1024 * 1024}
+			}
 
 			warnings, errs := h.restorer.Restore(
 				data,

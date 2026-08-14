@@ -38,7 +38,16 @@ type Extractor struct {
 	totalExtractedSize int64
 }
 
-func NewExtractor(log logrus.FieldLogger, fs filesystem.Interface, maxExtractionSize int64) *Extractor {
+var maxExtractionSize = int64(16) << 30
+
+// SetMaxExtractionSize sets the maximum extraction size. It is normally called at server startup.
+func SetMaxExtractionSize(size int64) {
+	if size > 0 {
+		maxExtractionSize = size
+	}
+}
+
+func NewExtractor(log logrus.FieldLogger, fs filesystem.Interface) *Extractor {
 	return &Extractor{
 		log:                log,
 		fs:                 fs,
