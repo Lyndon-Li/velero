@@ -40,6 +40,7 @@ import (
 // not found
 var ErrNotFound = errors.New("file not found")
 var ErrDownloadRequestDownloadURLTimeout = errors.New("download request download url timeout, check velero server logs for errors. backup storage location may not be available")
+var unzipLimit int64 = 1024 * 1024 * 1024 // 1GB limit
 
 func Stream(
 	ctx context.Context,
@@ -203,17 +204,34 @@ func download(
 	}
 
 	var r io.Reader = resp.Body
+	var gzipReader *gzip.Reader
 	if kind != veleroV1api.DownloadTargetKindBackupContents {
 		// need to decompress logs
-		gzipReader, err := gzip.NewReader(resp.Body)
+		var err error
+		gzipReader, err = gzip.NewReader(resp.Body)
 		if err != nil {
 			return err
 		}
 		defer gzipReader.Close()
 
-		r = io.LimitReader(gzipReader, 1024*1024*1024) // 1GB limit
+		r = io.LimitReader(gzipReader, unzipLimit)
 	}
 
 	_, err = io.Copy(w, r)
-	return err
+	if err != nil {
+		return err
+	}
+
+	if gzipReader != nil {
+		var buf [1]byte
+		n, err := gzipReader.Read(buf[:])
+		if n > 0 || err == nil {
+			return errors.Errorf("decompressed data exceeds the limit")
+		}
+		if err != io.EOF {
+			return err
+		}
+	}
+
+	return nil
 }
