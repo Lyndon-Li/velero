@@ -242,11 +242,17 @@ func (o *CreateOptions) validateFromScheduleFlag(c *cobra.Command) error {
 	return nil
 }
 
+// validateBackupType check the backupType value and return the valid value.
 func (o *CreateOptions) validateBackupType() error {
-	backupType := strings.TrimSpace(o.BackupType)
+	// Allow full, and incremental from the CLI, and ignore case of the input string's case.
+	backupType := strings.ToLower(strings.TrimSpace(o.BackupType))
 
 	switch backupType {
-	case "", "Incremental", "Full":
+	case "":
+	case "incremental":
+		o.BackupType = string(velerov1api.BackupTypeIncremental)
+	case "full":
+		o.BackupType = string(velerov1api.BackupTypeFull)
 	default:
 		return fmt.Errorf("invalid backup type %s - valid values are 'Incremental', and 'Full'", backupType)
 	}
@@ -379,8 +385,19 @@ func ParseOrderedResources(orderMapStr string) (map[string]string, error) {
 			return nil, fmt.Errorf("invalid OrderedResources '%s'", entry)
 		}
 		kind := strings.TrimSpace(kv[0])
-		order := strings.TrimSpace(kv[1])
-		orderedResources[kind] = order
+		orderParts := strings.Split(kv[1], ",")
+		cleaned := make([]string, 0, len(orderParts))
+		for _, part := range orderParts {
+			name := strings.TrimSpace(part)
+			if name == "" {
+				continue
+			}
+			cleaned = append(cleaned, name)
+		}
+		if kind == "" || len(cleaned) == 0 {
+			return nil, fmt.Errorf("invalid OrderedResources '%s'", entry)
+		}
+		orderedResources[kind] = strings.Join(cleaned, ",")
 	}
 	return orderedResources, nil
 }
