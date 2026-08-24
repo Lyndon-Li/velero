@@ -32,12 +32,12 @@ func GetBackupBitmap(ctx context.Context, service cbtservice.Service, blockSize 
 	full.SetFull()
 
 	if service == nil {
-		log.Warnf("CBT serivce is not available, fallback full for snapshot %v", snapshot)
+		log.Warnf("CBT service is not available, fallback to real full for snapshot %v", snapshot)
 		return full, true
 	}
 
 	if snapshot == "" {
-		log.Warnf("Snapshot is not available, fallback full for snapshot %v", snapshot)
+		log.Warnf("Snapshot is not available, fallback to real full for snapshot %v", snapshot)
 		return full, true
 	}
 
@@ -57,12 +57,12 @@ func GetBackupBitmap(ctx context.Context, service cbtservice.Service, blockSize 
 	}
 
 	if changedErr != nil {
-		log.WithField("changedErr", changedErr).Warnf("Failed to get changed bitmap for snapshot %v, fall backup to full", snapshot)
+		log.WithField("changedErr", changedErr).Warnf("Failed to get changed bitmap for snapshot %v, fallback to full", snapshot)
 		return allocated, true
 	}
 
 	if allocatedErr != nil {
-		log.WithField("allocatedErr", allocatedErr).Warnf("Failed to get allocated bitmap for snapshot %v, more may be taken by the backup", snapshot)
+		log.WithField("allocatedErr", allocatedErr).Warnf("Failed to get allocated bitmap for snapshot %v, more data may be taken by the backup", snapshot)
 		return changed, false
 	}
 
