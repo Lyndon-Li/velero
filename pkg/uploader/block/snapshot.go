@@ -108,12 +108,9 @@ func snapshotSource(
 
 	parentBackup := getParentBackupInfo(ctx, rep, forceFull, parentSnapshot, cbtSource.VolumeID, source.realSource, snapshotTags, log)
 
-	bitmap := cbt.NewBitmap(blockSize, uint64(source.size), cbtSource.Snapshot, parentBackup.changeID, parentBackup.volumeID)
-
-	err := cbt.SetBitmapOrFull(ctx, cbtService, bitmap)
-	if err != nil {
+	bitmap, fallback := cbt.GetBackupBitmap(ctx, cbtService, blockSize, source.size, cbtSource.Snapshot, parentBackup.changeID, parentBackup.volumeID, log)
+	if fallback {
 		parentBackup.parentObject = ""
-		log.WithError(err).Warnf("Failed to create CBT with source %v, fallback to real full backup", cbtSource)
 	}
 
 	snap, backupSize, err := u.Backup(source, parentBackup.parentObject, bitmap.Iterator(), uploaderCfg)

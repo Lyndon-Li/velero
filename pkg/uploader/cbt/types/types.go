@@ -35,6 +35,9 @@ type Bitmap interface {
 
 	// Iterator returns the iterator for the CBT Bitmap
 	Iterator() Iterator
+
+	// And makes an And operation with another bitmap
+	And(Bitmap)
 }
 
 // Iterator defines the methods to iterate the CBT bitmap and query the associated information

@@ -36,6 +36,7 @@ type bitmapImpl struct {
 	snapshot     string
 	changeID     string
 	volumeID     string
+	absoluteFull bool
 }
 
 type bitmapIterator struct {
@@ -98,6 +99,16 @@ func (c *bitmapImpl) Iterator() types.Iterator {
 		bitmapImpl: *c,
 		iterator:   c.bitmap.Iterator(),
 	}
+}
+
+func (c *bitmapImpl) And(other types.Bitmap) {
+	if otherImpl, ok := other.(*bitmapImpl); ok {
+		c.bitmap.And(otherImpl.bitmap)
+	}
+}
+
+func (c *bitmapImpl) IsAbsoluteFull() bool {
+	return c.absoluteFull
 }
 
 func (c *bitmapIterator) Next() (uint64, bool) {
