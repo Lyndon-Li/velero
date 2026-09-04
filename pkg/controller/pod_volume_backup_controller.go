@@ -636,8 +636,10 @@ func (r *PodVolumeBackupReconciler) OnDataPathProgress(ctx context.Context, name
 		}
 
 		if progress.Message != "" {
-			pvb.Status.Message += progress.Message
-			pvb.Status.Message += ";"
+			message := progress.Message + ";"
+			if !strings.HasSuffix(pvb.Status.Message, message) {
+				pvb.Status.Message += message
+			}
 		}
 
 		return true

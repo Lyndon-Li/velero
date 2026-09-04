@@ -84,7 +84,12 @@ func SetBitmapOrFull(ctx context.Context, service cbtservice.Service, bitmap typ
 
 	if err != nil {
 		setFull = true
-		return errors.Wrap(err, "error getting allocated blocks from CBT service, fallback to real full")
+
+		if changedErr != nil {
+			return errors.Wrap(err, "error getting both changed and allocated blocks from CBT service, fallback to real full")
+		} else {
+			return errors.Wrap(err, "error getting allocated blocks from CBT service, fallback to real full")
+		}
 	}
 
 	if changedErr != nil {

@@ -913,8 +913,10 @@ func (r *PodVolumeRestoreReconciler) OnDataPathProgress(ctx context.Context, nam
 		}
 
 		if progress.Message != "" {
-			pvr.Status.Message += progress.Message
-			pvr.Status.Message += ";"
+			message := progress.Message + ";"
+			if !strings.HasSuffix(pvr.Status.Message, message) {
+				pvr.Status.Message += message
+			}
 		}
 
 		return true

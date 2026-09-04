@@ -617,8 +617,10 @@ func (r *DataDownloadReconciler) OnDataDownloadProgress(ctx context.Context, nam
 		}
 
 		if progress.Message != "" {
-			dd.Status.Message += progress.Message
-			dd.Status.Message += ";"
+			message := progress.Message + ";"
+			if !strings.HasSuffix(dd.Status.Message, message) {
+				dd.Status.Message += message
+			}
 		}
 
 		return true
