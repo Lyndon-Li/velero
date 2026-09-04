@@ -181,6 +181,9 @@ type SnapshotDataMovementInfo struct {
 	// incremental and must stay distinguishable from "unknown".
 	IncrementalSize *int64 `json:"incrementalSize,omitempty"`
 
+	// The size of source volume, for backup only
+	SourceSize int64 `json:"sourceSize,omitempty"`
+
 	// The DataUpload's Status.Phase value
 	Phase velerov2alpha1.DataUploadPhase
 }
