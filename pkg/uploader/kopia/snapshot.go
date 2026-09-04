@@ -191,8 +191,9 @@ func Backup(ctx context.Context, fsUploader SnapshotUploader, repoWriter repo.Re
 
 	snapID, snapshotSize, err := SnapshotSource(kopiaCtx, repoWriter, fsUploader, sourceInfo, sourceEntry, forceFull, parentSnapshot, tags, uploaderCfg, log, "Kopia Uploader")
 	snapshotInfo := &uploader.SnapshotInfo{
-		ID:   snapID,
-		Size: snapshotSize,
+		ID:           snapID,
+		SnapshotSize: snapshotSize,
+		SourceSize:   snapshotSize,
 	}
 
 	return snapshotInfo, false, err
