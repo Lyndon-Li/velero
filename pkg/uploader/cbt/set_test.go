@@ -33,6 +33,7 @@ func TestSetBitmapOrFull(t *testing.T) {
 	tests := []struct {
 		name           string
 		nilService     bool
+		incOnly        bool
 		setupMocks     func(*cbtservicemocks.Service, *cbtmocks.Bitmap)
 		expectedErrStr string
 	}{
@@ -42,7 +43,7 @@ func TestSetBitmapOrFull(t *testing.T) {
 			setupMocks: func(svc *cbtservicemocks.Service, bmp *cbtmocks.Bitmap) {
 				bmp.On("SetFull").Return()
 			},
-			expectedErrStr: "CBT service is absent",
+			expectedErrStr: "CBT service is absent, fallback to real full",
 		},
 		{
 			name: "invalid snapshot",
@@ -50,7 +51,17 @@ func TestSetBitmapOrFull(t *testing.T) {
 				bmp.On("Snapshot").Return("")
 				bmp.On("SetFull").Return()
 			},
-			expectedErrStr: "invalid snapshot",
+			expectedErrStr: "invalid snapshot, fallback to real full",
+		},
+		{
+			name: "invalid changeID",
+			incOnly: true,
+			setupMocks: func(svc *cbtservicemocks.Service, bmp *cbtmocks.Bitmap) {
+				bmp.On("Snapshot").Return("snap-1")
+				bmp.On("ChangeID").Return("")
+				bmp.On("SetFull").Return()
+			},
+			expectedErrStr: "invalid changeID, fallback to real full",
 		},
 		{
 			name: "allocated blocks success",
@@ -79,7 +90,7 @@ func TestSetBitmapOrFull(t *testing.T) {
 				svc.On("GetAllocatedBlocks", mock.Anything, "snap-1", mock.Anything).Return(errors.New("mock alloc error"))
 				bmp.On("SetFull").Return()
 			},
-			expectedErrStr: "error getting allocated blocks from CBT service: mock alloc error",
+			expectedErrStr: "error getting allocated blocks from CBT service, fallback to real full: mock alloc error",
 		},
 		{
 			name: "changed blocks success",
@@ -98,7 +109,8 @@ func TestSetBitmapOrFull(t *testing.T) {
 			},
 		},
 		{
-			name: "changed blocks error",
+			name: "changed blocks error with incOnly",
+			incOnly: true,
 			setupMocks: func(svc *cbtservicemocks.Service, bmp *cbtmocks.Bitmap) {
 				bmp.On("Snapshot").Return("snap-1")
 				bmp.On("ChangeID").Return("change-1")
@@ -106,7 +118,19 @@ func TestSetBitmapOrFull(t *testing.T) {
 				svc.On("GetChangedBlocks", mock.Anything, "snap-1", "change-1", mock.Anything).Return(errors.New("mock changed error"))
 				bmp.On("SetFull").Return()
 			},
-			expectedErrStr: "error getting changed blocks from CBT service: mock changed error",
+			expectedErrStr: "error getting changed blocks from CBT service, fallback to real full: mock changed error",
+		},
+		{
+			name: "changed blocks error fallback to full",
+			setupMocks: func(svc *cbtservicemocks.Service, bmp *cbtmocks.Bitmap) {
+				bmp.On("Snapshot").Return("snap-1")
+				bmp.On("ChangeID").Return("change-1")
+
+				svc.On("GetChangedBlocks", mock.Anything, "snap-1", "change-1", mock.Anything).Return(errors.New("mock changed error"))
+				
+				svc.On("GetAllocatedBlocks", mock.Anything, "snap-1", mock.Anything).Return(nil)
+			},
+			expectedErrStr: "error getting changed blocks from CBT service, fallback to full: mock changed error",
 		},
 	}
 
@@ -124,7 +148,9 @@ func TestSetBitmapOrFull(t *testing.T) {
 				svc = svcMock
 			}
 
-			err := SetBitmapOrFull(context.Background(), svc, bmpMock)
+			bmpMock.On("SetError", mock.Anything).Return()
+
+			err := SetBitmapOrFull(context.Background(), svc, bmpMock, tt.incOnly)
 
 			if tt.expectedErrStr != "" {
 				require.Error(t, err)
