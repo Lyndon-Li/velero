@@ -194,6 +194,9 @@ type BackupSnapshotDataMovementInfo struct {
 	// The size of source volume, for backup only
 	SourceSize int64 `json:"sourceSize,omitempty"`
 
+	// FallbackFull indicates whether the incremental backup fallbacks to full backup
+	FallbackFull bool `json:"fallbackFull,omitempty"`
+
 	// The DataUpload's Status.Phase value
 	Phase velerov2alpha1.DataUploadPhase `json:"phase"`
 }
@@ -300,6 +303,9 @@ type PodVolumeBackupInfo struct {
 	// This field will be empty when the struct is used to represent a podvolumerestore.
 	NodeName string `json:"nodeName,omitempty"`
 
+	// FallbackFull indicates whether the incremental backup fallbacks to full backup
+	FallbackFull bool `json:"fallbackFull,omitempty"`
+
 	// The PVB's Status.Phase value
 	Phase velerov1api.PodVolumeBackupPhase `json:"phase,omitempty"`
 }
@@ -352,6 +358,7 @@ func newPodVolumeInfoFromPVB(pvb *velerov1api.PodVolumeBackup) *PodVolumeBackupI
 		PodNamespace:    pvb.Spec.Pod.Namespace,
 		NodeName:        pvb.Spec.Node,
 		Phase:           pvb.Status.Phase,
+		FallbackFull:    pvb.Status.FallbackFull,
 	}
 }
 
