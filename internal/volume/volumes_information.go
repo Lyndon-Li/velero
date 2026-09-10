@@ -234,6 +234,9 @@ type RestoreSnapshotDataMovementInfo struct {
 
 	// Indicates the type of the restore, incremental or full.
 	RestoreType string `json:"restoreType,omitempty"`
+
+	// FallbackFull indicates whether the incremental restore fallbacks to full restore
+	FallbackFull bool `json:"fallbackFull,omitempty"`
 }
 
 // NativeSnapshotInfo is used for displaying the Velero native snapshot status.
@@ -344,6 +347,9 @@ type PodVolumeRestoreInfo struct {
 
 	// Indicates the type of the restore, incremental or full.
 	RestoreType string `json:"restoreType,omitempty"`
+
+	// FallbackFull indicates whether the incremental restore fallbacks to full restore
+	FallbackFull bool `json:"fallbackFull,omitempty"`
 }
 
 func newPodVolumeInfoFromPVB(pvb *velerov1api.PodVolumeBackup) *PodVolumeBackupInfo {
