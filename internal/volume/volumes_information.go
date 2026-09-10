@@ -93,7 +93,7 @@ type BackupVolumeInfo struct {
 	// How volume data is backed up, with possible values including Full and Incremental.
 	BackupType velerov1api.BackupType `json:"backupType,omitempty"`
 
-	// FallbackFull indicates whether the incremental backup fallbacks to full backup
+	// FallbackFull indicates whether the incremental backup has fallen back to full backup
 	FallbackFull bool `json:"fallbackFull,omitempty"`
 
 	CSISnapshotInfo          *CSISnapshotInfo                `json:"csiSnapshotInfo,omitempty"`
@@ -132,7 +132,7 @@ type RestoreVolumeInfo struct {
 	// Indicates the type of the restore, incremental or full.
 	RestoreType string `json:"restoreType,omitempty"`
 
-	// FallbackFull indicates whether the incremental restore fallbacks to full restore
+	// FallbackFull indicates whether the incremental restore has fallen back to full restore
 	FallbackFull bool `json:"fallbackFull,omitempty"`
 
 	CSISnapshotInfo          *CSISnapshotInfo                 `json:"csiSnapshotInfo,omitempty"`
@@ -300,7 +300,7 @@ type PodVolumeBackupInfo struct {
 	// This field will be empty when the struct is used to represent a podvolumerestore.
 	NodeName string `json:"nodeName,omitempty"`
 
-	// FallbackFull indicates whether the incremental backup fallbacks to full backup
+	// FallbackFull indicates whether the incremental backup has fallen back to full backup
 	FallbackFull bool `json:"fallbackFull,omitempty"`
 
 	// BackupType indicates the type of the backup, incremental or full.

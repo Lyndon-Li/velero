@@ -199,7 +199,7 @@ type DataUploadStatus struct {
 	// +nullable
 	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
 
-	// FallbackFull indicates whether the incremental backup fallbacks to full backup
+	// FallbackFull indicates whether the incremental backup has fallen back to full backup
 	FallbackFull bool `json:"fallbackFull,omitempty"`
 }
 

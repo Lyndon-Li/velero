@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/ptr"
 
 	"github.com/vmware-tanzu/velero/pkg/cbtservice"
 	cbtservicemocks "github.com/vmware-tanzu/velero/pkg/cbtservice/mocks"
@@ -126,6 +127,7 @@ func TestBackup(t *testing.T) {
 				assert.Equal(t, int64(8), info.IncrementalSize)
 				assert.Equal(t, int64(2048), info.SnapshotSize)
 				assert.Equal(t, int64(len("test-block-data")), info.SourceSize)
+				assert.False(t, info.Fallback)
 			},
 		},
 		{
@@ -149,6 +151,7 @@ func TestBackup(t *testing.T) {
 				assert.Equal(t, int64(8), info.IncrementalSize)
 				assert.Equal(t, int64(len("test-block-data")), info.SnapshotSize)
 				assert.Equal(t, int64(len("test-block-data")), info.SourceSize)
+				assert.False(t, info.Fallback)
 			},
 		},
 	}
@@ -210,6 +213,8 @@ func TestSnapshotSource(t *testing.T) {
 
 	testCases := []struct {
 		name                 string
+		forceFull            *bool
+		parentSnapshot       string
 		setupMocks           func(blkup *mockUploader, repo *udmrepomocks.BackupRepo)
 		expectedErrStr       string
 		expectedSnapID       string
@@ -260,7 +265,7 @@ func TestSnapshotSource(t *testing.T) {
 			expectedSnapID:       "snap-success",
 			expectedSize:         512,
 			expectedSnapshotSize: 2048,
-			expectedFallback:     true,
+			expectedFallback:     false,
 		},
 		{
 			name: "tags from cbtSource and snapshotTags are merged onto snapshot",
@@ -278,7 +283,7 @@ func TestSnapshotSource(t *testing.T) {
 			expectedSnapID:       "snap-tags",
 			expectedSize:         256,
 			expectedSnapshotSize: 4096,
-			expectedFallback:     true,
+			expectedFallback:     false,
 		},
 		{
 			name: "success with cbtService getting allocated blocks",
@@ -322,6 +327,23 @@ func TestSnapshotSource(t *testing.T) {
 			expectedSnapID:       "snap-cbt-fallback",
 			expectedSize:         1024,
 			expectedSnapshotSize: 1024,
+			expectedFallback:     false,
+		},
+		{
+			name:           "incremental backup falls back to full when parent snapshot load fails",
+			forceFull:      ptr.To(false),
+			parentSnapshot: "snap-parent",
+			setupMocks: func(blkup *mockUploader, repo *udmrepomocks.BackupRepo) {
+				repo.On("GetSnapshot", mock.Anything, udmrepo.ID("snap-parent")).
+					Return(udmrepo.Snapshot{}, errors.New("parent not found"))
+				blkup.On("Backup", mock.Anything, udmrepo.ID(""), mock.Anything, mock.Anything).
+					Return(udmrepo.Snapshot{TotalSize: 1024}, int64(1024), nil)
+				repo.On("SaveSnapshot", mock.Anything, mock.Anything).Return(udmrepo.ID("snap-inc-fallback"), nil)
+				repo.On("Flush", mock.Anything).Return(nil)
+			},
+			expectedSnapID:       "snap-inc-fallback",
+			expectedSize:         1024,
+			expectedSnapshotSize: 1024,
 			expectedFallback:     true,
 		},
 	}
@@ -342,10 +364,15 @@ func TestSnapshotSource(t *testing.T) {
 				cbtSvc = tc.cbtService(t)
 			}
 
+			forceFull := true
+			if tc.forceFull != nil {
+				forceFull = *tc.forceFull
+			}
+
 			snapID, size, snapshotSize, fallback, err := snapshotSource(
 				ctx, mockRepo, mockBlkup,
 				baseSource,
-				true, "",
+				forceFull, tc.parentSnapshot,
 				cbtSrc, cbtSvc,
 				snapshotTags, map[string]string{},
 				testLog(), "Block Uploader",

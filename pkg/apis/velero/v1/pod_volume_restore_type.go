@@ -125,7 +125,7 @@ type PodVolumeRestoreStatus struct {
 	// +optional
 	Node string `json:"node,omitempty"`
 
-	// FallbackFull indicates whether the incremental restore fallbacks to full restore
+	// FallbackFull indicates whether the incremental restore has fallen back to full restore
 	FallbackFull bool `json:"fallbackFull,omitempty"`
 }
 

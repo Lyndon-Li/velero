@@ -150,7 +150,7 @@ type DataDownloadStatus struct {
 	// +nullable
 	AcceptedTimestamp *metav1.Time `json:"acceptedTimestamp,omitempty"`
 
-	// FallbackFull indicates whether the incremental restore fallbacks to full restore
+	// FallbackFull indicates whether the incremental restore has fallen back to full restore
 	FallbackFull bool `json:"fallbackFull,omitempty"`
 }
 

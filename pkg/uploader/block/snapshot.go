@@ -128,7 +128,10 @@ func snapshotSource(
 		log.WithError(err).Warnf("Failed to create CBT with source %v", cbtSource)
 	}
 
-	fallback := (len(bitmap.Errors()) > 0)
+	fallback := false
+	if !forceFull {
+		fallback = (len(bitmap.Errors()) > 0)
+	}
 
 	snap, backupSize, err := u.Backup(source, parentBackup.parentObject, bitmap.Iterator(), uploaderCfg)
 	if err != nil {
@@ -251,7 +254,10 @@ func Restore(ctx context.Context, blkUp Uploader, rep udmrepo.BackupRepo, snapsh
 		bitmap.SetFull()
 	}
 
-	fallback := (len(bitmap.Errors()) > 0)
+	fallback := false
+	if incremental {
+		fallback = (len(bitmap.Errors()) > 0)
+	}
 
 	destPath, err := filepath.Abs(dest)
 	if err != nil {
