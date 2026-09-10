@@ -1237,6 +1237,7 @@ func TestRestoreVolumeInfoResult(t *testing.T) {
 					PVName:            "testPV",
 					RestoreMethod:     CSISnapshot,
 					SnapshotDataMoved: true,
+					RestoreType:       "Incremental",
 					SnapshotDataMovementInfo: &RestoreSnapshotDataMovementInfo{
 						DataMover:      "velero",
 						UploaderType:   velerov1api.BackupRepositoryTypeKopia,
@@ -1244,7 +1245,6 @@ func TestRestoreVolumeInfoResult(t *testing.T) {
 						OperationID:    "dd-operation-001",
 						Phase:          velerov2alpha1.DataDownloadPhaseCompleted,
 						Size:           2048,
-						RestoreType:    "Incremental",
 					},
 				},
 				{
@@ -1253,6 +1253,7 @@ func TestRestoreVolumeInfoResult(t *testing.T) {
 					PVName:            "testPV2",
 					RestoreMethod:     CSISnapshot,
 					SnapshotDataMoved: true,
+					RestoreType:       "Full",
 					SnapshotDataMovementInfo: &RestoreSnapshotDataMovementInfo{
 						DataMover:      "velero",
 						UploaderType:   velerov1api.BackupRepositoryTypeKopia,
@@ -1260,7 +1261,6 @@ func TestRestoreVolumeInfoResult(t *testing.T) {
 						OperationID:    "dd-operation-002",
 						Phase:          velerov2alpha1.DataDownloadPhaseCompleted,
 						Size:           4096,
-						RestoreType:    "Full",
 					},
 				},
 			},
@@ -1315,6 +1315,7 @@ func TestBackupVolumeInfoJSONRoundTrip(t *testing.T) {
 		Skipped:               false,
 		Result:                VolumeResultSucceeded,
 		BackupType:            velerov1api.BackupTypeIncremental,
+		FallbackFull:          true,
 		CSISnapshotInfo: &CSISnapshotInfo{
 			SnapshotHandle:            "csi-snap-1",
 			Size:                      2000,
@@ -1331,7 +1332,6 @@ func TestBackupVolumeInfoJSONRoundTrip(t *testing.T) {
 			OperationID:      "op-1",
 			Size:             1000,
 			IncrementalSize:  int64Ptr(200),
-			ParentSnapshot:   "parent-1",
 			Phase:            velerov2alpha1.DataUploadPhaseCompleted,
 		},
 		NativeSnapshotInfo: &NativeSnapshotInfo{
@@ -1376,7 +1376,7 @@ func TestBackupVolumeInfoJSONRoundTrip(t *testing.T) {
 	assert.Contains(t, jsonStr, `"operationID":"op-1"`)
 	assert.Contains(t, jsonStr, `"size":1000`)
 	assert.Contains(t, jsonStr, `"incrementalSize":200`)
-	assert.Contains(t, jsonStr, `"parentSnapshot":"parent-1"`)
+	assert.Contains(t, jsonStr, `"fallbackFull":true`)
 	assert.Contains(t, jsonStr, `"phase":"Completed"`)
 	assert.Contains(t, jsonStr, `"pvbInfo":{`)
 	assert.Contains(t, jsonStr, `"podName":"pod-1"`)
@@ -1406,6 +1406,8 @@ func TestRestoreVolumeInfoJSONRoundTrip(t *testing.T) {
 		PVName:            "pv-2",
 		RestoreMethod:     CSISnapshot,
 		SnapshotDataMoved: true,
+		RestoreType:       "Incremental",
+		FallbackFull:      true,
 		SnapshotDataMovementInfo: &RestoreSnapshotDataMovementInfo{
 			DataMover:        "velero",
 			UploaderType:     "kopia",
@@ -1415,7 +1417,6 @@ func TestRestoreVolumeInfoJSONRoundTrip(t *testing.T) {
 			Size:             3000,
 			IncrementalSize:  int64Ptr(300),
 			Phase:            velerov2alpha1.DataDownloadPhaseCompleted,
-			RestoreType:      "Incremental",
 		},
 		PVRInfo: &PodVolumeRestoreInfo{
 			SnapshotHandle:  "pvr-snap-1",
@@ -1427,7 +1428,6 @@ func TestRestoreVolumeInfoJSONRoundTrip(t *testing.T) {
 			PodNamespace:    "ns-2",
 			NodeName:        "node-2",
 			Phase:           velerov1api.PodVolumeRestorePhaseCompleted,
-			RestoreType:     "Incremental",
 		},
 		CSISnapshotInfo: &CSISnapshotInfo{
 			SnapshotHandle: "csi-snap-2",
@@ -1462,6 +1462,7 @@ func TestRestoreVolumeInfoJSONRoundTrip(t *testing.T) {
 	assert.Contains(t, jsonStr, `"incrementalSize":300`)
 	assert.Contains(t, jsonStr, `"phase":"Completed"`)
 	assert.Contains(t, jsonStr, `"restoreType":"Incremental"`)
+	assert.Contains(t, jsonStr, `"fallbackFull":true`)
 	assert.Contains(t, jsonStr, `"pvrInfo":{`)
 	assert.Contains(t, jsonStr, `"podName":"pod-2"`)
 	assert.Contains(t, jsonStr, `"podNamespace":"ns-2"`)
