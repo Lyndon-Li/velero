@@ -361,13 +361,14 @@ func newPodVolumeInfoFromPVB(pvb *velerov1api.PodVolumeBackup) *PodVolumeBackupI
 
 func newPodVolumeInfoFromPVR(pvr *velerov1api.PodVolumeRestore) *PodVolumeRestoreInfo {
 	return &PodVolumeRestoreInfo{
-		SnapshotHandle: pvr.Spec.SnapshotID,
-		Size:           pvr.Status.Progress.TotalBytes,
-		UploaderType:   pvr.Spec.UploaderType,
-		VolumeName:     pvr.Spec.Volume,
-		PodName:        pvr.Spec.Pod.Name,
-		PodNamespace:   pvr.Spec.Pod.Namespace,
-		Phase:          pvr.Status.Phase,
+		SnapshotHandle:  pvr.Spec.SnapshotID,
+		Size:            pvr.Status.Progress.TotalBytes,
+		UploaderType:    pvr.Spec.UploaderType,
+		VolumeName:      pvr.Spec.Volume,
+		PodName:         pvr.Spec.Pod.Name,
+		PodNamespace:    pvr.Spec.Pod.Namespace,
+		Phase:           pvr.Status.Phase,
+		IncrementalSize: pvr.Status.IncrementalBytes,
 	}
 }
 
@@ -1008,12 +1009,13 @@ func (t *RestoreVolumeInfoTracker) Result() []*RestoreVolumeInfo {
 			RestoreMethod: CSISnapshot,
 			RestoreType:   dd.Spec.RestoreType,
 			SnapshotDataMovementInfo: &RestoreSnapshotDataMovementInfo{
-				DataMover:      dataMover,
-				UploaderType:   datamover.GetUploaderType(dataMover),
-				SnapshotHandle: dd.Spec.SnapshotID,
-				OperationID:    operationID,
-				Size:           dd.Status.Progress.TotalBytes,
-				Phase:          dd.Status.Phase,
+				DataMover:       dataMover,
+				UploaderType:    datamover.GetUploaderType(dataMover),
+				SnapshotHandle:  dd.Spec.SnapshotID,
+				OperationID:     operationID,
+				Size:            dd.Status.Progress.TotalBytes,
+				IncrementalSize: dd.Status.IncrementalBytes,
+				Phase:           dd.Status.Phase,
 			},
 		}
 
