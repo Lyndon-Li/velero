@@ -300,12 +300,6 @@ type PodVolumeBackupInfo struct {
 	// This field will be empty when the struct is used to represent a podvolumerestore.
 	NodeName string `json:"nodeName,omitempty"`
 
-	// FallbackFull indicates whether the incremental backup has fallen back to full backup
-	FallbackFull bool `json:"fallbackFull,omitempty"`
-
-	// BackupType indicates the type of the backup, incremental or full.
-	BackupType string `json:"backupType,omitempty"`
-
 	// The PVB's Status.Phase value
 	Phase velerov1api.PodVolumeBackupPhase `json:"phase,omitempty"`
 }
@@ -355,7 +349,6 @@ func newPodVolumeInfoFromPVB(pvb *velerov1api.PodVolumeBackup) *PodVolumeBackupI
 		PodNamespace:    pvb.Spec.Pod.Namespace,
 		NodeName:        pvb.Spec.Node,
 		Phase:           pvb.Status.Phase,
-		FallbackFull:    pvb.Status.FallbackFull,
 	}
 }
 

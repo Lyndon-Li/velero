@@ -730,6 +730,79 @@ func TestGenerateVolumeInfoFromPVB(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "PVB's volume has a PVC with fallback to full",
+			pvMap: map[string]pvcPvInfo{
+				"testPV": {
+					PVCName:      "testPVC",
+					PVCNamespace: "velero",
+					PV: corev1api.PersistentVolume{
+						ObjectMeta: metav1.ObjectMeta{
+							Name:   "testPV",
+							Labels: map[string]string{"a": "b"},
+						},
+						Spec: corev1api.PersistentVolumeSpec{
+							PersistentVolumeReclaimPolicy: corev1api.PersistentVolumeReclaimDelete,
+						},
+					},
+				},
+			},
+			pvb: func() *velerov1api.PodVolumeBackup {
+				pvb := builder.ForPodVolumeBackup("velero", "testPVB").
+					PodName("testPod").
+					PodNamespace("velero").
+					StartTimestamp(&now).
+					CompletionTimestamp(&now).
+					Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+					TotalBytes(1024).
+					IncrementalBytes(512).
+					Result()
+				pvb.Status.FallbackFull = true
+				return pvb
+			}(),
+			pod: builder.ForPod("velero", "testPod").Containers(&corev1api.Container{
+				Name: "test",
+				VolumeMounts: []corev1api.VolumeMount{
+					{
+						Name:      "testVolume",
+						MountPath: "/data",
+					},
+				},
+			}).Volumes(
+				&corev1api.Volume{
+					Name: "",
+					VolumeSource: corev1api.VolumeSource{
+						PersistentVolumeClaim: &corev1api.PersistentVolumeClaimVolumeSource{
+							ClaimName: "testPVC",
+						},
+					},
+				},
+			).Result(),
+			expectedVolumeInfos: []*BackupVolumeInfo{
+				{
+					PVCName:             "testPVC",
+					PVCNamespace:        "velero",
+					PVName:              "testPV",
+					BackupMethod:        PodVolumeBackup,
+					BackupType:          velerov1api.BackupTypeIncremental,
+					FallbackFull:        true,
+					StartTimestamp:      &now,
+					CompletionTimestamp: &now,
+					Result:              VolumeResultSucceeded,
+					PVBInfo: &PodVolumeBackupInfo{
+						PodName:         "testPod",
+						PodNamespace:    "velero",
+						Phase:           velerov1api.PodVolumeBackupPhaseCompleted,
+						Size:            1024,
+						IncrementalSize: ptr.To(int64(512)),
+					},
+					PVInfo: &PVInfo{
+						ReclaimPolicy: string(corev1api.PersistentVolumeReclaimDelete),
+						Labels:        map[string]string{"a": "b"},
+					},
+				},
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -1095,6 +1168,7 @@ func TestRestoreVolumeInfoResult(t *testing.T) {
 					PVName:            "testPV2",
 					RestoreMethod:     PodVolumeRestore,
 					SnapshotDataMoved: false,
+					RestoreType:       "Incremental",
 					PVRInfo: &PodVolumeRestoreInfo{
 						SnapshotHandle:  "pvr-snap-001",
 						PodName:         "testPod",
@@ -1557,17 +1631,21 @@ func TestNewPodVolumeInfoFromPVB(t *testing.T) {
 	}{
 		{
 			name: "all fields populated including incremental bytes",
-			pvb: builder.ForPodVolumeBackup("velero", "pvb-1").
-				SnapshotID("snap-1").
-				Volume("vol-1").
-				PodName("pod-1").
-				PodNamespace("ns-1").
-				Node("node-1").
-				UploaderType("kopia").
-				Phase(velerov1api.PodVolumeBackupPhaseCompleted).
-				TotalBytes(2048).
-				IncrementalBytes(512).
-				Result(),
+			pvb: func() *velerov1api.PodVolumeBackup {
+				pvb := builder.ForPodVolumeBackup("velero", "pvb-1").
+					SnapshotID("snap-1").
+					Volume("vol-1").
+					PodName("pod-1").
+					PodNamespace("ns-1").
+					Node("node-1").
+					UploaderType("kopia").
+					Phase(velerov1api.PodVolumeBackupPhaseCompleted).
+					TotalBytes(2048).
+					IncrementalBytes(512).
+					Result()
+				pvb.Status.FallbackFull = true
+				return pvb
+			}(),
 			expected: &PodVolumeBackupInfo{
 				SnapshotHandle:  "snap-1",
 				Size:            2048,
