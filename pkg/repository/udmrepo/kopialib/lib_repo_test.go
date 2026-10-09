@@ -1685,8 +1685,10 @@ func TestDeleteSnapshot(t *testing.T) {
 		if ptr, ok := payload.(*snapshot.Manifest); ok {
 			*ptr = *mockMani
 		} else {
-			b, _ := json.Marshal(mockMani)
-			json.Unmarshal(b, payload)
+			b, err := json.Marshal(mockMani)
+			require.NoError(t, err)
+			err = json.Unmarshal(b, payload)
+			require.NoError(t, err)
 		}
 	}
 
