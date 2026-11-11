@@ -16,6 +16,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -34,6 +35,7 @@ import (
 
 	velerov1api "github.com/velero-io/velero/pkg/apis/velero/v1"
 	"github.com/velero-io/velero/pkg/builder"
+	"github.com/velero-io/velero/pkg/label"
 	"github.com/velero-io/velero/pkg/metrics"
 	"github.com/velero-io/velero/pkg/repository"
 	"github.com/velero-io/velero/pkg/repository/maintenance"
@@ -1898,4 +1900,52 @@ func TestInvalidateBackupReposForBSL(t *testing.T) {
 		reqs := r.invalidateBackupReposForBSL(t.Context(), bsl)
 		require.Empty(t, reqs)
 	})
+}
+
+func TestEnqueueRepoForMaintenanceJob(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		repoName      string
+		jobNamespace  string
+		succeededPods int32
+		unlabeled     bool
+		failedPods    int32
+		want          bool
+	}{
+		{name: "completed", repoName: "repo", succeededPods: 1, want: true},
+		{name: "failed", repoName: "repo", failedPods: 1, want: true},
+		{name: "label does not name an existing repo", repoName: strings.Repeat("a", 70), succeededPods: 1},
+		{name: "running", repoName: "repo"},
+		{name: "unrelated job", repoName: "repo", succeededPods: 1, unlabeled: true},
+		{name: "different namespace", repoName: "repo", jobNamespace: "other", succeededPods: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			r := mockBackupRepoReconciler(t, "", nil)
+			repo := mockBackupRepositoryCR()
+			repo.Name = test.repoName
+			require.NoError(t, r.Create(t.Context(), repo))
+			other := mockBackupRepositoryCR()
+			other.Name = "unrelated"
+			require.NoError(t, r.Create(t.Context(), other))
+			job := &batchv1api.Job{ObjectMeta: metav1.ObjectMeta{
+				Name: "maintenance", Namespace: repo.Namespace,
+				Labels: map[string]string{maintenance.RepositoryNameLabel: label.ReturnNameOrHash(repo.Name)},
+			}}
+			if test.jobNamespace != "" {
+				job.Namespace = test.jobNamespace
+			}
+			if test.unlabeled {
+				job.Labels = nil
+			}
+			job.Status.Failed = test.failedPods
+			job.Status.Succeeded = test.succeededPods
+			requests := r.enqueueRepoForMaintenanceJob(t.Context(), job)
+			if test.want {
+				require.Len(t, requests, 1)
+				assert.Equal(t, types.NamespacedName{Namespace: repo.Namespace, Name: repo.Name}, requests[0].NamespacedName)
+			} else {
+				assert.Empty(t, requests)
+			}
+		})
+	}
 }

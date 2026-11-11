@@ -28,6 +28,7 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/petar/GoLLRB/llrb"
 	"github.com/sirupsen/logrus"
+	batchv1api "k8s.io/api/batch/v1"
 	corev1api "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +38,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	velerov1api "github.com/velero-io/velero/pkg/apis/velero/v1"
@@ -113,6 +116,16 @@ func (r *BackupRepoReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&velerov1api.BackupRepository{}, builder.WithPredicates(kube.SpecChangePredicate{})).
 		WatchesRawSource(s).
 		Watches(
+			&batchv1api.Job{},
+			kube.EnqueueRequestsFromMapUpdateFunc(r.enqueueRepoForMaintenanceJob),
+			builder.WithPredicates(
+				predicate.Funcs{
+					DeleteFunc:  func(event.DeleteEvent) bool { return false },
+					GenericFunc: func(event.GenericEvent) bool { return false },
+				},
+			),
+		).
+		Watches(
 			// mark BackupRepository as invalid when BSL is created, updated or deleted.
 			// BSL may be recreated after deleting, so also include the create event
 			&velerov1api.BackupStorageLocation{},
@@ -135,6 +148,31 @@ func (r *BackupRepoReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			),
 		).
 		Complete(r)
+}
+
+func (r *BackupRepoReconciler) enqueueRepoForMaintenanceJob(ctx context.Context, obj client.Object) []reconcile.Request {
+	job, ok := obj.(*batchv1api.Job)
+	if !ok {
+		return nil
+	}
+
+	if job.Status.Failed == 0 && job.Status.Succeeded == 0 {
+		return nil
+	}
+
+	repoLabel := job.Labels[maintenance.RepositoryNameLabel]
+	if repoLabel == "" {
+		r.logger.WithField("job", job.Name).Error("Invalid repo label from maintenance job")
+		return nil
+	}
+
+	key := types.NamespacedName{Namespace: job.Namespace, Name: repoLabel}
+	if err := r.Get(ctx, key, &velerov1api.BackupRepository{}); err != nil {
+		r.logger.WithField("job", job.Name).WithError(err).Errorf("Failed to get BackupRepository %s", repoLabel)
+		return nil
+	}
+
+	return []reconcile.Request{{NamespacedName: key}}
 }
 
 func (r *BackupRepoReconciler) invalidateBackupReposForBSL(ctx context.Context, bslObj client.Object) []reconcile.Request {
