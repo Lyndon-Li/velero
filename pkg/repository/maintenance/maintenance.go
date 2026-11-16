@@ -71,6 +71,22 @@ func GenerateJobName(repo string) string {
 	return jobName
 }
 
+func DeleteJob(ctx context.Context, cli client.Client, ns string, job string, logger logrus.FieldLogger) error {
+	logger.Infof("Start to delete old maintenance job %v.", job)
+
+	jobObj := &batchv1api.Job{}
+	if err := cli.Get(ctx, client.ObjectKey{Namespace: ns, Name: job}, jobObj); err != nil {
+		return errors.Wrapf(err, "error finding job %s", job)
+	}
+
+	if err := cli.Delete(ctx, jobObj, client.PropagationPolicy(metav1.DeletePropagationBackground)); err != nil {
+		logger.WithError(err).Warnf("error deleting job %s", job)
+		return errors.Wrapf(err, "error deleting job %s", job)
+	}
+
+	return nil
+}
+
 // DeleteOldJobs deletes old maintenance jobs and keeps the latest N jobs
 func DeleteOldJobs(cli client.Client, repo velerov1api.BackupRepository, keep int, logger logrus.FieldLogger) error {
 	logger.Infof("Start to delete old maintenance jobs. %d jobs will be kept.", keep)
@@ -432,6 +448,43 @@ func WaitAllJobsComplete(ctx context.Context, cli client.Client, repo *velerov1a
 	}
 
 	return history, nil
+}
+
+func GetCompletedJobs(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, log logrus.FieldLogger) ([]velerov1api.BackupRepositoryMaintenanceStatus, []string, error) {
+	jobList := &batchv1api.JobList{}
+	err := cli.List(ctx, jobList, &client.ListOptions{
+		Namespace: repo.Namespace,
+	},
+		client.MatchingLabels(map[string]string{RepositoryNameLabel: repo.Name}),
+	)
+
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "error listing maintenance job for repo %s", repo.Name)
+	}
+
+	results := []velerov1api.BackupRepositoryMaintenanceStatus{}
+	jobs := []string{}
+
+	for _, job := range jobList.Items {
+		if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
+			continue
+		}
+
+		message := ""
+		if job.Status.Failed > 0 {
+			if msg, err := getResultFromJob(cli, &job); err != nil {
+				log.WithError(err).Warnf("Failed to get result of maintenance job %s", job.Name)
+				message = fmt.Sprintf("Repo maintenance failed but result is not retrieveable, err: %v", err)
+			} else {
+				message = msg
+			}
+		}
+
+		results = append(results, composeStatusFromJob(&job, message))
+		jobs = append(jobs, job.Name)
+	}
+
+	return results, jobs, nil
 }
 
 // StartNewJob creates a new maintenance job
