@@ -136,8 +136,8 @@ func getRealOS(osLabel string) string {
 	}
 }
 
-func GetNodesByAffinity(ctx context.Context, cli client.Client, affinity []*LoadAffinity) ([]corev1api.Node, error) {
-	if len(affinity) == 0 {
+func GetNodesByAffinity(ctx context.Context, cli client.Client, affinity *LoadAffinity) ([]corev1api.Node, error) {
+	if affinity == nil {
 		nodeList := &corev1api.NodeList{}
 		err := cli.List(ctx, nodeList)
 		if err != nil {
@@ -147,23 +147,18 @@ func GetNodesByAffinity(ctx context.Context, cli client.Client, affinity []*Load
 		return nodeList.Items, nil
 	}
 
-	result := []corev1api.Node{}
-	for _, a := range affinity {
-		options := []client.ListOption{}
-		if s, err := metav1.LabelSelectorAsSelector(&a.NodeSelector); err != nil {
-			return nil, errors.Wrap(err, "error create selector from affinity")
-		} else {
-			options = append(options, &client.ListOptions{LabelSelector: s})
-		}
-
-		nodeList := &corev1api.NodeList{}
-		err := cli.List(ctx, nodeList, options...)
-		if err != nil {
-			return nil, errors.Wrap(err, "error listing nodes")
-		}
-
-		result = append(result, nodeList.Items...)
+	options := []client.ListOption{}
+	if s, err := metav1.LabelSelectorAsSelector(&affinity.NodeSelector); err != nil {
+		return nil, errors.Wrap(err, "error create selector from affinity")
+	} else {
+		options = append(options, &client.ListOptions{LabelSelector: s})
 	}
 
-	return result, nil
+	nodeList := &corev1api.NodeList{}
+	err := cli.List(ctx, nodeList, options...)
+	if err != nil {
+		return nil, errors.Wrap(err, "error listing nodes")
+	}
+
+	return nodeList.Items, nil
 }

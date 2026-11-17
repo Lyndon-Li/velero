@@ -458,7 +458,7 @@ func GetCompletedJobs(ctx context.Context, cli client.Client, repo *velerov1api.
 	err := cli.List(ctx, jobList, &client.ListOptions{
 		Namespace: repo.Namespace,
 	},
-		client.MatchingLabels(map[string]string{RepositoryNameLabel: repo.Name}),
+		client.MatchingLabels(map[string]string{RepositoryNameLabel: velerolabel.ReturnNameOrHash(repo.Name)}),
 	)
 
 	if err != nil {
@@ -490,40 +490,45 @@ func GetCompletedJobs(ctx context.Context, cli client.Client, repo *velerov1api.
 	return results, jobs, nil
 }
 
-// ShouldRunParallelJob checks if a node is avaiable for the maintenance job, according to the node-selection
+// ShouldRunParallelJob compares unfinished maintenance Jobs with the number of distinct eligible nodes.
 func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, repoMaintenanceJobConfig string, log logrus.FieldLogger) (bool, error) {
 	config, err := getJobConfig(ctx, cli, log, repo.Namespace, repoMaintenanceJobConfig, repo)
 	if err != nil {
 		return false, errors.Wrap(err, "error getting max parallel jobs from config")
 	}
 
-	nodes, err := kube.GetNodesByAffinity(ctx, cli, config.LoadAffinities)
+	var affinity *kube.LoadAffinity
+	if config != nil && len(config.LoadAffinities) > 0 {
+		affinity = config.LoadAffinities[0]
+	}
+
+	nodes, err := kube.GetNodesByAffinity(ctx, cli, affinity)
 	if err != nil {
 		return false, errors.Wrapf(err, "error getting available nodes for repo %s", repo.Name)
 	}
 
-	occupied := sets.Set[string]{}
-
-	podList := &corev1api.PodList{}
-	if err := cli.List(ctx, podList, &client.ListOptions{
-		Namespace: repo.Namespace,
-	},
-		client.MatchingLabels(map[string]string{podGroupLabel: "true"}),
-	); err != nil {
-		return false, errors.Wrap(err, "error listing active maintenance pods")
+	eligibleNodes := sets.New[string]()
+	for _, node := range nodes {
+		eligibleNodes.Insert(node.Name)
 	}
 
-	for _, p := range podList.Items {
-		occupied.Insert(p.Spec.NodeName)
+	jobs := &batchv1api.JobList{}
+	if err := cli.List(ctx, jobs, client.InNamespace(repo.Namespace), client.HasLabels{RepositoryNameLabel}); err != nil {
+		return false, errors.Wrap(err, "error listing maintenance jobs")
 	}
 
-	for _, n := range nodes {
-		if !occupied.Has(n.Name) {
-			return true, nil
+	outstanding := 0
+	for _, job := range jobs.Items {
+		if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
+			if job.Labels[RepositoryNameLabel] == velerolabel.ReturnNameOrHash(repo.Name) {
+				return false, nil
+			}
+
+			outstanding++
 		}
 	}
 
-	return false, nil
+	return outstanding < eligibleNodes.Len(), nil
 }
 
 // StartNewJob creates a new maintenance job
@@ -724,7 +729,7 @@ func buildJob(
 	}
 	if config != nil && len(config.PodLabels) > 0 {
 		for k, v := range config.PodLabels {
-			if k == RepositoryNameLabel {
+			if k == RepositoryNameLabel || k == podGroupLabel {
 				logger.Warnf("Skipping user-provided label with reserved key %q; this label is managed internally by Velero", k)
 				continue
 			}
@@ -794,18 +799,6 @@ func buildJob(
 					Annotations: podAnnotations,
 				},
 				Spec: corev1api.PodSpec{
-					TopologySpreadConstraints: []corev1api.TopologySpreadConstraint{
-						{
-							MaxSkew:           1,
-							TopologyKey:       "kubernetes.io/hostname",
-							WhenUnsatisfiable: corev1api.DoNotSchedule,
-							LabelSelector: &metav1.LabelSelector{
-								MatchLabels: map[string]string{
-									podGroupLabel: "true",
-								},
-							},
-						},
-					},
 					Containers: []corev1api.Container{
 						{
 							Name:  "velero-repo-maintenance-container",
@@ -838,6 +831,18 @@ func buildJob(
 	if config != nil && len(config.LoadAffinities) > 0 {
 		affinity := kube.ToSystemAffinity(config.LoadAffinities[0], nil)
 		job.Spec.Template.Spec.Affinity = affinity
+	}
+
+	if job.Spec.Template.Spec.Affinity == nil {
+		job.Spec.Template.Spec.Affinity = &corev1api.Affinity{}
+	}
+	job.Spec.Template.Spec.Affinity.PodAntiAffinity = &corev1api.PodAntiAffinity{
+		RequiredDuringSchedulingIgnoredDuringExecution: []corev1api.PodAffinityTerm{{
+			TopologyKey: corev1api.LabelHostname,
+			LabelSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{podGroupLabel: "true"},
+			},
+		}},
 	}
 
 	return job, nil

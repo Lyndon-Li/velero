@@ -404,8 +404,17 @@ func (r *BackupRepoReconciler) collectMaintenance(ctx context.Context, req *vele
 		return errors.Wrapf(err, "error getting completed repo maintenance jobs for repo %s", req.Name)
 	}
 
+	newHistories := []velerov1api.BackupRepositoryMaintenanceStatus{}
 	consolidated := consolidateHistory(histories, req.Status.RecentMaintenance)
 	if consolidated != nil {
+		for _, history := range consolidated {
+			if !slices.ContainsFunc(req.Status.RecentMaintenance, func(recorded velerov1api.BackupRepositoryMaintenanceStatus) bool {
+				return recorded.StartTimestamp.Equal(history.StartTimestamp)
+			}) {
+				newHistories = append(newHistories, history)
+			}
+		}
+
 		lastMaintenanceTime := getLastMaintenanceTimeFromHistory(consolidated)
 
 		err = r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
@@ -427,7 +436,7 @@ func (r *BackupRepoReconciler) collectMaintenance(ctx context.Context, req *vele
 	}
 
 	if r.metrics != nil {
-		for _, history := range consolidated {
+		for _, history := range newHistories {
 			if history.Result == velerov1api.BackupRepositoryMaintenanceFailed {
 				r.metrics.RegisterRepoMaintenanceFailure(req.Name)
 			} else {
