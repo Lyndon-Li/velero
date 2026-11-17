@@ -794,6 +794,18 @@ func buildJob(
 					Annotations: podAnnotations,
 				},
 				Spec: corev1api.PodSpec{
+					TopologySpreadConstraints: []corev1api.TopologySpreadConstraint{
+						{
+							MaxSkew:           1,
+							TopologyKey:       "kubernetes.io/hostname",
+							WhenUnsatisfiable: corev1api.DoNotSchedule,
+							LabelSelector: &metav1.LabelSelector{
+								MatchLabels: map[string]string{
+									podGroupLabel: "true",
+								},
+							},
+						},
+					},
 					Containers: []corev1api.Container{
 						{
 							Name:  "velero-repo-maintenance-container",
