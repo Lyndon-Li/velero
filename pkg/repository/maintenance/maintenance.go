@@ -34,6 +34,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -58,6 +59,8 @@ const (
 	DefaultMaintenanceJobCPULimit    = "0"
 	DefaultMaintenanceJobMemRequest  = "0"
 	DefaultMaintenanceJobMemLimit    = "0"
+
+	podGroupLabel = "velero.io/repo-maintenance-pod-group"
 )
 
 func GenerateJobName(repo string) string {
@@ -487,6 +490,42 @@ func GetCompletedJobs(ctx context.Context, cli client.Client, repo *velerov1api.
 	return results, jobs, nil
 }
 
+// ShouldRunParallelJob checks if a node is avaiable for the maintenance job, according to the node-selection
+func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, repoMaintenanceJobConfig string, log logrus.FieldLogger) (bool, error) {
+	config, err := getJobConfig(ctx, cli, log, repo.Namespace, repoMaintenanceJobConfig, repo)
+	if err != nil {
+		return false, errors.Wrap(err, "error getting max parallel jobs from config")
+	}
+
+	nodes, err := kube.GetNodesByAffinity(ctx, cli, config.LoadAffinities)
+	if err != nil {
+		return false, errors.Wrapf(err, "error getting available nodes for repo %s", repo.Name)
+	}
+
+	occupied := sets.Set[string]{}
+
+	podList := &corev1api.PodList{}
+	if err := cli.List(ctx, podList, &client.ListOptions{
+		Namespace: repo.Namespace,
+	},
+		client.MatchingLabels(map[string]string{podGroupLabel: "true"}),
+	); err != nil {
+		return false, errors.Wrap(err, "error listing active maintenance pods")
+	}
+
+	for _, p := range podList.Items {
+		occupied.Insert(p.Spec.NodeName)
+	}
+
+	for _, n := range nodes {
+		if !occupied.Has(n.Name) {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
 // StartNewJob creates a new maintenance job
 func StartNewJob(
 	cli client.Client,
@@ -681,6 +720,7 @@ func buildJob(
 
 	podLabels := map[string]string{
 		RepositoryNameLabel: velerolabel.ReturnNameOrHash(repo.Name),
+		podGroupLabel:       "true",
 	}
 	if config != nil && len(config.PodLabels) > 0 {
 		for k, v := range config.PodLabels {
@@ -749,7 +789,7 @@ func buildJob(
 			BackoffLimit: new(int32), // Never retry
 			Template: corev1api.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:        "velero-repo-maintenance-pod",
+					Name:        GenerateJobName(repo.Name),
 					Labels:      podLabels,
 					Annotations: podAnnotations,
 				},

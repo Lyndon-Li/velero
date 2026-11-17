@@ -516,6 +516,7 @@ func getLastMaintenanceTimeFromHistory(history []velerov1api.BackupRepositoryMai
 }
 
 var funcStartMaintenanceJob = maintenance.StartNewJob
+var funcShouldRunParallelJob = maintenance.ShouldRunParallelJob
 
 func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
 	startTime := r.clock.Now()
@@ -525,9 +526,19 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		return nil
 	}
 
+	allow, err := funcShouldRunParallelJob(ctx, r, req, r.repoMaintenanceConfig, log)
+	if err != nil {
+		return errors.Wrapf(err, "error check parallel maintenance job")
+	}
+
+	if !allow {
+		log.Debugf("Cannot run one more maintenance for repo %s", req.Name)
+		return nil
+	}
+
 	log.Info("Running maintenance on backup repository")
 
-	_, err := funcStartMaintenanceJob(r.Client, ctx, req, r.repoMaintenanceConfig, r.logLevel, r.logFormat, log)
+	_, err = funcStartMaintenanceJob(r.Client, ctx, req, r.repoMaintenanceConfig, r.logLevel, r.logFormat, log)
 	if err != nil {
 		log.WithError(err).Warn("Starting repo maintenance failed")
 
@@ -542,7 +553,7 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		})
 	}
 
-	return err
+	return nil
 }
 
 func updateRepoMaintenanceHistory(repo *velerov1api.BackupRepository, result velerov1api.BackupRepositoryMaintenanceResult, startTime, completionTime *metav1.Time, message string) {
