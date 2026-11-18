@@ -50,6 +50,8 @@ For example, the following BackupRepository's key should be `test-default-kopia`
 
 You can still customize the maintenance job resource requests and limit when using the [velero install][1] CLI command.
 
+`keepLatestMaintenanceJobs` controls the maximum number of entries retained in the BackupRepository's `status.recentMaintenance`, rather than the number of Kubernetes Jobs retained. The default is 3; setting it to 0 disables history retention. Negative values are invalid and fall back to the default. A repository-specific value overrides the global value. Completed maintenance Jobs and their Pods are deleted after their results are processed, regardless of this setting.
+
 The `LoadAffinity` structure is reused from design [node-agent affinity configuration][2].
 
 ### Affinity Example
@@ -122,12 +124,8 @@ kubectl apply -f repo-maintenance-job-config.yaml
 ### Log
 Maintenance job inherits the log level and log format settings from the Velero server, so if the Velero server enabled the debug log, the maintenance job will also open the debug level log.
 
-### Num of Keeping Latest Maintenance Jobs
-Velero will keep one specific number of the latest maintenance jobs for each repository. By default, we only keep 3 latest maintenance jobs for each repository, and Velero support configures this setting by the below command when Velero installs:
-
-```bash
-velero install --keep-latest-maintenance-jobs <NUM>
-```
+### Maintenance History Retention
+Configure `keepLatestMaintenanceJobs` in the maintenance ConfigMap to set the maximum number of recent history entries stored in each BackupRepository CR. The default is 3. Completed Kubernetes Jobs are deleted regardless of the history limit; use centralized logging if their logs must remain available after completion.
 
 ### Default Repository Maintenance Frequency
 The frequency of running maintenance jobs could be set by the below command when Velero is installed:
@@ -158,7 +156,7 @@ Status:
 ```
 
 - `Last Maintenance Time` indicates the time of the latest successful maintenance job
-- `Recent Maintenance` keeps the status of the recent 3 maintenance jobs, including its start time, result (succeeded/failed), completion time (if the maintenance job succeeded), or error message (if the maintenance failed)
+- `Recent Maintenance` keeps the configured number of recent maintenance results (3 by default), including its start time, result (succeeded/failed), completion time (if the maintenance job succeeded), or error message (if the maintenance failed)
 
 ### Others
 Maintenance jobs will inherit nodeSelector, service account, image, environment variables, cloud-credentials, priorityClassName etc. from Velero deployment.

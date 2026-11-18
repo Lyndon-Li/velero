@@ -29,7 +29,8 @@ type JobConfigs struct {
 	// PodResources is the config for the CPU and memory resources setting.
 	PodResources *kube.PodResources `json:"podResources,omitempty"`
 
-	// KeepLatestMaintenanceJobs is the number of latest maintenance jobs to keep for the repository.
+	// KeepLatestMaintenanceJobs limits recent maintenance history entries in the BackupRepository CR.
+	// Zero disables history retention. Completed maintenance Jobs are always deleted.
 	KeepLatestMaintenanceJobs *int `json:"keepLatestMaintenanceJobs,omitempty"`
 
 	// PriorityClassName is the priority class name for the maintenance job pod

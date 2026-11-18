@@ -54,11 +54,10 @@ const (
 	GlobalKeyForRepoMaintenanceJobCM = "global"
 	TerminationLogIndicator          = "Repo maintenance error: "
 
-	DefaultKeepLatestMaintenanceJobs = 3
-	DefaultMaintenanceJobCPURequest  = "0"
-	DefaultMaintenanceJobCPULimit    = "0"
-	DefaultMaintenanceJobMemRequest  = "0"
-	DefaultMaintenanceJobMemLimit    = "0"
+	DefaultMaintenanceJobCPURequest = "0"
+	DefaultMaintenanceJobCPULimit   = "0"
+	DefaultMaintenanceJobMemRequest = "0"
+	DefaultMaintenanceJobMemLimit   = "0"
 
 	podGroupLabel = "velero.io/repo-maintenance-pod-group"
 )
@@ -225,7 +224,7 @@ func getResultFromJob(cli client.Client, job *batchv1api.Job) (string, error) {
 //	veleroNamespace: the Velero-installed namespace. It's used to retrieve the BackupRepository.
 //	repoMaintenanceJobConfig: the repository maintenance job ConfigMap name.
 //	repo: the BackupRepository needs to run the maintenance Job.
-func getJobConfig(
+func GetJobConfig(
 	ctx context.Context,
 	client client.Client,
 	logger logrus.FieldLogger,
@@ -233,6 +232,10 @@ func getJobConfig(
 	repoMaintenanceJobConfig string,
 	repo *velerov1api.BackupRepository,
 ) (*velerotypes.JobConfigs, error) {
+	if repoMaintenanceJobConfig == "" {
+		return nil, nil
+	}
+
 	var cm corev1api.ConfigMap
 	if err := client.Get(
 		ctx,
@@ -334,33 +337,6 @@ func getJobConfig(
 	logger.Debugf("Configuration content for repository %s is %+v", repo.Name, result)
 
 	return result, nil
-}
-
-// GetKeepLatestMaintenanceJobs returns the configured number of maintenance jobs to keep from the JobConfigs.
-// Because the CLI configured Job kept number is deprecated,
-// if not configured in the ConfigMap, it returns default value to indicate using the fallback value.
-func GetKeepLatestMaintenanceJobs(
-	ctx context.Context,
-	client client.Client,
-	logger logrus.FieldLogger,
-	veleroNamespace string,
-	repoMaintenanceJobConfig string,
-	repo *velerov1api.BackupRepository,
-) (int, error) {
-	if repoMaintenanceJobConfig == "" {
-		return DefaultKeepLatestMaintenanceJobs, nil
-	}
-
-	config, err := getJobConfig(ctx, client, logger, veleroNamespace, repoMaintenanceJobConfig, repo)
-	if err != nil {
-		return DefaultKeepLatestMaintenanceJobs, err
-	}
-
-	if config != nil && config.KeepLatestMaintenanceJobs != nil {
-		return *config.KeepLatestMaintenanceJobs, nil
-	}
-
-	return DefaultKeepLatestMaintenanceJobs, nil
 }
 
 // WaitJobComplete waits the completion of the specified maintenance job and return the BackupRepositoryMaintenanceStatus
@@ -491,12 +467,7 @@ func GetCompletedJobs(ctx context.Context, cli client.Client, repo *velerov1api.
 }
 
 // ShouldRunParallelJob compares unfinished maintenance Jobs with the number of distinct eligible nodes.
-func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, repoMaintenanceJobConfig string, log logrus.FieldLogger) (bool, error) {
-	config, err := getJobConfig(ctx, cli, log, repo.Namespace, repoMaintenanceJobConfig, repo)
-	if err != nil {
-		return false, errors.Wrap(err, "error getting max parallel jobs from config")
-	}
-
+func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, config *velerotypes.JobConfigs, log logrus.FieldLogger) (bool, error) {
 	var affinity *kube.LoadAffinity
 	if config != nil && len(config.LoadAffinities) > 0 {
 		affinity = config.LoadAffinities[0]
@@ -536,7 +507,7 @@ func StartNewJob(
 	cli client.Client,
 	ctx context.Context,
 	repo *velerov1api.BackupRepository,
-	repoMaintenanceJobConfig string,
+	jobConfig *velerotypes.JobConfigs,
 	logLevel logrus.Level,
 	logFormat *logging.FormatFlag,
 	logger logrus.FieldLogger,
@@ -552,21 +523,6 @@ func StartNewJob(
 		"repo name": repo.Name,
 		"repo UID":  repo.UID,
 	})
-
-	jobConfig, err := getJobConfig(
-		ctx,
-		cli,
-		log,
-		repo.Namespace,
-		repoMaintenanceJobConfig,
-		repo,
-	)
-	if err != nil {
-		log.Warnf("Fail to find the ConfigMap %s to build maintenance job with error: %s. Use default value.",
-			repo.Namespace+"/"+repoMaintenanceJobConfig,
-			err.Error(),
-		)
-	}
 
 	log.Info("Starting maintenance repo")
 

@@ -48,6 +48,7 @@ import (
 	"github.com/velero-io/velero/pkg/metrics"
 	"github.com/velero-io/velero/pkg/repository/maintenance"
 	repomanager "github.com/velero-io/velero/pkg/repository/manager"
+	velerotypes "github.com/velero-io/velero/pkg/types"
 	"github.com/velero-io/velero/pkg/util/kube"
 	"github.com/velero-io/velero/pkg/util/logging"
 )
@@ -57,8 +58,6 @@ const (
 	defaultMaintainFrequency            = 7 * 24 * time.Hour
 	defaultMaintenanceStatusQueueLength = 25
 )
-
-var maintenanceStatusQueueLength = defaultMaintenanceStatusQueueLength
 
 type BackupRepoReconciler struct {
 	client.Client
@@ -314,7 +313,12 @@ func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 		fallthrough
 	case velerov1api.BackupRepositoryPhaseReady:
-		if err := r.collectMaintenance(ctx, backupRepo, log); err != nil {
+		maintenanceConfig, err := maintenance.GetJobConfig(ctx, r.Client, r.logger, backupRepo.Namespace, r.repoMaintenanceConfig, backupRepo)
+		if err != nil {
+			r.logger.WithError(err).Warnf("Failed to get maintenance job configuration for %s, fallback to the default values", backupRepo)
+		}
+
+		if err := r.collectMaintenance(ctx, backupRepo, maintenanceConfig, log); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "error handling terminated repo maintenance jobs")
 		}
 
@@ -323,7 +327,7 @@ func (r *BackupRepoReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{}, nil
 		}
 
-		if err := r.runMaintenanceIfDue(ctx, backupRepo, log); err != nil {
+		if err := r.runMaintenanceIfDue(ctx, backupRepo, maintenanceConfig, log); err != nil {
 			return ctrl.Result{}, errors.Wrap(err, "error check and run repo maintenance jobs")
 		}
 	}
@@ -398,23 +402,25 @@ func ensureRepo(repo *velerov1api.BackupRepository, repoManager repomanager.Mana
 	return repoManager.PrepareRepo(repo)
 }
 
-func (r *BackupRepoReconciler) collectMaintenance(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
+func getKeepLatestMaintenanceJobs(config *velerotypes.JobConfigs) int {
+	if config != nil && config.KeepLatestMaintenanceJobs != nil &&
+		*config.KeepLatestMaintenanceJobs > 0 {
+		return *config.KeepLatestMaintenanceJobs
+	}
+
+	return defaultMaintenanceStatusQueueLength
+}
+
+func (r *BackupRepoReconciler) collectMaintenance(ctx context.Context, req *velerov1api.BackupRepository, maintenanceConfig *velerotypes.JobConfigs, log logrus.FieldLogger) error {
 	histories, jobs, err := maintenance.GetCompletedJobs(ctx, r.Client, req, log)
 	if err != nil {
 		return errors.Wrapf(err, "error getting completed repo maintenance jobs for repo %s", req.Name)
 	}
 
-	newHistories := []velerov1api.BackupRepositoryMaintenanceStatus{}
-	consolidated := consolidateHistory(histories, req.Status.RecentMaintenance)
-	if consolidated != nil {
-		for _, history := range consolidated {
-			if !slices.ContainsFunc(req.Status.RecentMaintenance, func(recorded velerov1api.BackupRepositoryMaintenanceStatus) bool {
-				return recorded.StartTimestamp.Equal(history.StartTimestamp)
-			}) {
-				newHistories = append(newHistories, history)
-			}
-		}
+	previousHistories := req.Status.RecentMaintenance
 
+	consolidated := consolidateHistory(histories, req.Status.RecentMaintenance, getKeepLatestMaintenanceJobs(maintenanceConfig))
+	if consolidated != nil {
 		lastMaintenanceTime := getLastMaintenanceTimeFromHistory(consolidated)
 
 		err = r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
@@ -436,6 +442,15 @@ func (r *BackupRepoReconciler) collectMaintenance(ctx context.Context, req *vele
 	}
 
 	if r.metrics != nil {
+		newHistories := []velerov1api.BackupRepositoryMaintenanceStatus{}
+		for _, history := range histories {
+			if !slices.ContainsFunc(previousHistories, func(recorded velerov1api.BackupRepositoryMaintenanceStatus) bool {
+				return recorded.StartTimestamp.Equal(history.StartTimestamp)
+			}) {
+				newHistories = append(newHistories, history)
+			}
+		}
+
 		for _, history := range newHistories {
 			if history.Result == velerov1api.BackupRepositoryMaintenanceFailed {
 				r.metrics.RegisterRepoMaintenanceFailure(req.Name)
@@ -467,7 +482,7 @@ func (w maintenanceStatusWrapper) Less(other llrb.Item) bool {
 	return w.status.StartTimestamp.Before(other.(maintenanceStatusWrapper).status.StartTimestamp)
 }
 
-func consolidateHistory(coming, cur []velerov1api.BackupRepositoryMaintenanceStatus) []velerov1api.BackupRepositoryMaintenanceStatus {
+func consolidateHistory(coming, cur []velerov1api.BackupRepositoryMaintenanceStatus, queueLength int) []velerov1api.BackupRepositoryMaintenanceStatus {
 	if len(coming) == 0 {
 		return nil
 	}
@@ -489,7 +504,7 @@ func consolidateHistory(coming, cur []velerov1api.BackupRepositoryMaintenanceSta
 
 	truncated := []velerov1api.BackupRepositoryMaintenanceStatus{}
 	for consolidator.Len() > 0 {
-		if len(truncated) == maintenanceStatusQueueLength {
+		if len(truncated) == queueLength {
 			break
 		}
 
@@ -527,7 +542,7 @@ func getLastMaintenanceTimeFromHistory(history []velerov1api.BackupRepositoryMai
 var funcStartMaintenanceJob = maintenance.StartNewJob
 var funcShouldRunParallelJob = maintenance.ShouldRunParallelJob
 
-func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *velerov1api.BackupRepository, log logrus.FieldLogger) error {
+func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *velerov1api.BackupRepository, maintenanceConfig *velerotypes.JobConfigs, log logrus.FieldLogger) error {
 	startTime := r.clock.Now()
 
 	if !dueForMaintenance(req, startTime) {
@@ -535,7 +550,7 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		return nil
 	}
 
-	allow, err := funcShouldRunParallelJob(ctx, r, req, r.repoMaintenanceConfig, log)
+	allow, err := funcShouldRunParallelJob(ctx, r, req, maintenanceConfig, log)
 	if err != nil {
 		return errors.Wrapf(err, "error check parallel maintenance job")
 	}
@@ -547,7 +562,7 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 
 	log.Info("Running maintenance on backup repository")
 
-	_, err = funcStartMaintenanceJob(r.Client, ctx, req, r.repoMaintenanceConfig, r.logLevel, r.logFormat, log)
+	_, err = funcStartMaintenanceJob(r.Client, ctx, req, maintenanceConfig, r.logLevel, r.logFormat, log)
 	if err != nil {
 		log.WithError(err).Warn("Starting repo maintenance failed")
 
@@ -557,7 +572,7 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 		}
 
 		return r.patchBackupRepository(ctx, req, func(rr *velerov1api.BackupRepository) {
-			updateRepoMaintenanceHistory(rr, velerov1api.BackupRepositoryMaintenanceFailed, &metav1.Time{Time: startTime}, nil, fmt.Sprintf("Failed to start maintenance job, err: %v", err))
+			updateRepoMaintenanceHistory(rr, velerov1api.BackupRepositoryMaintenanceFailed, &metav1.Time{Time: startTime}, nil, fmt.Sprintf("Failed to start maintenance job, err: %v", err), getKeepLatestMaintenanceJobs(maintenanceConfig))
 			rr.Status.LastMaintenanceTime = &metav1.Time{Time: startTime}
 		})
 	}
@@ -565,7 +580,7 @@ func (r *BackupRepoReconciler) runMaintenanceIfDue(ctx context.Context, req *vel
 	return nil
 }
 
-func updateRepoMaintenanceHistory(repo *velerov1api.BackupRepository, result velerov1api.BackupRepositoryMaintenanceResult, startTime, completionTime *metav1.Time, message string) {
+func updateRepoMaintenanceHistory(repo *velerov1api.BackupRepository, result velerov1api.BackupRepositoryMaintenanceResult, startTime, completionTime *metav1.Time, message string, queueLength int) {
 	latest := velerov1api.BackupRepositoryMaintenanceStatus{
 		Result:            result,
 		StartTimestamp:    startTime,
@@ -574,8 +589,8 @@ func updateRepoMaintenanceHistory(repo *velerov1api.BackupRepository, result vel
 	}
 
 	startingPos := 0
-	if len(repo.Status.RecentMaintenance) >= maintenanceStatusQueueLength {
-		startingPos = len(repo.Status.RecentMaintenance) - maintenanceStatusQueueLength + 1
+	if len(repo.Status.RecentMaintenance) >= queueLength {
+		startingPos = len(repo.Status.RecentMaintenance) - queueLength + 1
 	}
 
 	repo.Status.RecentMaintenance = append(repo.Status.RecentMaintenance[startingPos:], latest)
