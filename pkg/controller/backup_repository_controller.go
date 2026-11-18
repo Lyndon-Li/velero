@@ -159,15 +159,19 @@ func (r *BackupRepoReconciler) enqueueRepoForMaintenanceJob(ctx context.Context,
 		return nil
 	}
 
-	repoLabel := job.Labels[maintenance.RepositoryNameLabel]
-	if repoLabel == "" {
-		r.logger.WithField("job", job.Name).Error("Invalid repo label from maintenance job")
+	repoName := job.Annotations[maintenance.RepositoryNameAnnotation]
+	if repoName == "" {
+		// Older Jobs only have the repository label, which may contain a hash.
+		repoName = job.Labels[maintenance.RepositoryNameLabel]
+	}
+	if repoName == "" {
+		r.logger.WithField("job", job.Name).Error("Missing repository name from maintenance job")
 		return nil
 	}
 
-	key := types.NamespacedName{Namespace: job.Namespace, Name: repoLabel}
+	key := types.NamespacedName{Namespace: job.Namespace, Name: repoName}
 	if err := r.Get(ctx, key, &velerov1api.BackupRepository{}); err != nil {
-		r.logger.WithField("job", job.Name).WithError(err).Errorf("Failed to get BackupRepository %s", repoLabel)
+		r.logger.WithField("job", job.Name).WithError(err).Errorf("Failed to get BackupRepository %s", repoName)
 		return nil
 	}
 

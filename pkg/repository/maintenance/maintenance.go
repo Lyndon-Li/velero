@@ -51,6 +51,7 @@ import (
 
 const (
 	RepositoryNameLabel              = "velero.io/repo-name"
+	RepositoryNameAnnotation         = "velero.io/repo-name"
 	GlobalKeyForRepoMaintenanceJobCM = "global"
 	TerminationLogIndicator          = "Repo maintenance error: "
 
@@ -468,6 +469,18 @@ func GetCompletedJobs(ctx context.Context, cli client.Client, repo *velerov1api.
 
 // ShouldRunParallelJob compares unfinished maintenance Jobs with the number of distinct eligible nodes.
 func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1api.BackupRepository, config *velerotypes.JobConfigs, log logrus.FieldLogger) (bool, error) {
+	jobs := &batchv1api.JobList{}
+	if err := cli.List(ctx, jobs, client.InNamespace(repo.Namespace), client.MatchingLabels{
+		RepositoryNameLabel: velerolabel.ReturnNameOrHash(repo.Name),
+	}); err != nil {
+		return false, errors.Wrap(err, "error listing repository maintenance jobs")
+	}
+	for _, job := range jobs.Items {
+		if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
+			return false, nil
+		}
+	}
+
 	var affinity *kube.LoadAffinity
 	if config != nil && len(config.LoadAffinities) > 0 {
 		affinity = config.LoadAffinities[0]
@@ -478,28 +491,31 @@ func ShouldRunParallelJob(ctx context.Context, cli client.Client, repo *velerov1
 		return false, errors.Wrapf(err, "error getting available nodes for repo %s", repo.Name)
 	}
 
-	eligibleNodes := sets.New[string]()
-	for _, node := range nodes {
-		eligibleNodes.Insert(node.Name)
+	occupied := sets.Set[string]{}
+
+	podList := &corev1api.PodList{}
+	if err := cli.List(ctx, podList, &client.ListOptions{
+		Namespace: repo.Namespace,
+	},
+		client.MatchingLabels(map[string]string{podGroupLabel: "true"}),
+	); err != nil {
+		return false, errors.Wrap(err, "error listing active maintenance pods")
 	}
 
-	jobs := &batchv1api.JobList{}
-	if err := cli.List(ctx, jobs, client.InNamespace(repo.Namespace), client.HasLabels{RepositoryNameLabel}); err != nil {
-		return false, errors.Wrap(err, "error listing maintenance jobs")
+	for _, p := range podList.Items {
+		if p.Spec.NodeName == "" || p.Status.Phase == corev1api.PodSucceeded || p.Status.Phase == corev1api.PodFailed {
+			continue
+		}
+		occupied.Insert(p.Spec.NodeName)
 	}
 
-	outstanding := 0
-	for _, job := range jobs.Items {
-		if job.Status.Succeeded == 0 && job.Status.Failed == 0 {
-			if job.Labels[RepositoryNameLabel] == velerolabel.ReturnNameOrHash(repo.Name) {
-				return false, nil
-			}
-
-			outstanding++
+	for _, n := range nodes {
+		if !occupied.Has(n.Name) {
+			return true, nil
 		}
 	}
 
-	return outstanding < eligibleNodes.Len(), nil
+	return false, nil
 }
 
 // StartNewJob creates a new maintenance job
@@ -744,6 +760,9 @@ func buildJob(
 			Namespace: repo.Namespace,
 			Labels: map[string]string{
 				RepositoryNameLabel: velerolabel.ReturnNameOrHash(repo.Name),
+			},
+			Annotations: map[string]string{
+				RepositoryNameAnnotation: repo.Name,
 			},
 		},
 		Spec: batchv1api.JobSpec{
